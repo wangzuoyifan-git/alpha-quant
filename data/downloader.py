@@ -10,7 +10,6 @@ K 线数据下载器（多资产全字段版）
     dl.update_db()   # 每日增量
 """
 import logging
-import signal
 import sys
 import time
 from datetime import datetime, timedelta
@@ -327,12 +326,9 @@ class KlineDownloader:
         bs_code = f"{market}.{code}"
         fields = FIELDS[asset_type]
 
-        # 用 SIGALRM 给整个查询加 60 秒超时（仅 Unix）
-        def _timeout_handler(signum, frame):
-            raise TimeoutError(f"baostock 查询超时: {bs_code}")
-
-        old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
-        signal.alarm(60)
+        import socket
+        old_timeout = socket.getdefaulttimeout()
+        socket.setdefaulttimeout(30)
         try:
             rs = bs.query_history_k_data_plus(
                 bs_code, fields,
@@ -342,16 +338,14 @@ class KlineDownloader:
             if rs.error_code != "0":
                 logger.debug(f"{bs_code} error: {rs.error_code} {rs.error_msg}")
                 return "fail"
-
             data = []
             while rs.next():
                 data.append(rs.get_row_data())
-        except TimeoutError as e:
-            logger.warning(str(e))
+        except Exception as e:
+            logger.warning(f"{bs_code} 查询异常: {e}")
             return "fail"
         finally:
-            signal.alarm(0)
-            signal.signal(signal.SIGALRM, old_handler)
+            socket.setdefaulttimeout(old_timeout)
 
         if not data:
             return "skip"
