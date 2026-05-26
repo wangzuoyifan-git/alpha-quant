@@ -2,13 +2,13 @@
 数据获取器 - 多源聚合
 支持 AKShare / BaoStock / Tushare Pro，自动降级切换
 """
-import logging
+import contextlib
 import hashlib
+import logging
 import pickle
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
 
 import pandas as pd
 
@@ -162,10 +162,8 @@ class DataFetcher:
         """强制重新登录 baostock（连接异常时调用）"""
         import baostock as bs
         local = self._get_thread_local()
-        try:
+        with contextlib.suppress(Exception):
             bs.logout()
-        except Exception:
-            pass
         bs.login()
         local.bs_logged_in = True
 
@@ -193,8 +191,9 @@ class DataFetcher:
 
     def _get_daily_baostock(self, code: str, start: str, end: str,
                             adjust: str = "qfq", **_) -> pd.DataFrame:
-        import baostock as bs
         import socket
+
+        import baostock as bs
         self._login_baostock()
         market = "sh" if code.startswith("6") else "sz"
         bs_code = f"{market}.{code}"
@@ -237,7 +236,7 @@ class DataFetcher:
     # ------------------------------------------------------------------
 
     def _with_fallback(self, primary_method: str, *fallback_methods: str, **kwargs):
-        methods = [primary_method] + list(fallback_methods)
+        methods = [primary_method, *list(fallback_methods)]
         for method_name in methods:
             method = getattr(self, method_name, None)
             if method is None:
@@ -257,7 +256,7 @@ class DataFetcher:
         h = hashlib.md5(key.encode()).hexdigest()[:12]
         return self.cache_dir / f"{h}.pkl"
 
-    def _load_cache(self, key: str) -> Optional[pd.DataFrame]:
+    def _load_cache(self, key: str) -> pd.DataFrame | None:
         path = self._cache_path(key)
         if not path.exists():
             return None

@@ -16,10 +16,19 @@ SIGNAL_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def save_signals(signals: List[Signal], date: str = None) -> str:
-    """将信号列表持久化为 JSON"""
+    """将信号列表持久化为 JSON，同日期多次调用会合并（不去重）"""
     date = date or datetime.now().strftime("%Y-%m-%d")
     path = SIGNAL_DIR / f"signals_{date}.json"
-    data = [
+
+    existing = []
+    if path.exists():
+        try:
+            with open(path, encoding="utf-8") as f:
+                existing = json.load(f)
+        except Exception:
+            existing = []
+
+    new_data = [
         {
             "code": s.code,
             "name": s.name,
@@ -32,8 +41,9 @@ def save_signals(signals: List[Signal], date: str = None) -> str:
         }
         for s in signals
     ]
+    merged = existing + new_data
     with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+        json.dump(merged, f, ensure_ascii=False, indent=2)
     logger.info(f"信号已保存: {path}")
     return str(path)
 

@@ -5,14 +5,13 @@
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import List, Dict, Optional
 
 import numpy as np
 import pandas as pd
 
 import data.store as store
 from data.fetcher import DataFetcher
-from strategies.base import BaseStrategy, Signal
+from strategies.base import BaseStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +22,8 @@ class Trade:
     name: str
     entry_date: str
     entry_price: float
-    exit_date: Optional[str] = None
-    exit_price: Optional[float] = None
+    exit_date: str | None = None
+    exit_price: float | None = None
     shares: int = 0
     pnl: float = 0.0
     pnl_pct: float = 0.0
@@ -46,7 +45,7 @@ class BacktestResult:
     win_rate: float              # 胜率
     profit_factor: float         # 盈亏比
     total_trades: int
-    trades: List[Trade] = field(default_factory=list)
+    trades: list[Trade] = field(default_factory=list)
     equity_curve: pd.Series = field(default_factory=pd.Series)
 
     def summary(self) -> str:
@@ -83,7 +82,7 @@ class Backtester:
         self.slippage = config.get("slippage", 0.001)
         self.position_size = config.get("position_size", 0.1)
 
-    def run(self, strategy: BaseStrategy, stock_codes: List[str],
+    def run(self, strategy: BaseStrategy, stock_codes: list[str],
             start: str, end: str) -> BacktestResult:
         """
         运行单策略回测
@@ -102,7 +101,7 @@ class Backtester:
 
         # 只读本地 Parquet，根据上市时间动态判断最少 K 线要求
         ipo_dates = store.load_ipo_dates()
-        data: Dict[str, pd.DataFrame] = {}
+        data: dict[str, pd.DataFrame] = {}
         miss = 0
         for code in stock_codes:
             df = store.load(code, asset_type="stock", market="cn", start=start, end=end)
@@ -134,8 +133,8 @@ class Backtester:
         ))
 
         capital = float(self.initial_capital)
-        positions: Dict[str, dict] = {}   # code -> {shares, entry_price, entry_date}
-        trades: List[Trade] = []
+        positions: dict[str, dict] = {}   # code -> {shares, entry_price, entry_date}
+        trades: list[Trade] = []
         equity = []
 
         for date in all_dates:
@@ -213,7 +212,7 @@ class Backtester:
         return result
 
     def _calc_metrics(self, name: str, start: str, end: str,
-                      equity: pd.Series, trades: List[Trade]) -> BacktestResult:
+                      equity: pd.Series, trades: list[Trade]) -> BacktestResult:
         initial = float(self.initial_capital)
         final = float(equity.iloc[-1]) if len(equity) > 0 else initial
         total_return = (final - initial) / initial

@@ -9,7 +9,6 @@ Alpha量化 - 主入口
   python main.py web               # 启动 Web 看板
   python main.py schedule          # 启动自动定时任务
 """
-import sys
 import logging
 from pathlib import Path
 
@@ -20,17 +19,18 @@ try:
 except ImportError:
     pass
 
-from config.settings import DATA_SOURCE, SCAN, BACKTEST, NOTIFIER, WEB, LOG, SCHEDULE
-from data.fetcher import DataFetcher
-from data.downloader import KlineDownloader
-from engine.scanner import ScanEngine
-from backtest.engine import Backtester
-from notifier.push import Notifier
-from trader.assistant import TradeAssistant
-from strategies.builtin import BUILTIN_STRATEGIES
-
 # ---- 日志配置 ----
 import logging.handlers
+
+from backtest.engine import Backtester
+from config.settings import BACKTEST, DATA_SOURCE, LOG, NOTIFIER, SCAN, SCHEDULE, WEB
+from data.downloader import KlineDownloader
+from data.fetcher import DataFetcher
+from engine.scanner import ScanEngine
+from notifier.push import Notifier
+from strategies.builtin import BUILTIN_STRATEGIES
+from trader.assistant import TradeAssistant
+
 log_dir = Path(LOG["dir"])
 log_dir.mkdir(exist_ok=True)
 handler = logging.handlers.RotatingFileHandler(
@@ -55,7 +55,7 @@ notifier = Notifier(NOTIFIER)
 trader = TradeAssistant(BACKTEST)
 
 
-def cmd_scan(date: str = None):
+def cmd_scan(date: str | None = None):
     """执行全市场扫描并推送信号"""
     from rich.console import Console
     from rich.table import Table
@@ -107,7 +107,7 @@ def cmd_scan(date: str = None):
 def cmd_backtest(strategy_key: str = "macd_rsi",
                  start: str = "2022-01-01",
                  end: str = "2024-12-31",
-                 codes: list = None):
+                 codes: list | None = None):
     """运行回测"""
     from rich.console import Console
     console = Console()
@@ -219,14 +219,14 @@ def cmd_web():
         print("请先安装 Flask: pip install flask")
 
 
-def cmd_init(start: str = "2024-01-02", end: str = None, force: bool = False,
-             workers: int = 1, types: list = None):
+def cmd_init(start: str = "2024-01-02", end: str | None = None, force: bool = False,
+             workers: int = 1, types: list | None = None):
     """首次全量下载全市场 K 线数据（支持断点续传）"""
     dl = KlineDownloader(fetcher, workers=workers)
     dl.init_db(start=start, end=end, force=force, types=types)
 
 
-def cmd_update(end: str = None, workers: int = 1, types: list = None):
+def cmd_update(end: str | None = None, workers: int = 1, types: list | None = None):
     """增量更新：补全每只证券到最新交易日"""
     dl = KlineDownloader(fetcher, workers=workers)
     dl.update_db(end=end, types=types)
@@ -237,7 +237,7 @@ def cmd_dbstats():
     import data.store as store
     s = store.stats()
     total = s.get("total", {})
-    print(f"\n本地 K 线数据库")
+    print("\n本地 K 线数据库")
     for market, atypes in s.items():
         if market == "total":
             continue
@@ -249,9 +249,9 @@ def cmd_dbstats():
 def cmd_schedule():
     """启动定时任务调度"""
     try:
+        import pytz
         from apscheduler.schedulers.blocking import BlockingScheduler
         from apscheduler.triggers.cron import CronTrigger
-        import pytz
 
         tz = pytz.timezone(SCHEDULE["timezone"])
         scheduler = BlockingScheduler(timezone=tz)
@@ -268,7 +268,7 @@ def cmd_schedule():
             day_of_week="mon-fri", timezone=tz
         ), id="daily_update_scan")
 
-        print(f"定时任务已启动:")
+        print("定时任务已启动:")
         print(f"  收盘更新+扫描: 周一至周五 {SCHEDULE['scan_time']}")
         print("按 Ctrl+C 停止")
         scheduler.start()

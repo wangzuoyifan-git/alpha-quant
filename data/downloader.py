@@ -13,7 +13,6 @@ import logging
 import sys
 import time
 from datetime import datetime, timedelta
-from typing import Optional, List, Tuple
 
 import data.store as store
 from data.fetcher import DataFetcher
@@ -49,8 +48,37 @@ def _today() -> str:
     return datetime.now().strftime("%Y-%m-%d")
 
 
+# 已知 A 股节假日（2024-2026，不含周末，需手动补充）
+_CHINA_HOLIDAYS: set[str] = set()
+def _register_holidays(year: int):
+    """登记已知节假日到全局集合（可按需扩展）"""
+    holidays: dict[int, list[str]] = {
+        2024: [
+            "2024-01-01", "2024-02-12", "2024-02-13", "2024-02-14",
+            "2024-02-15", "2024-02-16", "2024-04-04", "2024-04-05",
+            "2024-04-29", "2024-04-30", "2024-05-01", "2024-05-02",
+            "2024-05-03", "2024-06-10", "2024-09-16", "2024-09-17",
+            "2024-10-01", "2024-10-02", "2024-10-03", "2024-10-04",
+            "2024-10-07", "2024-10-08",
+        ],
+        2025: [
+            "2025-01-01", "2025-01-28", "2025-01-29", "2025-01-30",
+            "2025-01-31", "2025-02-03", "2025-02-04", "2025-04-04",
+            "2025-05-01", "2025-05-02", "2025-05-05", "2025-06-02",
+            "2025-10-01", "2025-10-02", "2025-10-03", "2025-10-06",
+            "2025-10-07", "2025-10-08",
+        ],
+    }
+    for d in holidays.get(year, []):
+        _CHINA_HOLIDAYS.add(d)
+
+
 def _is_trading_day(date_str: str) -> bool:
-    return datetime.strptime(date_str, "%Y-%m-%d").weekday() < 5
+    d = datetime.strptime(date_str, "%Y-%m-%d")
+    if d.weekday() >= 5:
+        return False
+    _register_holidays(d.year)
+    return date_str not in _CHINA_HOLIDAYS
 
 
 def _log(msg: str):
@@ -87,9 +115,9 @@ class KlineDownloader:
 
     def init_db(self,
                 start: str = DEFAULT_START,
-                end: Optional[str] = None,
+                end: str | None = None,
                 force: bool = False,
-                types: List[str] = None) -> dict:
+                types: list[str] | None = None) -> dict:
         """
         全量初始化下载，支持断点续传。
         types: 下载类型列表，默认 ['stock','index','etf']
@@ -142,8 +170,8 @@ class KlineDownloader:
         return self._print_stats(total_result)
 
     def update_db(self,
-                  end: Optional[str] = None,
-                  types: List[str] = None) -> dict:
+                  end: str | None = None,
+                  types: list[str] | None = None) -> dict:
         """增量更新：每只证券从本地最新日期+1天补到今天"""
         end = end or _today()
         types = types or ["stock", "index", "etf"]
@@ -203,7 +231,7 @@ class KlineDownloader:
     # 内部实现
     # ------------------------------------------------------------------
 
-    def _get_security_list(self, types: List[str]) -> dict:
+    def _get_security_list(self, types: list[str]) -> dict:
         """从 baostock 获取各类型证券列表，返回 {atype: [(code, name), ...]}"""
         import baostock as bs
         bs.login()
@@ -212,7 +240,7 @@ class KlineDownloader:
             result = {t: [] for t in types}
             while rs.error_code == "0" and rs.next():
                 row = rs.get_row_data()
-                full_code, name, ipo_date, out_date, typ, status = row
+                full_code, name, _ipo_date, _out_date, typ, status = row
                 if status != "1":          # 只要上市中的
                     continue
                 atype = TYPE_MAP.get(typ)
@@ -220,18 +248,18 @@ class KlineDownloader:
                     continue
                 code = full_code.split(".")[1]
                 # 股票只保留沪深A股（0/3/6开头）
-                if atype == "stock" and not code[0] in ("0", "3", "6"):
+                if atype == "stock" and code[0] not in ("0", "3", "6"):
                     continue
                 result[atype].append((code, name))
             return result
         finally:
             bs.logout()
 
-    def _batch_download(self, stocks: List[Tuple[str, str]],
+    def _batch_download(self, stocks: list[tuple[str, str]],
                         asset_type: str,
                         end: str,
-                        start: Optional[str] = None,
-                        start_map: dict = None) -> dict:
+                        start: str | None = None,
+                        start_map: dict | None = None) -> dict:
         """login 一次，串行下载整批，不重连"""
         import baostock as bs
 
@@ -244,7 +272,7 @@ class KlineDownloader:
         _print_bar(0, total, ok, skip, fail, 0,
                    prefix=f"[{asset_type}]", tty=is_tty)
         try:
-            for code, name in stocks:
+            for code, _name in stocks:
                 s = (start_map or {}).get(code, start)
                 status = self._download_one(bs, code, asset_type, s, end)
                 if status == "ok":
@@ -276,7 +304,7 @@ class KlineDownloader:
             return "skip"
 
         market = "sh" if code.startswith("6") or code.startswith("5") \
-                      or code.startswith("0") and asset_type == "index" \
+                      or (code.startswith("0") and asset_type == "index") \
                  else "sz"
         # 指数代码前缀修正
         if asset_type == "index":
@@ -322,7 +350,7 @@ class KlineDownloader:
             rs = bs.query_stock_basic()
             ipo = {}
             while rs.error_code == "0" and rs.next():
-                full_code, name, ipo_date, _, typ, status = rs.get_row_data()
+                full_code, name, ipo_date, _, typ, _status = rs.get_row_data()
                 if not ipo_date:
                     continue
                 atype = TYPE_MAP.get(typ, "other")
@@ -342,7 +370,7 @@ class KlineDownloader:
         finally:
             bs.logout()
 
-    def _print_stats(self, result: dict = None) -> dict:
+    def _print_stats(self, result: dict | None = None) -> dict:
         s = store.stats()
         cn = s.get("cn", {})
         _log("本地数据库统计:")

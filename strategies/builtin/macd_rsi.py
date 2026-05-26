@@ -2,9 +2,9 @@
 内置策略二：MACD + RSI 共振策略
 MACD 金叉同时 RSI 在超卖区域回升
 """
-from typing import List
+
 import pandas as pd
-import numpy as np
+
 from ..base import BaseStrategy, Signal
 
 
@@ -41,7 +41,7 @@ class MACDRSIStrategy(BaseStrategy):
         rs = gain / (loss + 1e-9)
         return 100 - 100 / (1 + rs)
 
-    def generate_signals(self, df: pd.DataFrame, code: str, name: str) -> List[Signal]:
+    def generate_signals(self, df: pd.DataFrame, code: str, name: str) -> list[Signal]:
         p = self.params
         fast = p.get("fast", 12)
         slow = p.get("slow", 26)
