@@ -83,15 +83,16 @@ class MACDRSIStrategy(BaseStrategy):
                 score=min(score, 100.0),
             ))
 
-        # 卖出：MACD 死叉 + RSI 超买
+        # 卖出：MACD 死叉（RSI 不作强制要求，死叉本身已是趋势转弱信号）
         macd_cross_down = prev["dif"] >= prev["dea"] and last["dif"] < last["dea"]
-        if macd_cross_down and last["rsi"] > overbought:
+        if macd_cross_down:
+            rsi_note = f"，RSI({last['rsi']:.1f})" if last["rsi"] > 50 else ""
             signals.append(Signal(
                 code=code, name=name,
                 signal="SELL",
                 price=float(last["close"]),
-                reason=f"MACD死叉，RSI({last['rsi']:.1f})超买回落",
-                score=70.0,
+                reason=f"MACD死叉{rsi_note}",
+                score=60.0 + (10.0 if last["rsi"] > overbought else 0.0),
             ))
 
         return signals

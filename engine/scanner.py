@@ -124,16 +124,14 @@ class ScanEngine:
         if df is None or len(df) < 30:
             return []
 
-        # 基础过滤：成交量、股价
-        last_row = df.sort_index().iloc[-1]
-        min_volume = self.cfg.get("min_volume")
-        min_price = self.cfg.get("min_price")
-        max_price = self.cfg.get("max_price")
-        if min_volume and last_row.get("volume", 0) < min_volume:
+        # 基于最新一日行情做价格/成交量过滤
+        last = df.iloc[-1]
+        min_price  = self.cfg.get("min_price", 0)
+        max_price  = self.cfg.get("max_price", float("inf"))
+        min_volume = self.cfg.get("min_volume", 0)
+        if not (min_price <= float(last["close"]) <= max_price):
             return []
-        if min_price and last_row.get("close", 0) < min_price:
-            return []
-        if max_price and last_row.get("close", 0) > max_price:
+        if float(last.get("volume", 0)) < min_volume:
             return []
 
         # 还原为带 date 列的格式供策略使用

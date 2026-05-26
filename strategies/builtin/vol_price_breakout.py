@@ -58,7 +58,7 @@ class VolPriceBreakoutStrategy(BaseStrategy):
         # 跌破近 N 日低点作为止盈/止损卖出信号
         prev_low = df["low"].iloc[-(lookback + 1):-1].min()
         if last["close"] < prev_low * (1 - breakout_pct):
-            drop_pct = (prev_low / last["close"] - 1) * 100
+            drop_pct = (prev_low - last["close"]) / prev_low * 100
             signals.append(Signal(
                 code=code, name=name,
                 signal="SELL",
