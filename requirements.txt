@@ -1,0 +1,37 @@
+# Alpha量化 - 依赖清单
+# 安装命令: pip install -r requirements.txt
+
+# ---- 数据源 ----
+akshare>=1.12.0          # 主数据源（免费，无需注册）
+baostock>=0.8.8          # 备用数据源（免费，需注册）
+tushare>=1.2.89          # 可选数据源（需 Token）
+
+# ---- 数据处理 ----
+pandas>=2.0.0
+numpy>=1.24.0
+scipy>=1.10.0
+
+# ---- 可视化（回测图表）----
+matplotlib>=3.7.0
+mplfinance>=0.12.0       # K线图
+plotly>=5.15.0           # 交互式图表
+
+# ---- Web 看板 ----
+flask>=3.0.0
+flask-cors>=4.0.0
+
+# ---- 任务调度 ----
+apscheduler>=3.10.0
+
+# ---- 通知推送 ----
+requests>=2.31.0
+
+# ---- 工具 ----
+python-dotenv>=1.0.0     # 环境变量加载
+click>=8.1.0             # CLI 命令行界面
+rich>=13.0.0             # 美化终端输出
+loguru>=0.7.0            # 日志增强
+
+# ---- 开发/测试 ----
+pytest>=7.4.0
+pytest-cov>=4.1.0

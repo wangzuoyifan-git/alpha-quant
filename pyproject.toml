@@ -1,0 +1,77 @@
+[project]
+name = "alpha-quant"
+version = "0.1.0"
+description = "Alpha量化 — A股量化选股与回测系统"
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "F",     # pyflakes (未定义变量、未使用导入等)
+    "I",     # isort (导入排序)
+    "B",     # flake8-bugbear (常见bug)
+    "SIM",   # flake8-simplify (简化代码)
+    "UP",    # pyupgrade (升级到现代语法)
+    "RUF",   # ruff 特有规则
+]
+ignore = [
+    "E501",  # 行太长，由 formatter 处理
+    "B008",  # 不在函数调用中实例化默认参数（量化策略中常见）
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]  # __init__.py 中允许未使用的导入（re-export）
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+[tool.ruff.lint.isort]
+force-single-line = false
+combine-as-imports = true
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = true
+warn_return_any = false
+warn_unused_ignores = false
+exclude = ["venv/", ".venv/", "tests/", "tools/"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-v --tb=short --strict-markers --disable-warnings"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests that require network",
+    "unit: marks tests as unit tests",
+]
+
+[tool.coverage.run]
+source = ["."]
+omit = [
+    "venv/*",
+    ".venv/*",
+    "tests/*",
+    "tools/*",
+    "*/__pycache__/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+]
