@@ -238,6 +238,12 @@ class KlineDownloader:
         socket.setdefaulttimeout(60)  # 全量列表数据量大，需要更长超时
         bs.login()
         try:
+            import baostock.common.context as bs_ctx
+            if hasattr(bs_ctx, "default_socket") and bs_ctx.default_socket:
+                bs_ctx.default_socket.settimeout(60)
+        except Exception:
+            pass
+        try:
             rs = bs.query_stock_basic()
             result = {t: [] for t in types}
             while rs.error_code == "0" and rs.next():
@@ -271,6 +277,20 @@ class KlineDownloader:
         socket.setdefaulttimeout(10)
 
         total = len(stocks)
+        ok = skip = fail = 0
+        t0 = time.time()
+        is_tty = sys.stdout.isatty()
+
+        bs.login()
+
+        # login 后直接给 baostock 内部 socket 设置 timeout
+        # （setdefaulttimeout 只对新建 socket 有效，已连接的 socket 需要单独设置）
+        try:
+            import baostock.common.context as bs_ctx
+            if hasattr(bs_ctx, "default_socket") and bs_ctx.default_socket:
+                bs_ctx.default_socket.settimeout(10)
+        except Exception:
+            pass
         ok = skip = fail = 0
         t0 = time.time()
         is_tty = sys.stdout.isatty()
@@ -373,6 +393,12 @@ class KlineDownloader:
         import socket
         socket.setdefaulttimeout(60)  # 全量数据量大，需要更长超时
         bs.login()
+        try:
+            import baostock.common.context as bs_ctx
+            if hasattr(bs_ctx, "default_socket") and bs_ctx.default_socket:
+                bs_ctx.default_socket.settimeout(60)
+        except Exception:
+            pass
         try:
             rs = bs.query_stock_basic()
             ipo = {}
