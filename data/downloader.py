@@ -231,38 +231,43 @@ class KlineDownloader:
     # 内部实现
     # ------------------------------------------------------------------
 
+    def _set_bs_timeout(self, seconds: float) -> None:
+        """给 baostock 已连接的 socket 设置超时"""
+        try:
+            import baostock.common.context as bs_ctx
+            sock = getattr(bs_ctx, "default_socket", None)
+            if sock:
+                sock.settimeout(seconds)
+        except Exception:
+            pass
+
     def _get_security_list(self, types: list[str]) -> dict:
         """从 baostock 获取各类型证券列表，返回 {atype: [(code, name), ...]}"""
         import baostock as bs
         import socket
-        socket.setdefaulttimeout(60)  # 全量列表数据量大，需要更长超时
+        socket.setdefaulttimeout(60)
         bs.login()
-        try:
-            import baostock.common.context as bs_ctx
-            if hasattr(bs_ctx, "default_socket") and bs_ctx.default_socket:
-                bs_ctx.default_socket.settimeout(60)
-        except Exception:
-            pass
+        self._set_bs_timeout(60)
+        socket.setdefaulttimeout(None)
         try:
             rs = bs.query_stock_basic()
             result = {t: [] for t in types}
             while rs.error_code == "0" and rs.next():
                 row = rs.get_row_data()
                 full_code, name, _ipo_date, _out_date, typ, status = row
-                if status != "1":          # 只要上市中的
+                if status != "1":
                     continue
                 atype = TYPE_MAP.get(typ)
                 if atype not in types:
                     continue
                 code = full_code.split(".")[1]
-                # 股票只保留沪深A股（0/3/6开头）
                 if atype == "stock" and code[0] not in ("0", "3", "6"):
                     continue
                 result[atype].append((code, name))
             return result
         finally:
             bs.logout()
-            socket.setdefaulttimeout(None)  # 恢复默认，不影响后续 _batch_download
+            socket.setdefaulttimeout(None)
 
     def _batch_download(self, stocks: list[tuple[str, str]],
                         asset_type: str,
@@ -273,29 +278,16 @@ class KlineDownloader:
         import baostock as bs
         import socket
 
-        # 在 login 之前设置 socket 超时，确保对 baostock 连接生效
-        socket.setdefaulttimeout(10)
-
         total = len(stocks)
         ok = skip = fail = 0
         t0 = time.time()
         is_tty = sys.stdout.isatty()
 
+        # 先 login，再给已连接的 socket 设置 timeout
+        socket.setdefaulttimeout(10)
         bs.login()
+        self._set_bs_timeout(10)
 
-        # login 后直接给 baostock 内部 socket 设置 timeout
-        # （setdefaulttimeout 只对新建 socket 有效，已连接的 socket 需要单独设置）
-        try:
-            import baostock.common.context as bs_ctx
-            if hasattr(bs_ctx, "default_socket") and bs_ctx.default_socket:
-                bs_ctx.default_socket.settimeout(10)
-        except Exception:
-            pass
-        ok = skip = fail = 0
-        t0 = time.time()
-        is_tty = sys.stdout.isatty()
-
-        bs.login()
         _print_bar(0, total, ok, skip, fail, 0,
                    prefix=f"[{asset_type}]", tty=is_tty)
         consecutive_fails = 0
@@ -320,6 +312,7 @@ class KlineDownloader:
                         except Exception:
                             pass
                         bs.login()
+                        self._set_bs_timeout(10)  # 重连后重新设置 timeout
                         consecutive_fails = 0
                 done = ok + skip + fail
                 _print_bar(done, total, ok, skip, fail,
@@ -391,14 +384,10 @@ class KlineDownloader:
         """从 baostock 批量拉取上市日期并保存"""
         import baostock as bs
         import socket
-        socket.setdefaulttimeout(60)  # 全量数据量大，需要更长超时
+        socket.setdefaulttimeout(60)
         bs.login()
-        try:
-            import baostock.common.context as bs_ctx
-            if hasattr(bs_ctx, "default_socket") and bs_ctx.default_socket:
-                bs_ctx.default_socket.settimeout(60)
-        except Exception:
-            pass
+        self._set_bs_timeout(60)
+        socket.setdefaulttimeout(None)
         try:
             rs = bs.query_stock_basic()
             ipo = {}
