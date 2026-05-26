@@ -284,6 +284,8 @@ class KlineDownloader:
         is_tty = sys.stdout.isatty()
 
         # 先 login，再给已连接的 socket 设置 timeout
+        # 等待 3 秒，避免与上一次 logout 间隔太短触发服务器限流
+        time.sleep(3)
         socket.setdefaulttimeout(10)
         bs.login()
         self._set_bs_timeout(10)
@@ -311,6 +313,7 @@ class KlineDownloader:
                             bs.logout()
                         except Exception:
                             pass
+                        time.sleep(3)  # 等待后再重连，避免限流
                         bs.login()
                         self._set_bs_timeout(10)  # 重连后重新设置 timeout
                         consecutive_fails = 0
