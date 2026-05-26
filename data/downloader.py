@@ -256,6 +256,7 @@ class KlineDownloader:
             return result
         finally:
             bs.logout()
+            socket.setdefaulttimeout(None)  # 恢复默认，不影响后续 _batch_download
 
     def _batch_download(self, stocks: list[tuple[str, str]],
                         asset_type: str,
