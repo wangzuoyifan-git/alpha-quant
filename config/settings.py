@@ -46,20 +46,35 @@ BACKTEST = {
 # ============================================================
 # 通知推送配置
 # ============================================================
+_wecom_webhook = os.getenv("WECOM_WEBHOOK", "")
+_email_user    = os.getenv("EMAIL_USER", "")
+_email_pass    = os.getenv("EMAIL_PASS", "")
+_email_to      = os.getenv("EMAIL_TO", "")
+
+# 只启用真正配置了的渠道（占位符视为未配置）
+_channels = []
+if _wecom_webhook and "your_key" not in _wecom_webhook:
+    _channels.append("wecom")
+if _email_user and _email_pass and "example.com" not in _email_to and _email_to:
+    _channels.append("email")
+_tg_token = os.getenv("TELEGRAM_TOKEN", "")
+if _tg_token and "your_bot" not in _tg_token:
+    _channels.append("telegram")
+
 NOTIFIER = {
-    "channels": ["wecom", "email"],  # 启用的通知渠道
+    "channels": _channels,
 
     # 企业微信机器人 Webhook
-    "wecom_webhook": os.getenv("WECOM_WEBHOOK", ""),
+    "wecom_webhook": _wecom_webhook,
 
     # 邮件配置
     "email": {
         "smtp_host": os.getenv("SMTP_HOST", "smtp.qq.com"),
         "smtp_port": int(os.getenv("SMTP_PORT", "465")),
         "use_ssl": True,
-        "username": os.getenv("EMAIL_USER", ""),
-        "password": os.getenv("EMAIL_PASS", ""),
-        "recipients": os.getenv("EMAIL_TO", "").split(","),
+        "username": _email_user,
+        "password": _email_pass,
+        "recipients": [r for r in _email_to.split(",") if r],
     },
 
     # Telegram Bot（可选）
