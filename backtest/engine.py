@@ -218,7 +218,7 @@ class Backtester:
         total_return = (final - initial) / initial
 
         # 年化收益
-        days = max((equity.index[-1] - equity.index[0]).days, 1)
+        days = max((equity.index[-1] - equity.index[0]).days, 1) if len(equity) > 1 else 1
         annual_return = (1 + total_return) ** (365 / days) - 1
 
         # 最大回撤
