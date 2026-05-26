@@ -235,7 +235,7 @@ class KlineDownloader:
         """从 baostock 获取各类型证券列表，返回 {atype: [(code, name), ...]}"""
         import baostock as bs
         import socket
-        socket.setdefaulttimeout(10)
+        socket.setdefaulttimeout(60)  # 全量列表数据量大，需要更长超时
         bs.login()
         try:
             rs = bs.query_stock_basic()
@@ -370,7 +370,7 @@ class KlineDownloader:
         """从 baostock 批量拉取上市日期并保存"""
         import baostock as bs
         import socket
-        socket.setdefaulttimeout(10)
+        socket.setdefaulttimeout(60)  # 全量数据量大，需要更长超时
         bs.login()
         try:
             rs = bs.query_stock_basic()
