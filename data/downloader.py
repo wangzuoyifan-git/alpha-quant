@@ -234,6 +234,8 @@ class KlineDownloader:
     def _get_security_list(self, types: list[str]) -> dict:
         """从 baostock 获取各类型证券列表，返回 {atype: [(code, name), ...]}"""
         import baostock as bs
+        import socket
+        socket.setdefaulttimeout(10)
         bs.login()
         try:
             rs = bs.query_stock_basic()
@@ -262,6 +264,10 @@ class KlineDownloader:
                         start_map: dict | None = None) -> dict:
         """login 一次，串行下载整批，不重连"""
         import baostock as bs
+        import socket
+
+        # 在 login 之前设置 socket 超时，确保对 baostock 连接生效
+        socket.setdefaulttimeout(10)
 
         total = len(stocks)
         ok = skip = fail = 0
@@ -326,9 +332,7 @@ class KlineDownloader:
         bs_code = f"{market}.{code}"
         fields = FIELDS[asset_type]
 
-        import socket
-        old_timeout = socket.getdefaulttimeout()
-        socket.setdefaulttimeout(30)
+        # socket timeout 已在 _batch_download 的 login 前统一设置
         try:
             rs = bs.query_history_k_data_plus(
                 bs_code, fields,
@@ -344,8 +348,6 @@ class KlineDownloader:
         except Exception as e:
             logger.warning(f"{bs_code} 查询异常: {e}")
             return "fail"
-        finally:
-            socket.setdefaulttimeout(old_timeout)
 
         if not data:
             return "skip"
@@ -367,6 +369,8 @@ class KlineDownloader:
     def _save_ipo_dates(self) -> None:
         """从 baostock 批量拉取上市日期并保存"""
         import baostock as bs
+        import socket
+        socket.setdefaulttimeout(10)
         bs.login()
         try:
             rs = bs.query_stock_basic()
