@@ -147,13 +147,23 @@ class ScanEngine:
         return signals
 
     def _get_filtered_stock_list(self) -> pd.DataFrame:
-        """获取并过滤股票列表"""
-        print("  正在从数据源拉取全市场股票列表...", end="", flush=True)
-        stock_list = self.fetcher.get_stock_list()
-        if stock_list.empty:
-            print(" 失败（返回空）", flush=True)
-            return stock_list
-        print(f" 共 {len(stock_list)} 只", flush=True)
+        """从本地库获取股票列表并过滤，不走网络"""
+        ipo_dates = store.load_ipo_dates()
+
+        # 直接读本地已有的股票代码
+        codes = store.list_codes("stock", market="cn")
+        if not codes:
+            print(" 本地无数据，请先运行 init", flush=True)
+            return pd.DataFrame(columns=["code", "name"])
+
+        # 从 ipo_dates 补充名称
+        rows = []
+        for code in codes:
+            info = ipo_dates.get(f"cn:{code}", {})
+            name = info.get("name", code)
+            rows.append({"code": code, "name": name})
+        stock_list = pd.DataFrame(rows)
+        print(f"  本地股票数: {len(stock_list)} 只", flush=True)
 
         # 排除 ST
         if self.cfg.get("exclude_st", True):
@@ -171,7 +181,6 @@ class ScanEngine:
         # 排除上市不足60天新股
         if self.cfg.get("exclude_new", True):
             before = len(stock_list)
-            ipo_dates = store.load_ipo_dates()
             keep_mask = []
             for _, row in stock_list.iterrows():
                 ipo = ipo_dates.get(f"cn:{row['code']}", {}).get("ipo_date")
@@ -179,7 +188,8 @@ class ScanEngine:
                     keep_mask.append(True)
                     continue
                 try:
-                    days_listed = (datetime.now() - datetime.strptime(ipo, "%Y-%m-%d")).days
+                    days_listed = (datetime.now() -
+                                   datetime.strptime(ipo, "%Y-%m-%d")).days
                     keep_mask.append(days_listed >= 60)
                 except Exception:
                     keep_mask.append(True)
