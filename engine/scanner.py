@@ -106,10 +106,25 @@ class ScanEngine:
         print(f"[3/3] 扫描完成  耗时: {elapsed:.0f}s  错误: {errors}  触发信号: {len(all_signals)}", flush=True)
         logger.info(f"扫描完成 {elapsed:.0f}s，触发信号 {len(all_signals)}")
 
-        # 按评分降序，取 top_n
-        all_signals.sort(key=lambda s: s.score, reverse=True)
+        # 同一只股票同方向信号合并（取最高评分，原因拼接）
+        merged: dict = {}  # key: (code, signal)
+        for s in all_signals:
+            key = (s.code, s.signal)
+            if key not in merged:
+                merged[key] = s
+            else:
+                existing = merged[key]
+                if s.score > existing.score:
+                    # 保留高分信号，附加原因
+                    existing.reason = f"{s.reason} / {existing.reason}"
+                    existing.score = s.score
+                else:
+                    existing.reason = f"{existing.reason} / {s.reason}"
+
+        deduped = list(merged.values())
+        deduped.sort(key=lambda s: s.score, reverse=True)
         top_n = self.cfg.get("top_n", 20)
-        result = all_signals[:top_n]
+        result = deduped[:top_n]
         return result
 
     def _scan_single(self, code: str, name: str, start: str, end: str) -> List[Signal]:
