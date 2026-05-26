@@ -10,6 +10,7 @@ K 线数据下载器（多资产全字段版）
     dl.update_db()   # 每日增量
 """
 import logging
+import signal
 import sys
 import time
 from datetime import datetime, timedelta
@@ -271,16 +272,29 @@ class KlineDownloader:
         bs.login()
         _print_bar(0, total, ok, skip, fail, 0,
                    prefix=f"[{asset_type}]", tty=is_tty)
+        consecutive_fails = 0
         try:
             for code, _name in stocks:
                 s = (start_map or {}).get(code, start)
                 status = self._download_one(bs, code, asset_type, s, end)
                 if status == "ok":
                     ok += 1
+                    consecutive_fails = 0
                 elif status == "skip":
                     skip += 1
+                    consecutive_fails = 0
                 else:
                     fail += 1
+                    consecutive_fails += 1
+                    # 连续失败 3 次，重新登录 baostock
+                    if consecutive_fails >= 3:
+                        logger.warning(f"连续失败 {consecutive_fails} 次，重新登录 baostock")
+                        try:
+                            bs.logout()
+                        except Exception:
+                            pass
+                        bs.login()
+                        consecutive_fails = 0
                 done = ok + skip + fail
                 _print_bar(done, total, ok, skip, fail,
                            time.time() - t0,
@@ -313,18 +327,32 @@ class KlineDownloader:
         bs_code = f"{market}.{code}"
         fields = FIELDS[asset_type]
 
-        rs = bs.query_history_k_data_plus(
-            bs_code, fields,
-            start_date=start, end_date=end,
-            frequency="d", adjustflag="1",  # 后复权，保留原始价格关系
-        )
-        if rs.error_code != "0":
-            logger.debug(f"{bs_code} error: {rs.error_code} {rs.error_msg}")
-            return "fail"
+        # 用 SIGALRM 给整个查询加 60 秒超时（仅 Unix）
+        def _timeout_handler(signum, frame):
+            raise TimeoutError(f"baostock 查询超时: {bs_code}")
 
-        data = []
-        while rs.next():
-            data.append(rs.get_row_data())
+        old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+        signal.alarm(60)
+        try:
+            rs = bs.query_history_k_data_plus(
+                bs_code, fields,
+                start_date=start, end_date=end,
+                frequency="d", adjustflag="1",
+            )
+            if rs.error_code != "0":
+                logger.debug(f"{bs_code} error: {rs.error_code} {rs.error_msg}")
+                return "fail"
+
+            data = []
+            while rs.next():
+                data.append(rs.get_row_data())
+        except TimeoutError as e:
+            logger.warning(str(e))
+            return "fail"
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
+
         if not data:
             return "skip"
 
