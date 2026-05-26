@@ -158,7 +158,7 @@ class KlineDownloader:
                 continue
 
             _log(f"[2/3] 开始下载 {atype}，共 {len(pending)} 只...")
-            result = self._batch_download(pending, atype, start, end)
+            result = self._batch_download(pending, atype, end=end, start=start)
             result["skip"] += skipped
             total_result["ok"]    += result["ok"]
             total_result["skip"]  += result["skip"]
