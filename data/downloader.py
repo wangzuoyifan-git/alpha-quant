@@ -232,14 +232,58 @@ class KlineDownloader:
     # ------------------------------------------------------------------
 
     def _set_bs_timeout(self, seconds: float) -> None:
-        """给 baostock 已连接的 socket 设置超时"""
+        """给 baostock 已连接的 socket 设置超时，并 patch send_msg 防止空字节死循环"""
         try:
             import baostock.common.context as bs_ctx
+            import baostock.util.socketutil as bs_sock
+
             sock = getattr(bs_ctx, "default_socket", None)
             if sock:
                 sock.settimeout(seconds)
-        except Exception:
-            pass
+
+            # patch send_msg：检测 recv 返回空字节（连接关闭），避免死循环
+            original_send_msg = bs_sock.send_msg
+
+            def patched_send_msg(msg):
+                try:
+                    if hasattr(bs_ctx, "default_socket"):
+                        default_socket = getattr(bs_ctx, "default_socket")
+                        if default_socket is not None:
+                            msg = msg + "\n"
+                            default_socket.send(bytes(msg, encoding='utf-8'))
+                            import zlib
+                            import baostock.common.contants as cons
+                            receive = b""
+                            while True:
+                                recv = default_socket.recv(8192)
+                                if not recv:  # 连接关闭，防止死循环
+                                    return None
+                                receive += recv
+                                if receive[-13:] == b"<![CDATA[]]>\n":
+                                    break
+                            head_bytes = receive[0:cons.MESSAGE_HEADER_LENGTH]
+                            head_str = bytes.decode(head_bytes)
+                            head_arr = head_str.split(cons.MESSAGE_SPLIT)
+                            if head_arr[1] in cons.COMPRESSED_MESSAGE_TYPE_TUPLE:
+                                head_inner_length = int(head_arr[2])
+                                body_str = bytes.decode(zlib.decompress(
+                                    receive[cons.MESSAGE_HEADER_LENGTH:
+                                            cons.MESSAGE_HEADER_LENGTH + head_inner_length]))
+                                return head_str + body_str
+                            else:
+                                return bytes.decode(receive)
+                        else:
+                            return None
+                    else:
+                        print("you don't login.")
+                except Exception as ex:
+                    print(ex)
+                    print("接收数据异常，请稍后再试。")
+                    return None
+
+            bs_sock.send_msg = patched_send_msg
+        except Exception as e:
+            logger.debug(f"_set_bs_timeout patch 失败: {e}")
 
     def _get_security_list(self, types: list[str]) -> dict:
         """从 baostock 获取各类型证券列表，返回 {atype: [(code, name), ...]}"""
