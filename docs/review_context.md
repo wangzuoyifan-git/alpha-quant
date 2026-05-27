@@ -1,72 +1,9 @@
 # Alpha量化 — Review & 单元测试上下文文档
 
-> 本文档供独立 Review Session 使用，包含项目结构、模块职责、接口清单、已知问题和测试建议。
+> 本文档供独立 Review Session 使用，包含模块职责、接口清单、已知问题和测试建议。
 > 生成时间：2026-05-26
-
----
-
-## 一、项目概览
-
-| 项目 | 说明 |
-|---|---|
-| 根目录 | `/home/wz/alpha量化` |
-| 运行环境 | Python 3.12，虚拟环境 `venv/` |
-| 激活方式 | `source venv/bin/activate` |
-| 主入口 | `python3 main.py <command>` |
-| 数据目录 | `data/market/cn/{stock,index,etf}/` |
-| 旧数据目录 | `data/kline/*.parquet`（旧结构，暂保留，新代码不读取） |
-
-### Git 仓库
-
-| 项目 | 说明 |
-|---|---|
-| 仓库类型 | 本地 Git 仓库 |
-| 主分支 | `main` |
-| 初始提交 | `bc1e1b4` feat: 初始化 alpha量化项目 |
-| user.name | `wz` |
-| user.email | `wz@alpha` |
-
-**常用命令：**
-
-```bash
-# 查看状态和改动
-git status
-git diff
-
-# 提交（建议按功能模块提交，不要一次性提交所有改动）
-git add <file>
-git commit -m "fix: 描述改动内容"
-
-# 查看历史
-git log --oneline
-
-# 回滚单个文件到某个版本
-git checkout <commit_hash> -- <file>
-
-# 回滚整个项目（谨慎，会丢失未提交改动）
-git reset --hard <commit_hash>
-
-# 新功能建议在独立分支开发
-git checkout -b feature/xxx
-git checkout main
-git merge feature/xxx
-```
-
-**提交规范（建议）：**
-
-```
-feat:  新功能
-fix:   Bug 修复
-refactor: 重构（不改变功能）
-test:  测试相关
-docs:  文档更新
-chore: 构建/依赖/配置等杂项
-```
-
-**注意事项：**
-- `.env` 已在 `.gitignore` 中，不会被提交（含密钥）
-- `data/market/`、`data/kline/`、`logs/`、`venv/` 均不纳入版本控制
-- Review session 提交代码前请先 `git diff` 确认改动范围
+>
+> **项目基础信息（环境、Git、目录结构、CLI、数据库状态）见 `docs/project.md`**
 
 ### 目录结构
 

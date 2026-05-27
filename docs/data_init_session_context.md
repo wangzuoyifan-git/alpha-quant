@@ -3,18 +3,8 @@
 > 供「数据扩展初始化」Session 使用
 > 任务：初始化 fundamental / meta / factor / macro 四个数据域
 > 更新时间：2026-05-26
-
----
-
-## 一、项目基本信息
-
-| 项目 | 说明 |
-|---|---|
-| 根目录 | `/home/wz/alpha量化` |
-| Python | `venv/bin/python3`（必须用 venv，系统 python3 无 baostock） |
-| Git 分支 | `main` |
-| 参考文档 | `docs/data_gap_analysis.md`（数据缺口完整分析） |
-| 参考文档 | `docs/review_context.md`（模块接口速查） |
+>
+> **项目基础信息（环境、Git、目录结构、CLI、数据库状态）见 `docs/project.md`**
 
 ---
 

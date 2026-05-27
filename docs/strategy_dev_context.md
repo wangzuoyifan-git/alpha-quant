@@ -2,18 +2,8 @@
 
 > 供新 Session 开发 ETF 策略及后续功能使用
 > 更新时间：2026-05-26
-
----
-
-## 一、项目基本信息
-
-| 项目 | 说明 |
-|---|---|
-| 根目录 | `/home/wz/alpha量化` |
-| Python | 3.12，虚拟环境 `venv/` |
-| 运行方式 | `venv/bin/python3 main.py <command>` |
-| Git 分支 | `main`，19 个提交 |
-| 详细 Review 文档 | `docs/review_context.md` |
+>
+> **项目基础信息（环境、Git、目录结构、CLI、数据库状态）见 `docs/project.md`**
 
 ---
 
