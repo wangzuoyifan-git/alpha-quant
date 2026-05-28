@@ -4,7 +4,7 @@
 > 专项文档直接引用本文档，不再重复基础信息。
 >
 > **维护说明**：每次有重要变更（数据库更新、新模块、新命令、依赖变化）时更新本文档。
-> 最后更新：2026-05-26
+> 最后更新：2026-05-28
 
 ---
 
@@ -94,13 +94,24 @@ git checkout <hash> -- <file>   # 回滚单个文件
 | growth/{code}.parquet | 5207只，26.8MB | BaoStock | 成长能力，季频 |
 | dupont/{code}.parquet | 5207只，38.2MB | BaoStock | 杜邦分析，季频 |
 
+### tushare 域（已完成，2024起；moneyflow 待补全 2010~2023）
+
+| 数据 | 规模 | 数据源 | 说明 |
+|---|---|---|---|
+| moneyflow/{code}.parquet | 5208只，2024起（晚上补全2010起） | Tushare Pro | 个股历史资金流向（小/中/大/超大单净额） |
+| daily/{code}.parquet | 待下载，2024起 | Tushare Pro | 日线行情（可替代 BaoStock，更稳定） |
+| daily_basic/{code}.parquet | 待下载，2024起 | Tushare Pro | 每日指标（PE/PB/换手率/市值等） |
+| top_list/{date}.parquet | 待下载，2024起 | Tushare Pro | 龙虎榜（上榜原因/净买入/席位） |
+| margin/{code}.parquet | 待下载，2024起 | Tushare Pro | 融资融券明细（融资余额/融券余量） |
+| moneyflow_ind/{date}.parquet | 579个交易日，2024起 | Tushare Pro | 行业+概念+地域资金流（东财，超大/大/中/小单分层） |
+| moneyflow_mkt.parquet | 579行，2024起 | Tushare Pro | 大盘整体资金流（东财，超大/大/中/小单分层） |
+
 ### factor 域（部分完成）
 
 | 数据 | 规模 | 数据源 | 说明 |
 |---|---|---|---|
 | northbound.parquet | 2675行，最新2026-05-26 | AKShare | 北向资金（沪股通+深股通）日频 |
 | moneyflow_sector.parquet | 未获取 | AKShare | 东财非交易时段封锁 |
-| moneyflow/{code}.parquet | 未获取 | AKShare/Tushare | 需 Tushare 2000积分或交易时段 |
 
 ### macro 域（已完成）
 
@@ -138,6 +149,8 @@ alpha量化/
 │   ├── downloader_fundamental.py# fundamental 域下载器
 │   ├── downloader_factor.py     # factor 域下载器
 │   ├── downloader_macro.py      # macro 域下载器
+│   ├── downloader_tushare.py    # tushare 域下载器
+│   ├── store_tushare.py         # tushare 域存取
 │   ├── market/                  # 行情数据（已完成）
 │   │   ├── cn/stock/            # A股日线 Parquet
 │   │   ├── cn/index/            # 指数日线
@@ -162,6 +175,14 @@ alpha量化/
 │   │   ├── m2.parquet
 │   │   ├── cpi_ppi.parquet
 │   │   └── pmi.parquet
+│   ├── tushare/                 # Tushare 数据（部分完成）
+│   │   ├── moneyflow/           # 个股资金流向（5208只，2024起）
+│   │   ├── moneyflow_ind/       # 行业资金流（579个交易日，2024起）
+│   │   ├── moneyflow_mkt.parquet# 大盘资金流（579行，2024起）
+│   │   ├── daily/               # 日线行情（待下载）
+│   │   ├── daily_basic/         # 每日指标（待下载）
+│   │   ├── top_list/            # 龙虎榜（待下载）
+│   │   └── margin/              # 融资融券（待下载）
 │   ├── processed/               # 扫描信号 JSON
 │   └── orders/                  # 交易指令单 JSON
 │
@@ -219,7 +240,16 @@ venv/bin/python3 main.py init-fundamental            # 初始化季频财务数�
 venv/bin/python3 main.py init-fundamental --start-year 2022  # 从2022年开始
 venv/bin/python3 main.py init-factor                 # 初始化北向资金
 venv/bin/python3 main.py init-macro                  # 初始化宏观数据
-venv/bin/python3 main.py update-all                  # 更新所有域（market+meta+fundamental+factor+macro）
+venv/bin/python3 main.py update-all                  # 更新所有域（market+meta+fundamental+factor+macro+tushare）
+
+# ---- 数据管理：tushare 域 ----
+venv/bin/python3 main.py init-tushare                                      # 全量初始化（moneyflow 2010起，其余 2024起）
+venv/bin/python3 main.py init-tushare --types moneyflow                    # 只下载个股资金流向
+venv/bin/python3 main.py init-tushare --types moneyflow_ind moneyflow_mkt  # 只下载行业+大盘资金流
+venv/bin/python3 main.py init-tushare --types daily                        # 只下载日线行情
+venv/bin/python3 main.py init-tushare --types top_list margin              # 只下载龙虎榜+融资融券
+venv/bin/python3 main.py init-tushare --moneyflow-start 2010-01-01         # 个股资金流从2010年开始（补全历史）
+venv/bin/python3 main.py update-tushare                                    # 增量更新 tushare 域
 
 # ---- 定期更新脚本（推荐 crontab）----
 bash scripts/update_daily.sh                         # 每日收盘后：K线+北向资金+扫描

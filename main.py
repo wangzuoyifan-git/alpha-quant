@@ -402,28 +402,74 @@ def cmd_init_macro(start: str = "2024-01-01"):
     dl.init_db(start=start)
 
 
+def cmd_init_tushare(start: str = "2024-01-01",
+                     moneyflow_start: str = "2010-01-01",
+                     types: list | None = None) -> None:
+    """初始化 tushare 域"""
+    from data.downloader_tushare import TushareDownloader
+    dl = TushareDownloader()
+    types = types or ["moneyflow", "daily", "top_list", "margin", "moneyflow_ind", "moneyflow_mkt"]
+    if "moneyflow" in types:
+        dl.init_moneyflow(start=moneyflow_start)
+    if "daily" in types:
+        dl.init_daily(start=start)
+    if "top_list" in types:
+        dl.init_top_list(start=start)
+    if "margin" in types:
+        dl.init_margin(start=start)
+    if "moneyflow_ind" in types:
+        dl.init_moneyflow_ind(start=start)
+    if "moneyflow_mkt" in types:
+        dl.init_moneyflow_mkt(start=start)
+
+
+def cmd_update_tushare(types: list | None = None) -> None:
+    """增量更新 tushare 域"""
+    from data.downloader_tushare import TushareDownloader
+    dl = TushareDownloader()
+    types = types or ["moneyflow", "daily", "top_list", "margin", "moneyflow_ind", "moneyflow_mkt"]
+    if "moneyflow" in types:
+        dl._update_moneyflow()
+    if "daily" in types:
+        dl._update_daily()
+    if "top_list" in types:
+        dl._update_top_list()
+    if "margin" in types:
+        dl._update_margin()
+    if "moneyflow_ind" in types:
+        dl._update_moneyflow_ind()
+    if "moneyflow_mkt" in types:
+        dl._update_moneyflow_mkt()
+
+
 def cmd_update_all():
-    """更新所有数据域（market + meta + fundamental + factor + macro）"""
+    """更新所有数据域（market + meta + fundamental + factor + macro + tushare）"""
     logger.info("开始全域增量更新...")
 
-    print("\n[1/5] 更新 K 线数据...")
+    print("\n[1/6] 更新 K 线数据...")
     cmd_update()
 
-    print("\n[2/5] 更新 meta 域...")
+    print("\n[2/6] 更新 meta 域...")
     from data.downloader_meta import MetaDownloader
     MetaDownloader().update_db()
 
-    print("\n[3/5] 更新 fundamental 域...")
+    print("\n[3/6] 更新 fundamental 域...")
     from data.downloader_fundamental import FundamentalDownloader
     FundamentalDownloader().update_db()
 
-    print("\n[4/5] 更新 factor 域...")
+    print("\n[4/6] 更新 factor 域...")
     from data.downloader_factor import FactorDownloader
     FactorDownloader().update_db()
 
-    print("\n[5/5] 更新 macro 域...")
+    print("\n[5/6] 更新 macro 域...")
     from data.downloader_macro import MacroDownloader
     MacroDownloader().update_db()
+
+    print("\n[6/6] 更新 tushare 域...")
+    try:
+        cmd_update_tushare()
+    except RuntimeError as e:
+        print(f"  tushare 跳过: {e}")
 
     logger.info("全域增量更新完成！")
 
@@ -493,7 +539,11 @@ if __name__ == "__main__":
   python main.py init-fundamental --start-year 2022  # 从2022年开始
   python main.py init-factor                   # 初始化资金流向+北向资金
   python main.py init-macro                    # 初始化宏观经济数据
-  python main.py update-all                    # 更新所有数据域
+  python main.py init-tushare                          # 初始化 tushare 域（moneyflow 2010起，其余 2024起）
+  python main.py init-tushare --types moneyflow        # 只下载资金流向
+  python main.py init-tushare --moneyflow-start 2015-01-01  # 资金流向从2015年开始
+  python main.py update-tushare                        # 增量更新 tushare 域
+  python main.py update-all                            # 更新所有域（含 tushare）
   python main.py scan                          # 今日全市场扫描（A股）
   python main.py scan --date 2024-11-01        # 指定日期扫描
   python main.py scan --types etf              # 扫描 ETF（动量轮动）
@@ -576,6 +626,23 @@ if __name__ == "__main__":
     p_init_macro = sub.add_parser("init-macro", help="初始化 macro 域（宏观经济数据）")
     p_init_macro.add_argument("--start", default="2024-01-01", help="起始日期（默认2024-01-01）")
 
+    # init-tushare
+    p_init_ts = sub.add_parser("init-tushare", help="初始化 tushare 域（moneyflow/daily/top_list/margin）")
+    p_init_ts.add_argument("--start", default="2024-01-01", help="日线/龙虎榜/融资融券起始日期（默认2024-01-01）")
+    p_init_ts.add_argument("--moneyflow-start", default="2010-01-01",
+                           help="资金流向起始日期（默认2010-01-01）")
+    p_init_ts.add_argument("--types", nargs="*",
+                           default=["moneyflow", "daily", "top_list", "margin", "moneyflow_ind", "moneyflow_mkt"],
+                           choices=["moneyflow", "daily", "top_list", "margin", "moneyflow_ind", "moneyflow_mkt"],
+                           help="下载类型（默认全部）")
+
+    # update-tushare
+    p_upd_ts = sub.add_parser("update-tushare", help="增量更新 tushare 域")
+    p_upd_ts.add_argument("--types", nargs="*",
+                          default=["moneyflow", "daily", "top_list", "margin", "moneyflow_ind", "moneyflow_mkt"],
+                          choices=["moneyflow", "daily", "top_list", "margin", "moneyflow_ind", "moneyflow_mkt"],
+                          help="更新类型（默认全部）")
+
     # update-all
     sub.add_parser("update-all", help="更新所有数据域（market+meta+fundamental+factor+macro）")
 
@@ -622,6 +689,14 @@ if __name__ == "__main__":
         cmd_init_factor(start=args.start)
     elif args.command == "init-macro":
         cmd_init_macro(start=args.start)
+    elif args.command == "init-tushare":
+        cmd_init_tushare(
+            start=args.start,
+            moneyflow_start=args.moneyflow_start,
+            types=args.types,
+        )
+    elif args.command == "update-tushare":
+        cmd_update_tushare(types=args.types)
     elif args.command == "update-all":
         cmd_update_all()
     else:
