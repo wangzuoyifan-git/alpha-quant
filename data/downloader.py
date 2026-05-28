@@ -318,55 +318,73 @@ class KlineDownloader:
                         end: str,
                         start: str | None = None,
                         start_map: dict | None = None) -> dict:
-        """login 一次，串行下载整批，不重连"""
-        import baostock as bs
-        import socket
-
+        """串行下载整批。ETF 走 akshare，stock/index 走 baostock（login 一次）"""
         total = len(stocks)
         ok = skip = fail = 0
         t0 = time.time()
         is_tty = sys.stdout.isatty()
 
-        # 先 login，再给已连接的 socket 设置 timeout
-        # 等待 3 秒，避免与上一次 logout 间隔太短触发服务器限流
-        time.sleep(3)
-        socket.setdefaulttimeout(10)
-        bs.login()
-        self._set_bs_timeout(10)
-
-        _print_bar(0, total, ok, skip, fail, 0,
-                   prefix=f"[{asset_type}]", tty=is_tty)
-        consecutive_fails = 0
-        try:
+        if asset_type == "etf":
+            # ETF 使用 akshare，无需 baostock 登录
+            _print_bar(0, total, ok, skip, fail, 0,
+                       prefix=f"[{asset_type}]", tty=is_tty)
             for code, _name in stocks:
                 s = (start_map or {}).get(code, start)
-                status = self._download_one(bs, code, asset_type, s, end)
+                status = self._download_etf_akshare(code, s, end)
                 if status == "ok":
                     ok += 1
-                    consecutive_fails = 0
                 elif status == "skip":
                     skip += 1
-                    consecutive_fails = 0
                 else:
                     fail += 1
-                    consecutive_fails += 1
-                    # 连续失败 3 次，重新登录 baostock
-                    if consecutive_fails >= 3:
-                        logger.warning(f"连续失败 {consecutive_fails} 次，重新登录 baostock")
-                        try:
-                            bs.logout()
-                        except Exception:
-                            pass
-                        time.sleep(3)  # 等待后再重连，避免限流
-                        bs.login()
-                        self._set_bs_timeout(10)  # 重连后重新设置 timeout
-                        consecutive_fails = 0
                 done = ok + skip + fail
                 _print_bar(done, total, ok, skip, fail,
                            time.time() - t0,
                            prefix=f"[{asset_type}]", tty=is_tty)
-        finally:
-            bs.logout()
+        else:
+            # stock / index 走 baostock
+            import baostock as bs
+            import socket
+
+            # 等待 3 秒，避免与上一次 logout 间隔太短触发服务器限流
+            time.sleep(3)
+            socket.setdefaulttimeout(10)
+            bs.login()
+            self._set_bs_timeout(10)
+
+            _print_bar(0, total, ok, skip, fail, 0,
+                       prefix=f"[{asset_type}]", tty=is_tty)
+            consecutive_fails = 0
+            try:
+                for code, _name in stocks:
+                    s = (start_map or {}).get(code, start)
+                    status = self._download_one(bs, code, asset_type, s, end)
+                    if status == "ok":
+                        ok += 1
+                        consecutive_fails = 0
+                    elif status == "skip":
+                        skip += 1
+                        consecutive_fails = 0
+                    else:
+                        fail += 1
+                        consecutive_fails += 1
+                        # 连续失败 3 次，重新登录 baostock
+                        if consecutive_fails >= 3:
+                            logger.warning(f"连续失败 {consecutive_fails} 次，重新登录 baostock")
+                            try:
+                                bs.logout()
+                            except Exception:
+                                pass
+                            time.sleep(3)  # 等待后再重连，避免限流
+                            bs.login()
+                            self._set_bs_timeout(10)  # 重连后重新设置 timeout
+                            consecutive_fails = 0
+                    done = ok + skip + fail
+                    _print_bar(done, total, ok, skip, fail,
+                               time.time() - t0,
+                               prefix=f"[{asset_type}]", tty=is_tty)
+            finally:
+                bs.logout()
 
         if not is_tty:
             _log(f"[{asset_type}] 完成: 新增={ok} 跳过={skip} 失败={fail}")
@@ -374,6 +392,81 @@ class KlineDownloader:
             print()  # 换行
 
         return {"ok": ok, "skip": skip, "fail": fail, "total": total}
+
+    def _download_etf_akshare(self, code: str, start: str, end: str) -> str:
+        """用 akshare fund_etf_hist_sina 下载单只 ETF 并写入本地库，含重试"""
+        if start and end and start > end:
+            logger.debug(f"ETF {code} 跳过：start={start} > end={end}")
+            return "skip"
+
+        # ETF 代码规则：5 开头 -> 上交所(sh)；1 开头 -> 深交所(sz)
+        if code.startswith("1"):
+            market = "sz"
+        elif code.startswith("5"):
+            market = "sh"
+        else:
+            market = "sh"  # 其他默认上交所
+        ak_symbol = f"{market}{code}"
+
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                import requests as _requests
+                import akshare as ak
+                import pandas as pd
+
+                # monkey-patch requests.get 加 timeout，防止断连时长时间阻塞
+                _orig_get = _requests.get
+                def _get_with_timeout(url, **kwargs):
+                    kwargs.setdefault("timeout", 15)
+                    return _orig_get(url, **kwargs)
+                _requests.get = _get_with_timeout
+
+                try:
+                    df = ak.fund_etf_hist_sina(symbol=ak_symbol)
+                finally:
+                    _requests.get = _orig_get  # 恢复原始函数
+
+                if df is None or df.empty:
+                    return "skip"
+
+                df["date"] = pd.to_datetime(df["date"])
+
+                # 按时间范围过滤
+                if start:
+                    df = df[df["date"] >= pd.to_datetime(start)]
+                if end:
+                    df = df[df["date"] <= pd.to_datetime(end)]
+
+                if df.empty:
+                    return "skip"
+
+                # 数值列转换
+                for col in ["open", "high", "low", "close", "volume", "amount"]:
+                    if col in df.columns:
+                        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+                # 补充 preclose（前一日收盘）和 pct_chg
+                df = df.sort_values("date").reset_index(drop=True)
+                df["preclose"] = df["close"].shift(1)
+                df["pct_chg"] = (df["close"] / df["preclose"] - 1) * 100
+
+                # 保留与 baostock ETF 一致的列顺序
+                keep_cols = ["date", "open", "high", "low", "close",
+                             "preclose", "volume", "amount", "pct_chg"]
+                df = df[[c for c in keep_cols if c in df.columns]]
+
+                store.save(code, df, asset_type="etf", market="cn")
+                return "ok"
+
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    wait = 2 ** attempt  # 指数退避：1s, 2s
+                    logger.debug(f"akshare ETF {ak_symbol} 第{attempt+1}次失败，{wait}s后重试: {e}")
+                    time.sleep(wait)
+                else:
+                    logger.warning(f"akshare ETF {ak_symbol} 下载失败（{max_retries}次）: {e}")
+                    return "fail"
 
     def _download_one(self, bs, code: str, asset_type: str,
                       start: str, end: str) -> str:
@@ -394,11 +487,14 @@ class KlineDownloader:
         fields = FIELDS[asset_type]
 
         # socket timeout 已在 _batch_download 的 login 前统一设置
+        # ETF 使用不复权（adjustflag="3"），ETF 净值本身无需复权
+        # 股票/指数使用后复权（adjustflag="1"），避免价格跳空影响技术指标
+        adjustflag = "3" if asset_type == "etf" else "1"
         try:
             rs = bs.query_history_k_data_plus(
                 bs_code, fields,
                 start_date=start, end_date=end,
-                frequency="d", adjustflag="1",
+                frequency="d", adjustflag=adjustflag,
             )
             if rs.error_code != "0":
                 logger.debug(f"{bs_code} error: {rs.error_code} {rs.error_msg}")

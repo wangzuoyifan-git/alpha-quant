@@ -1,5 +1,6 @@
 """
 选股引擎 - 全市场并发扫描，多策略并行执行
+支持 A 股（stock）和 ETF 扫描
 """
 import logging
 import sys
@@ -34,6 +35,7 @@ class ScanEngine:
     - 支持多策略同时运行
     - 多线程并发，加速扫描
     - 内置基础过滤（ST/新股/流动性）
+    - 支持 stock / etf 两种资产类型
     - 实时终端进度条
     """
 
@@ -55,27 +57,47 @@ class ScanEngine:
         for key, cls in strategy_classes.items():
             self.register_strategy(key, cls(params.get(key, {})))
 
-    def scan(self, date: str = None) -> List[Signal]:
+    def scan(self, date: str = None,
+             asset_types: List[str] = None) -> List[Signal]:
         """
         执行全市场扫描
         :param date: 扫描日期，默认今日
+        :param asset_types: 资产类型列表，默认 ["stock"]；可传 ["etf"] 或 ["stock","etf"]
         :return: 所有策略触发的信号列表（按评分降序）
         """
         if not self.strategies:
             raise ValueError("未注册任何策略，请先调用 register_strategy()")
 
+        asset_types = asset_types or ["stock"]
+
         end = date or datetime.now().strftime("%Y-%m-%d")
-        # 获取足够长的历史数据
         max_bars = max(s.requires_bars() for s in self.strategies.values())
         start = (datetime.strptime(end, "%Y-%m-%d") -
                  timedelta(days=int(max_bars * 1.5))).strftime("%Y-%m-%d")
 
         t0 = time.time()
-        logger.info(f"开始全市场扫描，日期范围: {start} ~ {end}")
-        print(f"\n[1/3] 获取股票列表...", flush=True)
-        stock_list = self._get_filtered_stock_list()
-        total = len(stock_list)
-        print(f"[2/3] 待扫描股票数: {total}，开始并发拉取数据与计算信号...", flush=True)
+        logger.info(f"开始扫描，资产类型: {asset_types}，日期范围: {start} ~ {end}")
+
+        # 收集所有待扫描标的：(code, name, asset_type)
+        scan_targets: List[tuple] = []
+
+        if "stock" in asset_types:
+            print(f"\n[1/3] 获取股票列表...", flush=True)
+            stock_list = self._get_filtered_stock_list()
+            for _, row in stock_list.iterrows():
+                scan_targets.append((row["code"], row["name"], "stock"))
+            print(f"  股票: {len(stock_list)} 只", flush=True)
+
+        if "etf" in asset_types:
+            print(f"\n[1/3] 获取 ETF 列表..." if "stock" not in asset_types
+                  else "", end="", flush=True)
+            etf_list = self._get_filtered_etf_list()
+            for _, row in etf_list.iterrows():
+                scan_targets.append((row["code"], row["name"], "etf"))
+            print(f"  ETF: {len(etf_list)} 只", flush=True)
+
+        total = len(scan_targets)
+        print(f"[2/3] 待扫描标的: {total}，开始并发计算信号...", flush=True)
 
         all_signals: List[Signal] = []
         workers = self.cfg.get("workers", 20)
@@ -87,9 +109,9 @@ class ScanEngine:
         with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = {
                 executor.submit(
-                    self._scan_single, row["code"], row["name"], start, end
-                ): row["code"]
-                for _, row in stock_list.iterrows()
+                    self._scan_single, code, name, start, end, atype
+                ): code
+                for code, name, atype in scan_targets
             }
             for future in as_completed(futures):
                 done += 1
@@ -106,7 +128,7 @@ class ScanEngine:
         print(f"[3/3] 扫描完成  耗时: {elapsed:.0f}s  错误: {errors}  触发信号: {len(all_signals)}", flush=True)
         logger.info(f"扫描完成 {elapsed:.0f}s，触发信号 {len(all_signals)}")
 
-        # 同一只股票同方向信号合并（取最高评分，原因拼接）
+        # 同一标的同方向信号合并（取最高评分，原因拼接）
         merged: dict = {}  # key: (code, signal)
         for s in all_signals:
             key = (s.code, s.signal)
@@ -115,7 +137,6 @@ class ScanEngine:
             else:
                 existing = merged[key]
                 if s.score > existing.score:
-                    # 保留高分信号，附加原因
                     existing.reason = f"{s.reason} / {existing.reason}"
                     existing.score = s.score
                 else:
@@ -127,19 +148,23 @@ class ScanEngine:
         result = deduped[:top_n]
         return result
 
-    def _scan_single(self, code: str, name: str, start: str, end: str) -> List[Signal]:
-        """扫描单只股票：优先读本地库，本地无数据才走网络"""
-        # 优先读本地 Parquet
-        df = store.load(code, asset_type="stock", market="cn", start=start, end=end)
-        if df is None or len(df) < 30:
-            # 本地没有，回退到网络拉取（不写库，由 downloader 负责持久化）
-            df = self.fetcher.get_daily(code, start, end)
-            if df is not None and not df.empty and "date" in df.columns:
-                df = df.set_index("date")
+    def _scan_single(self, code: str, name: str, start: str, end: str,
+                     asset_type: str = "stock") -> List[Signal]:
+        """扫描单只标的：优先读本地库，本地无数据才走网络（仅 stock）"""
+        df = store.load(code, asset_type=asset_type, market="cn", start=start, end=end)
+
+        if asset_type == "stock":
+            if df is None or len(df) < 30:
+                # 本地没有，回退到网络拉取（不写库）
+                df = self.fetcher.get_daily(code, start, end)
+                if df is not None and not df.empty and "date" in df.columns:
+                    df = df.set_index("date")
+        # ETF 只读本地库，不走网络回退（数据量大，网络拉取太慢）
+
         if df is None or len(df) < 30:
             return []
 
-        # 基于最新一日行情做价格/成交量过滤
+        # 价格/成交量过滤
         last = df.iloc[-1]
         min_price  = self.cfg.get("min_price", 0)
         max_price  = self.cfg.get("max_price", float("inf"))
@@ -149,7 +174,6 @@ class ScanEngine:
         if float(last.get("volume", 0)) < min_volume:
             return []
 
-        # 还原为带 date 列的格式供策略使用
         df_reset = df.reset_index()
 
         signals = []
@@ -165,13 +189,11 @@ class ScanEngine:
         """从本地库获取股票列表并过滤，不走网络"""
         ipo_dates = store.load_ipo_dates()
 
-        # 直接读本地已有的股票代码
         codes = store.list_codes("stock", market="cn")
         if not codes:
             print(" 本地无数据，请先运行 init", flush=True)
             return pd.DataFrame(columns=["code", "name"])
 
-        # 从 ipo_dates 补充名称
         rows = []
         for code in codes:
             info = ipo_dates.get(f"cn:{code}", {})
@@ -213,3 +235,22 @@ class ScanEngine:
 
         logger.info(f"有效股票数: {len(stock_list)}")
         return stock_list.reset_index(drop=True)
+
+    def _get_filtered_etf_list(self) -> pd.DataFrame:
+        """从本地库获取 ETF 列表，过滤掉本地无数据的品种"""
+        ipo_dates = store.load_ipo_dates()
+
+        codes = store.list_codes("etf", market="cn")
+        if not codes:
+            print("  本地无 ETF 数据，请先运行 init --types etf", flush=True)
+            return pd.DataFrame(columns=["code", "name"])
+
+        rows = []
+        for code in codes:
+            info = ipo_dates.get(f"cn:{code}", {})
+            name = info.get("name", code)
+            rows.append({"code": code, "name": name})
+
+        etf_list = pd.DataFrame(rows)
+        logger.info(f"有效 ETF 数: {len(etf_list)}")
+        return etf_list.reset_index(drop=True)

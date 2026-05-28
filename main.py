@@ -55,18 +55,20 @@ notifier = Notifier(NOTIFIER)
 trader = TradeAssistant(BACKTEST)
 
 
-def cmd_scan(date: str | None = None):
+def cmd_scan(date: str | None = None, asset_types: list | None = None):
     """执行全市场扫描并推送信号"""
     from rich.console import Console
     from rich.table import Table
 
     console = Console()
-    console.print("[bold cyan]Alpha量化 - 全市场扫描启动[/bold cyan]")
+    asset_types = asset_types or ["stock"]
+    label = "+".join(asset_types)
+    console.print(f"[bold cyan]Alpha量化 - 全市场扫描启动 ({label})[/bold cyan]")
 
     engine = ScanEngine(fetcher, SCAN)
     engine.load_strategies(BUILTIN_STRATEGIES)
 
-    signals = engine.scan(date=date)
+    signals = engine.scan(date=date, asset_types=asset_types)
 
     if not signals:
         console.print("[yellow]今日无触发信号[/yellow]")
@@ -170,32 +172,137 @@ def cmd_orders():
 def cmd_web():
     """启动 Web 看板"""
     try:
-        from flask import Flask, jsonify, render_template_string
+        from flask import Flask, jsonify, render_template_string, request
         app = Flask(__name__)
 
-        HTML = """
+        _BASE_STYLE = """
+        <style>
+          *{box-sizing:border-box}
+          body{font-family:monospace;background:#111;color:#eee;padding:20px;margin:0}
+          h1{color:#0f0;margin-bottom:4px}
+          nav{margin:12px 0 20px}
+          nav a{color:#0af;text-decoration:none;margin-right:20px;font-size:14px}
+          nav a.active{color:#fff;border-bottom:2px solid #0f0;padding-bottom:2px}
+          table{border-collapse:collapse;width:100%}
+          th{background:#222;padding:8px 10px;text-align:left;color:#aaa;font-weight:normal}
+          td{padding:7px 10px;border-bottom:1px solid #222;vertical-align:top}
+          tr:hover td{background:#1a1a1a}
+          .buy{color:#f55} .sell{color:#5f5} .watch{color:#fa0}
+          .score{font-weight:bold}
+          .tag{display:inline-block;padding:1px 6px;border-radius:3px;font-size:12px}
+          .tag-buy{background:#500;color:#f88}
+          .tag-sell{background:#050;color:#8f8}
+          .tag-watch{background:#540;color:#fc8}
+          .muted{color:#666;font-size:12px}
+          .page-info{color:#666;font-size:13px;margin:10px 0}
+          .filter-bar{margin-bottom:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+          .filter-bar select,.filter-bar input{background:#222;color:#eee;border:1px solid #444;
+            padding:4px 8px;border-radius:4px;font-family:monospace}
+          .empty{color:#555;padding:30px;text-align:center}
+        </style>
+        """
+
+        _NAV = """
+        <nav>
+          <a href="/" {active_orders}>指令单</a>
+          <a href="/signals" {active_signals}>扫描信号</a>
+        </nav>
+        """
+
+        HTML_ORDERS = _BASE_STYLE + """
         <!DOCTYPE html><html lang="zh-CN">
         <head><meta charset="UTF-8"><meta http-equiv="refresh" content="{{ refresh }}">
-        <title>Alpha量化看板</title>
-        <style>
-          body{font-family:monospace;background:#111;color:#eee;padding:20px}
-          h1{color:#0f0} table{border-collapse:collapse;width:100%}
-          th{background:#333;padding:8px} td{padding:6px;border-bottom:1px solid #333}
-          .buy{color:#f55} .sell{color:#5f5}
-        </style></head>
-        <body><h1>Alpha量化 实时看板</h1>
-        <p>数据更新时间: {{ now }}</p>
+        <title>Alpha量化 - 指令单</title>
+        """ + _BASE_STYLE + """
+        </head>
+        <body>
+        <h1>Alpha量化 实时看板</h1>
+        <p class="muted">更新时间: {{ now }}</p>
+        """ + _NAV.replace("{active_orders}", 'class="active"').replace("{active_signals}", "") + """
         <h2>待确认指令单</h2>
-        <table><tr><th>代码</th><th>名称</th><th>方向</th><th>价格</th><th>数量</th><th>金额</th><th>原因</th></tr>
-        {% for o in orders %}
-        <tr><td>{{ o.code }}</td><td>{{ o.name }}</td>
-        <td class="{{ o.direction|lower }}">{{ o.direction }}</td>
-        <td>¥{{ "%.2f"|format(o.price) }}</td>
-        <td>{{ o.quantity }}</td>
-        <td>¥{{ "{:,.0f}".format(o.amount) }}</td>
-        <td>{{ o.reason }}</td></tr>
-        {% endfor %}
-        </table></body></html>
+        {% if orders %}
+        <table>
+          <tr><th>代码</th><th>名称</th><th>方向</th><th>价格</th><th>数量</th><th>金额</th><th>原因</th></tr>
+          {% for o in orders %}
+          <tr>
+            <td>{{ o.code }}</td><td>{{ o.name }}</td>
+            <td><span class="tag tag-{{ o.direction|lower }}">{{ o.direction }}</span></td>
+            <td>¥{{ "%.3f"|format(o.price) }}</td>
+            <td>{{ o.quantity }}</td>
+            <td>¥{{ "{:,.0f}".format(o.amount) }}</td>
+            <td>{{ o.reason }}</td>
+          </tr>
+          {% endfor %}
+        </table>
+        {% else %}
+        <div class="empty">暂无待确认指令单</div>
+        {% endif %}
+        </body></html>
+        """
+
+        HTML_SIGNALS = """
+        <!DOCTYPE html><html lang="zh-CN">
+        <head><meta charset="UTF-8">
+        <title>Alpha量化 - 扫描信号</title>
+        """ + _BASE_STYLE + """
+        </head>
+        <body>
+        <h1>Alpha量化 实时看板</h1>
+        <p class="muted">更新时间: {{ now }}</p>
+        """ + _NAV.replace("{active_orders}", "").replace("{active_signals}", 'class="active"') + """
+        <h2>扫描信号 &nbsp;<span class="muted">{{ date }}</span></h2>
+        <div class="filter-bar">
+          <label>日期:
+            <select onchange="location.href='/signals?date='+this.value">
+              {% for d in dates %}
+              <option value="{{ d }}" {% if d == date %}selected{% endif %}>{{ d }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>类型:
+            <select id="sigFilter" onchange="filterTable()">
+              <option value="">全部</option>
+              <option value="BUY">BUY</option>
+              <option value="SELL">SELL</option>
+              <option value="WATCH">WATCH</option>
+            </select>
+          </label>
+          <label>搜索: <input id="searchBox" oninput="filterTable()" placeholder="代码/名称"></label>
+        </div>
+        {% if signals %}
+        <p class="page-info">共 {{ signals|length }} 条信号（按评分降序）</p>
+        <table id="sigTable">
+          <tr><th>#</th><th>代码</th><th>名称</th><th>信号</th><th>价格</th><th>评分</th><th>原因</th><th>时间</th></tr>
+          {% for s in signals %}
+          <tr data-sig="{{ s.signal }}">
+            <td class="muted">{{ loop.index }}</td>
+            <td>{{ s.code }}</td>
+            <td>{{ s.name }}</td>
+            <td><span class="tag tag-{{ s.signal|lower }}">{{ s.signal }}</span></td>
+            <td>¥{{ "%.3f"|format(s.price) }}</td>
+            <td class="score">{{ "%.1f"|format(s.score) }}</td>
+            <td>{{ s.reason }}</td>
+            <td class="muted">{{ s.generated_at[:16] if s.generated_at else "" }}</td>
+          </tr>
+          {% endfor %}
+        </table>
+        {% else %}
+        <div class="empty">{{ date }} 暂无信号，请先运行 scan</div>
+        {% endif %}
+        <script>
+        function filterTable(){
+          var sig=document.getElementById('sigFilter').value.toUpperCase();
+          var kw=document.getElementById('searchBox').value.toLowerCase();
+          var rows=document.querySelectorAll('#sigTable tr[data-sig]');
+          rows.forEach(function(r){
+            var match=(sig===''||r.dataset.sig===sig);
+            var text=r.innerText.toLowerCase();
+            match=match&&(kw===''||text.indexOf(kw)>=0);
+            r.style.display=match?'':'none';
+          });
+        }
+        </script>
+        </body></html>
         """
 
         @app.route("/")
@@ -203,15 +310,50 @@ def cmd_web():
             from datetime import datetime as dt
             orders = trader.list_pending_orders()
             return render_template_string(
-                HTML,
+                HTML_ORDERS,
                 orders=orders,
                 now=dt.now().strftime("%Y-%m-%d %H:%M:%S"),
                 refresh=WEB["auto_refresh"],
             )
 
+        @app.route("/signals")
+        def signals_page():
+            from datetime import datetime as dt
+            from signals.manager import load_signals
+            import os, re
+
+            # 列出所有已有信号文件的日期
+            sig_dir = Path("data/processed")
+            dates = sorted([
+                re.sub(r"signals_(.+)\.json", r"\1", f.name)
+                for f in sig_dir.glob("signals_*.json")
+            ], reverse=True)
+
+            date = request.args.get("date", dates[0] if dates else dt.now().strftime("%Y-%m-%d"))
+            raw = load_signals(date)
+            # 按评分降序
+            raw.sort(key=lambda x: x.get("score", 0), reverse=True)
+
+            return render_template_string(
+                HTML_SIGNALS,
+                signals=raw,
+                date=date,
+                dates=dates,
+                now=dt.now().strftime("%Y-%m-%d %H:%M:%S"),
+            )
+
         @app.route("/api/orders")
         def api_orders():
             return jsonify(trader.list_pending_orders())
+
+        @app.route("/api/signals")
+        def api_signals():
+            from datetime import datetime as dt
+            from signals.manager import load_signals
+            date = request.args.get("date", dt.now().strftime("%Y-%m-%d"))
+            data = load_signals(date)
+            data.sort(key=lambda x: x.get("score", 0), reverse=True)
+            return jsonify(data)
 
         logger.info(f"Web 看板启动: http://{WEB['host']}:{WEB['port']}")
         app.run(host=WEB["host"], port=WEB["port"], debug=WEB["debug"])
@@ -230,6 +372,60 @@ def cmd_update(end: str | None = None, workers: int = 1, types: list | None = No
     """增量更新：补全每只证券到最新交易日"""
     dl = KlineDownloader(fetcher, workers=workers)
     dl.update_db(end=end, types=types)
+
+
+def cmd_init_meta(start: str = "2024-01-02"):
+    """初始化 meta 域（行业分类 + 申万指数 + 交易日历）"""
+    from data.downloader_meta import MetaDownloader
+    dl = MetaDownloader()
+    dl.init_db(start=start)
+
+
+def cmd_init_fundamental(start_year: int = 2024, force: bool = False):
+    """初始化 fundamental 域（季频财务数据）"""
+    from data.downloader_fundamental import FundamentalDownloader
+    dl = FundamentalDownloader()
+    dl.init_db(start_year=start_year, force=force)
+
+
+def cmd_init_factor(start: str = "2024-01-02"):
+    """初始化 factor 域（资金流向 + 北向资金）"""
+    from data.downloader_factor import FactorDownloader
+    dl = FactorDownloader()
+    dl.init_db(start=start)
+
+
+def cmd_init_macro(start: str = "2024-01-01"):
+    """初始化 macro 域（宏观经济数据）"""
+    from data.downloader_macro import MacroDownloader
+    dl = MacroDownloader()
+    dl.init_db(start=start)
+
+
+def cmd_update_all():
+    """更新所有数据域（market + meta + fundamental + factor + macro）"""
+    logger.info("开始全域增量更新...")
+
+    print("\n[1/5] 更新 K 线数据...")
+    cmd_update()
+
+    print("\n[2/5] 更新 meta 域...")
+    from data.downloader_meta import MetaDownloader
+    MetaDownloader().update_db()
+
+    print("\n[3/5] 更新 fundamental 域...")
+    from data.downloader_fundamental import FundamentalDownloader
+    FundamentalDownloader().update_db()
+
+    print("\n[4/5] 更新 factor 域...")
+    from data.downloader_factor import FactorDownloader
+    FactorDownloader().update_db()
+
+    print("\n[5/5] 更新 macro 域...")
+    from data.downloader_macro import MacroDownloader
+    MacroDownloader().update_db()
+
+    logger.info("全域增量更新完成！")
 
 
 def cmd_dbstats():
@@ -292,8 +488,16 @@ if __name__ == "__main__":
   python main.py init --force                  # 强制重新下载（覆盖已有数据）
   python main.py update                        # 每日增量更新到今天
   python main.py dbstats                       # 查看本地数据库统计
-  python main.py scan                          # 今日全市场扫描
+  python main.py init-meta                     # 初始化行业分类+申万指数+交易日历
+  python main.py init-fundamental              # 初始化季频财务数据（2024起）
+  python main.py init-fundamental --start-year 2022  # 从2022年开始
+  python main.py init-factor                   # 初始化资金流向+北向资金
+  python main.py init-macro                    # 初始化宏观经济数据
+  python main.py update-all                    # 更新所有数据域
+  python main.py scan                          # 今日全市场扫描（A股）
   python main.py scan --date 2024-11-01        # 指定日期扫描
+  python main.py scan --types etf              # 扫描 ETF（动量轮动）
+  python main.py scan --types stock etf        # 同时扫描 A股 + ETF
   python main.py backtest --strategy macd_rsi  # MACD+RSI回测
   python main.py backtest --strategy ma_cross --start 2023-01-01 --end 2024-01-01
   python main.py orders                        # 查看指令单
@@ -331,6 +535,10 @@ if __name__ == "__main__":
     # scan
     p_scan = sub.add_parser("scan", help="全市场扫描")
     p_scan.add_argument("--date", help="指定日期 YYYY-MM-DD（默认今日）")
+    p_scan.add_argument("--types", nargs="*",
+                        default=["stock"],
+                        choices=["stock", "etf"],
+                        help="扫描资产类型（默认 stock；可传 etf 或 stock etf）")
 
     # backtest
     p_bt = sub.add_parser("backtest", help="策略回测")
@@ -351,6 +559,26 @@ if __name__ == "__main__":
     p_cancel = sub.add_parser("cancel", help="取消指令单")
     p_cancel.add_argument("order_id")
 
+    # init-meta
+    p_init_meta = sub.add_parser("init-meta", help="初始化 meta 域（行业分类+申万指数+交易日历）")
+    p_init_meta.add_argument("--start", default="2024-01-02", help="起始日期（默认2024-01-02）")
+
+    # init-fundamental
+    p_init_fund = sub.add_parser("init-fundamental", help="初始化 fundamental 域（季频财务数据）")
+    p_init_fund.add_argument("--start-year", type=int, default=2024, help="起始年份（默认2024）")
+    p_init_fund.add_argument("--force", action="store_true", help="强制重新下载已有数据")
+
+    # init-factor
+    p_init_factor = sub.add_parser("init-factor", help="初始化 factor 域（资金流向+北向资金）")
+    p_init_factor.add_argument("--start", default="2024-01-02", help="起始日期（默认2024-01-02）")
+
+    # init-macro
+    p_init_macro = sub.add_parser("init-macro", help="初始化 macro 域（宏观经济数据）")
+    p_init_macro.add_argument("--start", default="2024-01-01", help="起始日期（默认2024-01-01）")
+
+    # update-all
+    sub.add_parser("update-all", help="更新所有数据域（market+meta+fundamental+factor+macro）")
+
     # web
     sub.add_parser("web", help="启动Web看板")
 
@@ -368,7 +596,7 @@ if __name__ == "__main__":
     elif args.command == "dbstats":
         cmd_dbstats()
     elif args.command == "scan":
-        cmd_scan(date=args.date)
+        cmd_scan(date=args.date, asset_types=args.types)
     elif args.command == "backtest":
         cmd_backtest(
             strategy_key=args.strategy,
@@ -386,5 +614,15 @@ if __name__ == "__main__":
         cmd_web()
     elif args.command == "schedule":
         cmd_schedule()
+    elif args.command == "init-meta":
+        cmd_init_meta(start=args.start)
+    elif args.command == "init-fundamental":
+        cmd_init_fundamental(start_year=args.start_year, force=args.force)
+    elif args.command == "init-factor":
+        cmd_init_factor(start=args.start)
+    elif args.command == "init-macro":
+        cmd_init_macro(start=args.start)
+    elif args.command == "update-all":
+        cmd_update_all()
     else:
         parser.print_help()

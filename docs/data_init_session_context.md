@@ -2,7 +2,8 @@
 
 > 供「数据扩展初始化」Session 使用
 > 任务：初始化 fundamental / meta / factor / macro 四个数据域
-> 更新时间：2026-05-26
+> 更新时间：2026-05-28
+> **状态：全部完成 ✓**
 >
 > **项目基础信息（环境、Git、目录结构、CLI、数据库状态）见 `docs/project.md`**
 
@@ -300,3 +301,47 @@ df = pd.read_parquet('data/fundamental/profit/600519.parquet')
 print(f'贵州茅台盈利数据: {len(df)} 季，最新: {df.index.max()}')
 print(df[['roeAvg','npMargin','netProfit']].tail(4))
 ```
+
+---
+
+## 十一、实现总结（2026-05-28 完成）
+
+### 新增代码模块
+
+| 文件 | 说明 |
+|---|---|
+| `data/store_meta.py` | meta 域存取（industry_csrc/industry_sw/sw_index/calendar） |
+| `data/store_fundamental.py` | fundamental 域存取（profit/balance/cashflow/growth/dupont） |
+| `data/store_factor.py` | factor 域存取（northbound/moneyflow_sector/moneyflow） |
+| `data/store_macro.py` | macro 域存取（bond_yield/m2/cpi_ppi/pmi） |
+| `data/downloader_meta.py` | meta 域下载器，修复了申万行业代码格式（去掉 `.SI` 后缀） |
+| `data/downloader_fundamental.py` | fundamental 域下载器，含 baostock 死循环防护（threading timeout） |
+| `data/downloader_factor.py` | factor 域下载器（北向资金/行业资金流向/个股资金流向） |
+| `data/downloader_macro.py` | macro 域下载器，修复了月份格式解析（`2026年04月份` → datetime） |
+| `scripts/update_daily.sh` | 每日定时更新脚本 |
+| `scripts/update_weekly.sh` | 每周定时更新脚本 |
+| `scripts/update_quarterly.sh` | 每季定时更新脚本 |
+
+### main.py 新增命令
+
+```bash
+venv/bin/python3 main.py init-meta
+venv/bin/python3 main.py init-fundamental [--start-year 2024] [--force]
+venv/bin/python3 main.py init-factor
+venv/bin/python3 main.py init-macro
+venv/bin/python3 main.py update-all
+```
+
+### 关键 Bug 修复记录
+
+1. **申万行业代码格式**：`sw_index_first_info()` 返回 `801010.SI`，但 `index_component_sw()` 和 `index_hist_sw()` 需要 `801010`，下载器里统一 `.split(".")[0]`
+2. **AKShare 接口名变更**：`sw_index_daily_indicator` 已不存在，改用 `index_hist_sw`；`stock_hsgt_north_net_flow_in_em` 改用 `stock_hsgt_hist_em`；`macro_china_m2` 改用 `macro_china_money_supply`；`sector_type='行业资金流向'` 改为 `'行业资金流'`
+3. **pandas StringDtype 兼容**：新版 pandas 字符串列 dtype 是 `StringDtype` 而非 `object`，月份解析改用 `astype(str)` + `is_datetime64_any_dtype` 判断
+4. **baostock 后台死循环**：后台进程中 `bs.login()` 可能死循环，用 `threading.Thread` + `join(timeout)` 包装，超时后强制继续
+5. **SIGTERM 导致进程被杀**：后台下载进程收到 SIGTERM 被终止，改用 `signal.signal(SIGTERM, SIG_IGN)` + `disown` 防止被 shell 会话终止
+
+### 当前数据缺口
+
+- `factor/moneyflow/`（个股资金流向）：东财接口非交易时段封锁，需在交易时段每日增量获取，或接入 Tushare（需 2000 积分，接口 `moneyflow`，历史从 2010 年起）
+- `factor/moneyflow_sector.parquet`：同上
+- 分钟 K 线：BaoStock 支持近1年，Tushare 需单独开通分钟权限（额外付费）
