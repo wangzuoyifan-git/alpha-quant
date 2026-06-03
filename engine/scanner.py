@@ -308,8 +308,7 @@ class ScanEngine:
                         if latest is None or ld_dt > latest:
                             latest = ld_dt
                 if latest:
-                    latest_dt = datetime.strptime(latest, "%Y-%m-%d")
-                    if latest_dt < last_trading:
+                    if latest < last_trading:
                         stale.append("market/stock")
 
         if "etf" in asset_types:
@@ -324,8 +323,7 @@ class ScanEngine:
                         if latest is None or ld_dt > latest:
                             latest = ld_dt
                 if latest:
-                    latest_dt = datetime.strptime(latest, "%Y-%m-%d")
-                    if latest_dt < last_trading:
+                    if latest < last_trading:
                         stale.append("market/etf")
 
         # D2 基本面（非关键域，过期记录日志不中止）
@@ -343,9 +341,8 @@ class ScanEngine:
                     if latest is None or ld_dt > latest:
                         latest = ld_dt
             if latest:
-                latest_dt = datetime.strptime(latest, "%Y-%m-%d")
                 threshold = datetime(today.year, today.month, 1)
-                if latest_dt < threshold and today.month not in (1, 4, 8, 10):
+                if latest < threshold and today.month not in (1, 4, 8, 10):
                     stale.append(f"fundamental/{dtype}")
 
         return stale
