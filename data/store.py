@@ -23,6 +23,7 @@
 """
 import json
 import logging
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, List
@@ -157,8 +158,12 @@ def save(code: str, df: pd.DataFrame,
         keep = "last" if force else "first"
         df = df[~df.index.duplicated(keep=keep)]
     df.sort_index(inplace=True)
-    df.to_parquet(_path(code, market, asset_type),
-                  engine="pyarrow", compression="snappy")
+
+    # DS2 原子写入：先写临时文件，成功后再 rename
+    p = _path(code, market, asset_type)
+    tmp = Path(str(p) + ".tmp")
+    df.to_parquet(tmp, engine="pyarrow", compression="snappy")
+    os.replace(tmp, p)
 
 
 def load(code: str,

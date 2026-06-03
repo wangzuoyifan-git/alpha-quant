@@ -40,6 +40,7 @@ class ETFMomentumStrategy(BaseStrategy):
     name = "ETF动量轮动"
     description = "计算近期价格动量，选出涨幅最强的 ETF 作为轮动候选"
     version = "1.0.0"
+    market_condition = "bull"  # 动量策略依赖趋势延续
 
     def requires_bars(self) -> int:
         lookback = self.params.get("lookback", 20)

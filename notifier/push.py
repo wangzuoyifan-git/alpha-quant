@@ -23,7 +23,7 @@ class Notifier:
         self.channels = config.get("channels", [])
 
     def send_signals(self, signals: List[Signal], title: str = "Alpha量化选股信号"):
-        """推送选股信号"""
+        """推送选股信号（I1：失败自动重试一次）"""
         if not signals:
             logger.info("无信号，跳过推送")
             return
@@ -32,17 +32,14 @@ class Notifier:
         html = self._format_signals_html(signals)
 
         for channel in self.channels:
-            try:
-                if channel == "wecom":
-                    self._send_wecom(title, text)
-                elif channel == "email":
-                    self._send_email(title, html)
-                elif channel == "telegram":
-                    self._send_telegram(title, text)
-                else:
-                    logger.warning(f"未知推送渠道: {channel}")
-            except Exception as e:
-                logger.error(f"推送渠道 {channel} 失败: {e}")
+            if channel == "wecom":
+                self._send_fallback(channel, self._send_wecom, title, text)
+            elif channel == "email":
+                self._send_fallback(channel, self._send_email, title, html)
+            elif channel == "telegram":
+                self._send_fallback(channel, self._send_telegram, title, text)
+            else:
+                logger.warning(f"未知推送渠道: {channel}")
 
     def send_text(self, title: str, content: str):
         """推送纯文本消息"""
@@ -57,21 +54,66 @@ class Notifier:
             except Exception as e:
                 logger.error(f"推送渠道 {channel} 失败: {e}")
 
+    def _send_fallback(self, channel: str, method: callable,
+                       title: str, content: str):
+        """I1：推送重试一次，记录日志"""
+        try:
+            method(title, content)
+            return True
+        except Exception as e:
+            logger.error(f"推送渠道 {channel} 首次失败: {e}")
+            try:
+                method(title, content)
+                logger.info(f"推送渠道 {channel} 重试成功")
+                return True
+            except Exception as e2:
+                logger.error(f"推送渠道 {channel} 重试也失败: {e2}")
+                return False
+
+    def send_alert(self, level: str, message: str):
+        """I1：独立告警推送，告警级别 ERROR/WARNING"""
+        title = f"[Alpha量化 {level}] {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        for channel in self.channels:
+            self._send_fallback(
+                channel,
+                lambda t, c: self._dispatch(channel, t, c),
+                title, message,
+            )
+
+    def _dispatch(self, channel: str, title: str, content: str):
+        if channel == "wecom":
+            self._send_wecom(title, content)
+        elif channel == "email":
+            self._send_email(title, f"<pre>{content}</pre>")
+        elif channel == "telegram":
+            self._send_telegram(title, content)
+
     # ------------------------------------------------------------------
     # 格式化
     # ------------------------------------------------------------------
+
+    MAX_PUSH_CHARS = 2000  # I1：推送内容 ≤ 2000 字符
 
     def _format_signals(self, signals: List[Signal]) -> str:
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
         lines = [f"【Alpha量化】 {now}  共 {len(signals)} 个信号\n"]
         for i, s in enumerate(signals, 1):
-            emoji = "🔴" if s.signal == "BUY" else "🟢" if s.signal == "SELL" else "🔵"
-            lines.append(
-                f"{i}. {emoji} {s.name}({s.code})  ¥{s.price:.2f}  "
-                f"评分:{s.score:.0f}  {s.signal}\n"
+            emoji = "BUY" if s.signal == "BUY" else "SELL" if s.signal == "SELL" else "WATCH"
+            line = (
+                f"{i}. [{emoji}] {s.name}({s.code})  ¥{s.price:.2f}  "
+                f"评分:{s.score:.0f}\n"
                 f"   {s.reason}"
             )
-        return "\n".join(lines)
+            lines.append(line)
+        result = "\n".join(lines)
+        if len(result) > self.MAX_PUSH_CHARS:
+            excess = 0
+            while len("\n".join(lines)) > self.MAX_PUSH_CHARS and len(lines) > 2:
+                excess += 1
+                lines.pop(-1)
+            lines.append(f"\n... 还有 {excess} 条信号未显示，请查看 Web 看板")
+            result = "\n".join(lines)
+        return result
 
     def _format_signals_html(self, signals: List[Signal]) -> str:
         now = datetime.now().strftime("%Y-%m-%d %H:%M")

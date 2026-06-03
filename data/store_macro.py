@@ -3,10 +3,20 @@ macro 域存储层
 
 目录结构:
   data/macro/
-    bond_yield.parquet    国债收益率（日频）
+    bond_yield.parquet    国债收益率（日频，含中美）
     m2.parquet            M2货币供应（月频）
     cpi_ppi.parquet       CPI/PPI（月频）
     pmi.parquet           PMI（月频）
+    shrongji.parquet      社融/新增信贷（月频）D5a
+    cny_usd.parquet       人民币汇率 CNY/USD（日频）D5a
+    us_bond_yield.parquet 美债收益率 2Y/10Y（日频）D5b
+    vix.parquet           VIX 恐慌指数（日频）D5b
+    dxy.parquet           美元指数 DXY（日频）D5b
+    oil_wti.parquet       原油 WTI（日频）D5b
+    copper_lme.parquet    铜价 LME（日频）D5b
+    sp500.parquet         标普500（日频）D5b
+    hsi.parquet           恒生指数（日频）D5b
+    fed_rate.parquet      美联储基准利率（事件触发）D5b
 
 接口:
   save(data_type, df)
@@ -25,7 +35,14 @@ logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).parent / "macro"
 BASE_DIR.mkdir(parents=True, exist_ok=True)
 
-VALID_TYPES = ("bond_yield", "m2", "cpi_ppi", "pmi")
+VALID_TYPES = (
+    # 国内
+    "bond_yield", "m2", "cpi_ppi", "pmi",
+    "shrongji", "cny_usd",
+    # 境外
+    "us_bond_yield", "vix", "dxy", "oil_wti",
+    "copper_lme", "sp500", "hsi", "fed_rate",
+)
 
 
 def _path(data_type: str) -> Path:

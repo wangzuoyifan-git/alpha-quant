@@ -1,0 +1,99 @@
+"""
+agent_tools/strategy_tools.py — 策略相关 Tools
+"""
+import logging
+from datetime import datetime, timedelta
+from typing import Optional
+
+from data.fetcher import DataFetcher
+from engine.scanner import ScanEngine
+from backtest.engine import Backtester
+from strategies.builtin import BUILTIN_STRATEGIES
+
+logger = logging.getLogger(__name__)
+
+
+def run_scan(date: str = None, strategies: list = None) -> dict:
+    """
+    执行全市场扫描，返回结构化结果。
+
+    返回 {"success": bool, "signals": list, "count": int, "elapsed": float}
+    """
+    try:
+        from config.settings import SCAN, DATA_SOURCE
+        fetcher = DataFetcher(DATA_SOURCE)
+        engine = ScanEngine(fetcher, SCAN)
+
+        strat_keys = strategies or list(BUILTIN_STRATEGIES.keys())
+        for key in strat_keys:
+            if key in BUILTIN_STRATEGIES:
+                engine.register_strategy(key, BUILTIN_STRATEGIES[key]())
+
+        import time
+        t0 = time.time()
+        signals = engine.scan(date=date)
+        elapsed = time.time() - t0
+
+        return {
+            "success": True,
+            "signals": [
+                {"code": s.code, "name": s.name, "signal": s.signal,
+                 "price": s.price, "score": s.score, "reason": s.reason}
+                for s in signals
+            ],
+            "count": len(signals),
+            "elapsed": round(elapsed, 1),
+        }
+    except Exception as e:
+        logger.error(f"run_scan 失败: {e}")
+        return {"success": False, "error": str(e)}
+
+
+def run_backtest(strategy_key: str, start: str = "2024-01-01",
+                  end: str = "2024-12-31", codes: list = None) -> dict:
+    """
+    运行策略回测，返回结构化结果。
+    """
+    try:
+        from config.settings import BACKTEST, DATA_SOURCE
+        fetcher = DataFetcher(DATA_SOURCE)
+        bt = Backtester(fetcher, BACKTEST)
+
+        if strategy_key not in BUILTIN_STRATEGIES:
+            return {"success": False, "error": f"未知策略: {strategy_key}"}
+
+        strategy = BUILTIN_STRATEGIES[strategy_key]()
+        result = bt.run(strategy, codes or [], start, end)
+
+        return {
+            "success": True,
+            "strategy": strategy_key,
+            "total_return": round(result.total_return * 100, 2),
+            "annual_return": round(result.annual_return * 100, 2),
+            "max_drawdown": round(result.max_drawdown * 100, 2),
+            "sharpe_ratio": round(result.sharpe_ratio, 3),
+            "win_rate": round(result.win_rate * 100, 1),
+            "profit_factor": round(result.profit_factor, 2),
+            "total_trades": result.total_trades,
+            "coverage_rate": round(result.coverage_rate * 100, 1),
+            "reliability": result.reliability,
+        }
+    except Exception as e:
+        logger.error(f"run_backtest 失败: {e}")
+        return {"success": False, "error": str(e)}
+
+
+def list_strategies() -> dict:
+    """返回可用策略列表及元数据"""
+    return {
+        "success": True,
+        "strategies": [
+            {
+                "key": key,
+                "name": cls.name,
+                "description": cls.description,
+                "market_condition": getattr(cls, "market_condition", ""),
+            }
+            for key, cls in BUILTIN_STRATEGIES.items()
+        ],
+    }

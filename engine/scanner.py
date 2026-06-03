@@ -7,12 +7,13 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
-from typing import List, Dict, Type, Callable, Optional
+from typing import List, Dict, Type, Callable, Optional, Tuple
 
 import pandas as pd
 
 from data.fetcher import DataFetcher
 import data.store as store
+import data.store_meta as store_meta
 from strategies.base import BaseStrategy, Signal
 
 logger = logging.getLogger(__name__)
@@ -77,6 +78,17 @@ class ScanEngine:
 
         t0 = time.time()
         logger.info(f"开始扫描，资产类型: {asset_types}，日期范围: {start} ~ {end}")
+
+        # DR3：数据新鲜度检查
+        stale = self._check_data_freshness(end, asset_types)
+        if stale:
+            logger.warning(f"数据域过期: {stale}")
+            if "market/stock" in stale:
+                raise RuntimeError(
+                    f"关键域 market/stock 数据过期，请先运行 `python main.py update`。"
+                    f"过期域: {stale}"
+                )
+            print(f"[!] 非关键域过期（继续扫描）: {stale}", flush=True)
 
         # 收集所有待扫描标的：(code, name, asset_type)
         scan_targets: List[tuple] = []
@@ -164,8 +176,12 @@ class ScanEngine:
         if df is None or len(df) < 30:
             return []
 
-        # 价格/成交量过滤
+        # S4：停牌过滤（trade_status=0 的不生成信号）
         last = df.iloc[-1]
+        if asset_type == "stock" and str(last.get("trade_status", "1")) != "1":
+            return []
+
+        # 价格/成交量过滤
         min_price  = self.cfg.get("min_price", 0)
         max_price  = self.cfg.get("max_price", float("inf"))
         min_volume = self.cfg.get("min_volume", 0)
@@ -254,3 +270,77 @@ class ScanEngine:
         etf_list = pd.DataFrame(rows)
         logger.info(f"有效 ETF 数: {len(etf_list)}")
         return etf_list.reset_index(drop=True)
+
+    def _check_data_freshness(self, scan_date: str,
+                               asset_types: List[str]) -> List[str]:
+        """DR3：检查数据域新鲜度，返回过期的域列表"""
+        stale = []
+        today = datetime.strptime(scan_date, "%Y-%m-%d")
+
+        # 读取交易日历判断上一个交易日
+        calendar = store_meta.load("calendar")
+        if calendar is not None and not calendar.empty:
+            trading_dates = calendar.index[
+                calendar.index <= today
+            ].sort_values()
+            last_trading = trading_dates[-1]
+        else:
+            # 无日历则回退：跳过周末判断
+            last_trading = today
+            while last_trading.weekday() >= 5:
+                last_trading -= timedelta(days=1)
+
+        # D1 行情（关键域）
+        if "stock" in asset_types:
+            codes = store.list_codes("stock", market="cn")
+            if codes:
+                latest = None
+                sample = min(5, len(codes))
+                for code in codes[:sample]:
+                    ld = store.last_date(code, "stock", "cn")
+                    if ld:
+                        ld_dt = datetime.strptime(ld, "%Y-%m-%d")
+                        if latest is None or ld_dt > latest:
+                            latest = ld_dt
+                if latest:
+                    latest_dt = datetime.strptime(latest, "%Y-%m-%d")
+                    if latest_dt < last_trading:
+                        stale.append("market/stock")
+
+        if "etf" in asset_types:
+            codes = store.list_codes("etf", market="cn")
+            if codes:
+                latest = None
+                sample = min(5, len(codes))
+                for code in codes[:sample]:
+                    ld = store.last_date(code, "etf", "cn")
+                    if ld:
+                        ld_dt = datetime.strptime(ld, "%Y-%m-%d")
+                        if latest is None or ld_dt > latest:
+                            latest = ld_dt
+                if latest:
+                    latest_dt = datetime.strptime(latest, "%Y-%m-%d")
+                    if latest_dt < last_trading:
+                        stale.append("market/etf")
+
+        # D2 基本面（非关键域，过期记录日志不中止）
+        from data import store_fundamental as sf
+        for dtype in sf.VALID_TYPES:
+            codes = sf.list_codes(dtype)
+            if not codes:
+                continue
+            latest = None
+            sample = min(3, len(codes))
+            for code in codes[:sample]:
+                ld = sf.last_date(code, dtype)
+                if ld:
+                    ld_dt = datetime.strptime(ld, "%Y-%m-%d")
+                    if latest is None or ld_dt > latest:
+                        latest = ld_dt
+            if latest:
+                latest_dt = datetime.strptime(latest, "%Y-%m-%d")
+                threshold = datetime(today.year, today.month, 1)
+                if latest_dt < threshold and today.month not in (1, 4, 8, 10):
+                    stale.append(f"fundamental/{dtype}")
+
+        return stale

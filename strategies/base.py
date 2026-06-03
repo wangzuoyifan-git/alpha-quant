@@ -9,6 +9,10 @@ from typing import List, Dict, Any
 import pandas as pd
 
 
+# AC5：市场环境枚举（Phase 2 Strategy Agent 使用）
+MARKET_CONDITIONS = ("bull", "bear", "range", "volatile")
+
+
 @dataclass
 class Signal:
     """单个交易信号"""
@@ -19,9 +23,11 @@ class Signal:
     reason: str          # 触发原因描述
     score: float = 0.0   # 信号强度评分 0~100
     extra: Dict[str, Any] = field(default_factory=dict)
+    market_condition: str = ""  # AC5：适用市场环境（bull/bear/range/volatile）
 
     def __str__(self):
-        return (f"[{self.signal}] {self.name}({self.code}) "
+        mc = f" [{self.market_condition}]" if self.market_condition else ""
+        return (f"[{self.signal}]{mc} {self.name}({self.code}) "
                 f"¥{self.price:.2f} 评分:{self.score:.1f} | {self.reason}")
 
 
@@ -31,6 +37,7 @@ class BaseStrategy(ABC):
     name: str = "未命名策略"
     description: str = ""
     version: str = "1.0.0"
+    market_condition: str = "range"  # AC5：策略适用市场环境，默认 range（横盘）
 
     def __init__(self, params: dict = None):
         self.params = params or {}

@@ -18,6 +18,7 @@ class MACrossStrategy(BaseStrategy):
     name = "均线金叉"
     description = "快均线上穿慢均线，同时成交量放大"
     version = "1.0.0"
+    market_condition = "range"  # 趋势启动初期的震荡转势
 
     def requires_bars(self) -> int:
         return max(self.params.get("slow_period", 20) * 2, 60)

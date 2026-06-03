@@ -22,6 +22,7 @@ class MACDRSIStrategy(BaseStrategy):
     name = "MACD+RSI共振"
     description = "MACD金叉配合RSI超卖回升，双重过滤减少假信号"
     version = "1.0.0"
+    market_condition = "bear"  # 超跌反弹，适合熊市底部
 
     def requires_bars(self) -> int:
         return 60
