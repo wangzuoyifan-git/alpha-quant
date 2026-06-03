@@ -5,6 +5,13 @@
 import os
 from pathlib import Path
 
+# 加载 .env 环境变量
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).parent.parent / ".env")
+except ImportError:
+    pass
+
 # 项目根目录
 ROOT_DIR = Path(__file__).parent.parent
 

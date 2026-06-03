@@ -159,14 +159,21 @@ def _get_fundamental_summary(code: str) -> Dict:
 def _get_industry_context(code: str) -> Dict:
     try:
         sw = load_meta("industry_sw")
-        if sw is None or sw.empty or "code" not in sw.columns:
+        if sw is None or sw.empty:
             return {"available": False, "note": "无行业分类数据"}
 
-        match = sw[sw["code"].astype(str) == str(code)]
+        code_col = next((c for c in sw.columns if "code" in c.lower()), None)
+        if code_col is None:
+            return {"available": False, "note": "行业数据缺少代码列"}
+
+        match = sw[sw[code_col].astype(str) == str(code)]
         if match.empty:
             return {"available": False, "note": f"代码 {code} 未匹配到行业"}
 
-        industry = str(match.iloc[0].get("industry", ""))
+        # 行业名称列：industry_name 或 industry
+        ind_col = "industry_name" if "industry_name" in sw.columns else \
+            next((c for c in sw.columns if "industry" in c.lower() and "code" not in c.lower()), None)
+        industry = str(match.iloc[0].get(ind_col or sw.columns[-1], ""))
         return {
             "available": True,
             "industry": industry or None,
