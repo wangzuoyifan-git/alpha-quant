@@ -129,6 +129,10 @@ def cmd_backtest(strategy_key: str = "macd_rsi",
     result = backtester.run(strategy, codes, start, end)
     console.print(result.summary())
 
+    # B3：回测结果持久化
+    result_path = backtester.save_result(result)
+    console.print(f"回测结果已保存: {result_path}")
+
     # 保存权益曲线
     if not result.equity_curve.empty:
         out = Path("data/processed") / f"equity_{strategy_key}.csv"

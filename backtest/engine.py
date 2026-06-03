@@ -266,3 +266,33 @@ class Backtester:
             trades=trades, equity_curve=equity,
             coverage_rate=coverage_rate, reliability=reliability,
         )
+
+    def save_result(self, result: BacktestResult) -> str:
+        """B3：回测结果持久化，供策略历史胜率展示"""
+        import json
+        from pathlib import Path
+        out_dir = Path(__file__).parent.parent / "data" / "processed"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = out_dir / f"backtest_{result.strategy_name}_{ts}.json"
+        data = {
+            "strategy": result.strategy_name,
+            "start": result.start_date,
+            "end": result.end_date,
+            "initial_capital": result.initial_capital,
+            "final_capital": result.final_capital,
+            "total_return": round(result.total_return, 6),
+            "annual_return": round(result.annual_return, 6),
+            "max_drawdown": round(result.max_drawdown, 6),
+            "sharpe_ratio": round(result.sharpe_ratio, 4),
+            "win_rate": round(result.win_rate, 4),
+            "profit_factor": round(result.profit_factor, 4),
+            "total_trades": result.total_trades,
+            "coverage_rate": round(result.coverage_rate, 4),
+            "reliability": result.reliability,
+            "generated_at": datetime.now().isoformat(),
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        logger.info(f"回测结果已持久化: {path}")
+        return str(path)

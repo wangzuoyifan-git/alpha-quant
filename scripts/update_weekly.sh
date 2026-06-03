@@ -24,7 +24,11 @@ cd "${PROJ_DIR}"
 # 1. 更新 meta 域（行业分类 + 申万指数 + 交易日历）
 echo ""
 echo "[$(date '+%H:%M:%S')] [1/2] 更新 meta 域..."
-"${PYTHON}" main.py init-meta
+"${PYTHON}" -c "
+from data.downloader_meta import MetaDownloader
+dl = MetaDownloader()
+dl.update_db()
+"
 
 # 2. 更新 macro 域（宏观数据，月频但每周检查）
 echo ""

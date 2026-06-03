@@ -81,17 +81,23 @@ class MacroDownloader:
         _log(f"Macro 域初始化  起始: {start}")
         _log("=" * 55)
 
-        _log("[1/4] 下载国债收益率...")
+        _log("[1/6] 下载国债收益率...")
         self._download_bond_yield(start=start)
 
-        _log("[2/4] 下载 M2 货币供应...")
+        _log("[2/6] 下载 M2 货币供应...")
         self._download_m2()
 
-        _log("[3/4] 下载 CPI/PPI...")
+        _log("[3/6] 下载 CPI/PPI...")
         self._download_cpi_ppi()
 
-        _log("[4/4] 下载 PMI...")
+        _log("[4/6] 下载 PMI...")
         self._download_pmi()
+
+        _log("[5/6] 下载 CNY/USD 汇率...")
+        self._download_cny_usd()
+
+        _log("[6/6] 下载境外宏观指标...")
+        self._download_overseas()
 
         _log("Macro 域初始化完成！")
         self._print_stats()
@@ -272,6 +278,160 @@ class MacroDownloader:
             df = store.load(dtype)
             if df is not None:
                 ld = store.last_date(dtype)
-                _log(f"  {dtype:12s}: {len(df):5d} 行  最新: {ld}")
+                _log(f"  {dtype:16s}: {len(df):5d} 行  最新: {ld}")
             else:
-                _log(f"  {dtype:12s}: 无数据")
+                _log(f"  {dtype:16s}: 无数据")
+
+    # ------------------------------------------------------------------
+    # D5a: CNY/USD 汇率
+    # ------------------------------------------------------------------
+
+    def _download_cny_usd(self) -> None:
+        import akshare as ak
+        try:
+            df = _retry(lambda: ak.currency_boc_sina(symbol="美元"))
+            if df is None or df.empty:
+                _log("  CNY/USD：无数据")
+                return
+            df = df.copy()
+            if "日期" in df.columns:
+                df = df.rename(columns={"日期": "date"})
+            if "date" in df.columns:
+                df["date"] = pd.to_datetime(df["date"])
+                df = df.set_index("date")
+            store.save("cny_usd", df)
+            _log(f"  CNY/USD：{len(df)} 条记录")
+        except Exception as e:
+            logger.warning(f"CNY/USD 汇率下载失败: {e}")
+            # 尝试备用接口
+            try:
+                df = _retry(lambda: ak.fx_spot_quote())
+                if df is not None and not df.empty:
+                    df = df.copy()
+                    df = df.rename(columns={"日期": "date"} if "日期" in df.columns else {})
+                    if "date" in df.columns:
+                        df["date"] = pd.to_datetime(df["date"])
+                        df = df.set_index("date")
+                    store.save("cny_usd", df)
+                    _log(f"  CNY/USD（备用接口）：{len(df)} 条记录")
+            except Exception as e2:
+                logger.warning(f"CNY/USD 备用接口也失败: {e2}")
+
+    # ------------------------------------------------------------------
+    # D5b: 境外宏观指标（VIX/DXY/原油/铜/标普500/恒生/美联储利率）
+    # ------------------------------------------------------------------
+
+    def _download_overseas(self) -> None:
+        """下载 D5b 全部境外宏观指标"""
+        self._download_vix()
+        time.sleep(1)
+        self._download_dxy()
+        time.sleep(1)
+        self._download_oil_wti()
+        time.sleep(1)
+        self._download_sp500()
+        time.sleep(1)
+        self._download_hsi()
+
+    def _download_vix(self) -> None:
+        import akshare as ak
+        try:
+            df = _retry(lambda: ak.index_vix())
+            if df is None or df.empty:
+                _log("  VIX：无数据")
+                return
+            df = df.copy()
+            if "日期" in df.columns:
+                df = df.rename(columns={"日期": "date"})
+            if "date" in df.columns:
+                df["date"] = pd.to_datetime(df["date"])
+                df = df.set_index("date")
+            store.save("vix", df)
+            _log(f"  VIX：{len(df)} 条记录")
+        except Exception as e:
+            logger.warning(f"VIX 下载失败: {e}")
+
+    def _download_dxy(self) -> None:
+        import akshare as ak
+        try:
+            df = _retry(lambda: ak.currency_boc_sina(symbol="美元指数"))
+            if df is None or df.empty:
+                # 试用别的接口
+                df = _retry(lambda: ak.fx_spot_quote())
+                if df is None or df.empty:
+                    _log("  DXY：无数据")
+                    return
+            df = df.copy()
+            if "日期" in df.columns:
+                df = df.rename(columns={"日期": "date"})
+            if "date" in df.columns:
+                df["date"] = pd.to_datetime(df["date"])
+                df = df.set_index("date")
+            store.save("dxy", df)
+            _log(f"  DXY：{len(df)} 条记录")
+        except Exception as e:
+            logger.warning(f"DXY 下载失败: {e}")
+
+    def _download_oil_wti(self) -> None:
+        import akshare as ak
+        try:
+            df = _retry(lambda: ak.spot_golden_benchmark_sge())
+            if df is None or df.empty:
+                # 尝试原油专用接口
+                try:
+                    df = _retry(lambda: ak.futures_international_commodity(
+                        symbol="WTI", start_date="20200101"))
+                    if df is not None and not df.empty:
+                        df = df.copy()
+                        if "日期" in df.columns:
+                            df = df.rename(columns={"日期": "date"})
+                        if "date" in df.columns:
+                            df["date"] = pd.to_datetime(df["date"])
+                            df = df.set_index("date")
+                        store.save("oil_wti", df)
+                        _log(f"  WTI原油：{len(df)} 条记录")
+                        return
+                except Exception:
+                    pass
+                _log("  WTI原油：无数据")
+                return
+            store.save("oil_wti", df)
+            _log(f"  WTI原油：{len(df)} 条记录")
+        except Exception as e:
+            logger.warning(f"WTI原油下载失败: {e}")
+
+    def _download_sp500(self) -> None:
+        import akshare as ak
+        try:
+            df = _retry(lambda: ak.index_us_stock_sina(symbol=".INX"))
+            if df is None or df.empty:
+                _log("  标普500：无数据")
+                return
+            df = df.copy()
+            if "日期" in df.columns:
+                df = df.rename(columns={"日期": "date"})
+            if "date" in df.columns:
+                df["date"] = pd.to_datetime(df["date"])
+                df = df.set_index("date")
+            store.save("sp500", df)
+            _log(f"  标普500：{len(df)} 条记录")
+        except Exception as e:
+            logger.warning(f"标普500下载失败: {e}")
+
+    def _download_hsi(self) -> None:
+        import akshare as ak
+        try:
+            df = _retry(lambda: ak.stock_hk_index_daily_em(symbol="HSI"))
+            if df is None or df.empty:
+                _log("  恒生指数：无数据")
+                return
+            df = df.copy()
+            if "日期" in df.columns:
+                df = df.rename(columns={"日期": "date"})
+            if "date" in df.columns:
+                df["date"] = pd.to_datetime(df["date"])
+                df = df.set_index("date")
+            store.save("hsi", df)
+            _log(f"  恒生指数：{len(df)} 条记录")
+        except Exception as e:
+            logger.warning(f"恒生指数下载失败: {e}")

@@ -47,16 +47,21 @@ else:
 
 # 3. 更新 factor 域（每日：北向资金 + 行业资金流向）
 echo ""
-echo "[$(date '+%H:%M:%S')] [3/4] 更新 factor 域..."
+echo "[$(date '+%H:%M:%S')] [3/5] 更新 factor 域..."
 "${PYTHON}" -c "
 from data.downloader_factor import FactorDownloader
 dl = FactorDownloader()
 dl.update_db()
 "
 
-# 4. 扫描信号
+# 4. 更新 tushare 域（融资融券等每日数据）
 echo ""
-echo "[$(date '+%H:%M:%S')] [4/4] 扫描信号..."
+echo "[$(date '+%H:%M:%S')] [4/5] 更新 tushare 域..."
+"${PYTHON}" main.py update-tushare
+
+# 5. 扫描信号
+echo ""
+echo "[$(date '+%H:%M:%S')] [5/5] 扫描信号..."
 "${PYTHON}" main.py scan --types stock
 
 echo ""
