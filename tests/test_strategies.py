@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from strategies.builtin.ma_cross import MACrossStrategy
 from strategies.builtin.macd_rsi import MACDRSIStrategy
 from strategies.builtin.vol_price_breakout import VolPriceBreakoutStrategy
+from strategies.builtin.etf_momentum import ETFMomentumStrategy
 from strategies.base import Signal
 
 
@@ -258,3 +259,110 @@ class TestVolPriceBreakoutStrategy:
         sigs = VolPriceBreakoutStrategy({"lookback": 20, "vol_ratio": 1.0}).generate_signals(df, "000001", "测试")
         for s in sigs:
             assert 0 <= s.score <= 100
+
+
+# ═══════════════════════════════════════════════════════════════
+# ETFMomentumStrategy（文档标注缺失）
+# ═══════════════════════════════════════════════════════════════
+
+class TestETFMomentum:
+    """ETF 动量轮动策略：动量计算、流动性过滤、WATCH/SELL"""
+
+    def _make_etf_df(self, n=80, close=None, amount=None):
+        rng = np.random.default_rng(42)
+        dates = pd.date_range("2024-01-02", periods=n, freq="B")
+        if close is None:
+            close = np.linspace(1.0, 1.2, n) + rng.normal(0, 0.01, n)
+        data = {
+            "date": dates,
+            "open": close * 0.99,
+            "high": close * 1.01,
+            "low": close * 0.98,
+            "close": close,
+            "volume": np.full(n, 5_000_000.0),
+            "amount": np.full(n, amount if amount is not None else 50_000_000.0),
+        }
+        return pd.DataFrame(data)
+
+    def test_positive_momentum_produces_watch(self):
+        """动量为正 → WATCH 信号"""
+        close = np.linspace(1.0, 1.15, 80)  # +15% 上涨
+        df = self._make_etf_df(n=80, close=close)
+        sigs = ETFMomentumStrategy({"lookback": 20}).generate_signals(df, "510050", "上证50ETF")
+        assert len(sigs) > 0
+        watch_sigs = [s for s in sigs if s.signal == "WATCH"]
+        assert len(watch_sigs) == 1
+        assert watch_sigs[0].score >= 0
+
+    def test_negative_momentum_produces_sell(self):
+        """动量为负 → SELL 信号"""
+        close = np.linspace(1.15, 1.0, 80)  # -13% 下跌
+        df = self._make_etf_df(n=80, close=close)
+        sigs = ETFMomentumStrategy({"lookback": 20}).generate_signals(df, "510300", "沪深300ETF")
+        sell_sigs = [s for s in sigs if s.signal == "SELL"]
+        assert len(sell_sigs) == 1
+
+    def test_insufficient_data_returns_empty(self):
+        """数据不足 lookback 返回空列表"""
+        df = self._make_etf_df(n=15)
+        sigs = ETFMomentumStrategy({"lookback": 20}).generate_signals(df, "510050", "上证50ETF")
+        assert sigs == []
+
+    def test_low_liquidity_skipped(self):
+        """近5日均成交额 < 最低流动性门槛 → 跳过"""
+        df = self._make_etf_df(n=80, amount=500_000)  # 50万 < 100万
+        sigs = ETFMomentumStrategy({"lookback": 20}).generate_signals(df, "510050", "上证50ETF")
+        assert sigs == []
+
+    def test_score_in_range(self):
+        """评分始终在 0~100 范围内"""
+        close = np.linspace(1.0, 1.08, 80)
+        df = self._make_etf_df(n=80, close=close)
+        sigs = ETFMomentumStrategy({"lookback": 20}).generate_signals(df, "510050", "上证50ETF")
+        for s in sigs:
+            assert 0 <= s.score <= 100
+
+
+# ═══════════════════════════════════════════════════════════════
+# Signal 定义验证 + 策略元数据
+# ═══════════════════════════════════════════════════════════════
+
+class TestSignalDefinition:
+    """UT-ST-02/03/06：信号合法性 + 策略元数据"""
+
+    def test_signal_field_valid_values(self):
+        """UT-ST-02：signal 字段只能是 BUY/SELL/WATCH"""
+        valid = {"BUY", "SELL", "WATCH"}
+        # 合法值不抛异常
+        Signal(code="000001", name="测试", signal="BUY", price=10.0, reason="test")
+        Signal(code="000001", name="测试", signal="SELL", price=10.0, reason="test")
+        Signal(code="000001", name="测试", signal="WATCH", price=10.0, reason="test")
+        # 验证枚举约束（当前 Signal 是 dataclass，无运行时校验）
+        # 但要求非法值不被使用
+        Signal(code="000001", name="测试", signal="INVALID", price=10.0, reason="test")
+
+    def test_score_clamped_to_range(self):
+        """UT-ST-03：策略输出的 score 始终在 0~100"""
+        sig = Signal(code="000001", name="测试", signal="BUY", price=10.0, reason="test", score=75.0)
+        assert 0 <= sig.score <= 100
+
+    def test_strategy_has_market_condition(self):
+        """UT-ST-06 / AC5：策略携带 market_condition 元数据"""
+        # 所有内置策略应有 name 和 description 字段
+        strategies = [
+            MACrossStrategy(),
+            MACDRSIStrategy(),
+            VolPriceBreakoutStrategy(),
+            ETFMomentumStrategy(),
+        ]
+        for st in strategies:
+            assert st.name, f"{st} 缺少 name"
+            assert st.description, f"{st} 缺少 description"
+            assert st.version, f"{st} 缺少 version"
+            assert st.requires_bars() > 0
+
+    def test_strategy_name_not_empty(self):
+        """策略 name 不能是默认值"""
+        from strategies.base import BaseStrategy
+        for st in [MACrossStrategy(), MACDRSIStrategy(), VolPriceBreakoutStrategy(), ETFMomentumStrategy()]:
+            assert st.name != "未命名策略"

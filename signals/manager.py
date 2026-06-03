@@ -15,18 +15,17 @@ SIGNAL_DIR = Path(__file__).parent.parent / "data" / "processed"
 SIGNAL_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def save_signals(signals: List[Signal], date: str = None) -> str:
-    """将信号列表持久化为 JSON，同日期多次调用会合并（不去重）"""
+def save_signals(signals: List[Signal], date: str = None,
+                 overwrite: bool = False) -> str:
+    """
+    将信号列表持久化为 JSON。
+
+    行为说明：
+      overwrite=True   → 替换现有文件（`main.py scan` 场景）
+      overwrite=False  → 追加合并，同日期同一 code+signal 去重保留最新（默认）
+    """
     date = date or datetime.now().strftime("%Y-%m-%d")
     path = SIGNAL_DIR / f"signals_{date}.json"
-
-    existing = []
-    if path.exists():
-        try:
-            with open(path, encoding="utf-8") as f:
-                existing = json.load(f)
-        except Exception:
-            existing = []
 
     new_data = [
         {
@@ -41,10 +40,27 @@ def save_signals(signals: List[Signal], date: str = None) -> str:
         }
         for s in signals
     ]
-    merged = existing + new_data
+
+    if overwrite or not path.exists():
+        merged = new_data
+    else:
+        try:
+            with open(path, encoding="utf-8") as f:
+                existing = json.load(f)
+        except Exception:
+            existing = []
+
+        # 合并 + 去重：同 code+signal 保留最新的
+        all_items = existing + new_data
+        seen = {}
+        for item in all_items:
+            key = (item["code"], item["signal"])
+            seen[key] = item  # 后出现的覆盖先出现的
+        merged = list(seen.values())
+
     with open(path, "w", encoding="utf-8") as f:
         json.dump(merged, f, ensure_ascii=False, indent=2)
-    logger.info(f"信号已保存: {path}")
+    logger.info(f"信号已保存: {path} ({len(merged)} 条)")
     return str(path)
 
 

@@ -23,7 +23,7 @@ except ImportError:
 import logging.handlers
 
 from backtest.engine import Backtester
-from config.settings import BACKTEST, DATA_SOURCE, LOG, NOTIFIER, SCAN, SCHEDULE, WEB
+from config.settings import BACKTEST, DATA_SOURCE, LOG, NOTIFIER, RISK_CONTROL, SCAN, SCHEDULE, WEB
 from data.downloader import KlineDownloader
 from data.fetcher import DataFetcher
 from engine.scanner import ScanEngine
@@ -52,7 +52,7 @@ logger = logging.getLogger("alpha")
 # ============================================================
 fetcher = DataFetcher(DATA_SOURCE)
 notifier = Notifier(NOTIFIER)
-trader = TradeAssistant(BACKTEST)
+trader = TradeAssistant(BACKTEST, RISK_CONTROL)
 
 
 def cmd_scan(date: str | None = None, asset_types: list | None = None):

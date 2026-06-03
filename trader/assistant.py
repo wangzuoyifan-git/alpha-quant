@@ -1,12 +1,12 @@
 """
 半自动交易辅助模块
-生成交易指令单，支持手动确认后执行（不直接下单，降低风险）
+生成交易指令单 + 风控过滤 + 执行结果反馈闭环
 """
 import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Dict
 
 import pandas as pd
 
@@ -19,15 +19,32 @@ ORDER_DIR.mkdir(parents=True, exist_ok=True)
 
 
 class TradeOrder:
-    """交易指令单"""
+    """交易指令单 — O1 字段完整性 + F1/F2 反馈"""
 
-    def __init__(self, signal: Signal, quantity: int, capital: float):
+    def __init__(self, signal: Signal, quantity: int, capital: float,
+                 stop_loss_ratio: float = 0.07, take_profit_ratio: float = 0.20):
         self.signal = signal
         self.quantity = quantity
         self.capital = capital
         self.created_at = datetime.now().isoformat()
-        self.status = "PENDING"   # PENDING / CONFIRMED / CANCELLED / EXECUTED
+        self.status = "PENDING"  # PENDING / CONFIRMED / CANCELLED / EXECUTED
         self.order_id = f"{signal.code}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+
+        # O1 止损止盈
+        self.stop_loss_ratio = stop_loss_ratio
+        self.stop_loss_price = round(signal.price * (1 - stop_loss_ratio), 2)
+        self.take_profit_ratio = take_profit_ratio
+        self.take_profit_price = round(signal.price * (1 + take_profit_ratio), 2)
+
+        # RC 风控标签
+        self.risk_flags: List[str] = []
+        self.risk_check_detail: Dict[str, bool] = {}
+
+        # F1/F2 执行反馈
+        self.expected_price = signal.price
+        self.actual_price: Optional[float] = None
+        self.actual_quantity: Optional[int] = None
+        self.executed_at: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -37,50 +54,218 @@ class TradeOrder:
             "direction": self.signal.signal,
             "price": self.signal.price,
             "quantity": self.quantity,
-            "amount": self.quantity * self.signal.price,
+            "amount": round(self.quantity * self.signal.price, 2),
             "reason": self.signal.reason,
             "score": self.signal.score,
             "status": self.status,
             "created_at": self.created_at,
+            "stop_loss_price": self.stop_loss_price,
+            "stop_loss_ratio": self.stop_loss_ratio,
+            "take_profit_price": self.take_profit_price,
+            "take_profit_ratio": self.take_profit_ratio,
+            "risk_flags": self.risk_flags,
+            "risk_check_detail": self.risk_check_detail,
+            "expected_price": self.expected_price,
+            "actual_price": self.actual_price,
+            "actual_quantity": self.actual_quantity,
+            "executed_at": self.executed_at,
         }
 
     def __str__(self):
         d = self.to_dict()
-        return (f"[{d['status']}] {d['direction']} {d['name']}({d['code']}) "
+        risk = f" [{'|'.join(d['risk_flags'])}]" if d["risk_flags"] else ""
+        return (f"[{d['status']}]{risk} {d['direction']} {d['name']}({d['code']}) "
                 f"x{d['quantity']}股 @ ¥{d['price']:.2f} "
-                f"= ¥{d['amount']:,.0f}")
+                f"止损¥{d['stop_loss_price']:.2f} 止盈¥{d['take_profit_price']:.2f}")
 
 
 class TradeAssistant:
     """
-    半自动交易辅助
-    - 根据信号生成指令单
-    - 支持仓位计算
-    - 持久化指令单，等待人工确认
-    - 提供指令单管理（查看/确认/取消）
+    半自动交易辅助 — 含风控过滤 + 执行反馈
+
+    - filter_signals_by_risk()：RC1~RC8 风控检查
+    - generate_orders()：生成含止损止盈的指令单
+    - record_execution()：F1/F2 执行结果录入
+    - confirm_order / cancel_order：指令单生命周期管理
     """
 
-    def __init__(self, config: dict):
-        self.cfg = config
-        self.initial_capital = config.get("initial_capital", 1_000_000)
-        self.position_size = config.get("position_size", 0.1)
-        self.commission = config.get("commission_rate", 0.0003)
+    def __init__(self, trade_config: dict, risk_config: dict = None):
+        self.cfg = trade_config
+        self.risk = risk_config or {}
+
+        self.initial_capital = trade_config.get("initial_capital", 1_000_000)
+        self.position_size = trade_config.get("position_size", 0.1)
+        self.commission = trade_config.get("commission_rate", 0.0003)
+
+        # RC 参数（全部从配置读取，符合 AC2）
+        self.rc_max_single = self.risk.get("max_single_position", 0.10)
+        self.rc_max_positions = self.risk.get("max_positions", 10)
+        self.rc_max_industry = self.risk.get("max_industry_concentration", 0.30)
+        self.rc_stop_loss = self.risk.get("stop_loss_ratio", 0.07)
+        self.rc_max_drawdown = self.risk.get("max_total_drawdown", 0.15)
+        self.rc_take_profit = self.risk.get("take_profit_ratio", 0.20)
+        self.rc_enforce = self.risk.get("enforce", True)
+        self.rc_circuit_breaker = self.risk.get("circuit_breaker", {})
+
+    # ═══════════════════════════════════════════════════════════
+    # RC1~RC8 风控检查
+    # ═══════════════════════════════════════════════════════════
+
+    def check_total_drawdown(self, current_equity: float) -> bool:
+        """RC5：总账户回撤超限时返回 False（GAP-01）"""
+        if current_equity <= 0:
+            return False
+        drawdown = (current_equity - self.initial_capital) / self.initial_capital
+        if drawdown < -self.rc_max_drawdown:
+            logger.warning(
+                f"RC5 触发：总回撤 {drawdown * 100:.1f}% > {self.rc_max_drawdown * 100}%"
+            )
+            return False
+        return True
+
+    def check_circuit_breaker(self, vix: float = None, index_drop: float = None) -> bool:
+        """RC8：突发事件熔断 — VIX > 阈值 或 指数跌幅 > 阈值（GAP-36）"""
+        cb = self.rc_circuit_breaker
+        if not cb.get("pause_new_orders", True):
+            return True
+
+        if vix is not None and cb.get("vix_threshold"):
+            if vix > cb["vix_threshold"]:
+                logger.warning(f"RC8 VIX熔断：VIX={vix} > {cb['vix_threshold']}")
+                return False
+
+        if index_drop is not None and cb.get("index_drop_threshold"):
+            if abs(index_drop) > abs(cb["index_drop_threshold"]) and index_drop < 0:
+                logger.warning(
+                    f"RC8 指数熔断：跌幅 {index_drop * 100:.1f}% > {cb['index_drop_threshold'] * 100}%"
+                )
+                return False
+
+        return True
+
+    def check_single_position(self, order: TradeOrder) -> bool:
+        """RC1：单笔金额超限"""
+        max_amount = self.initial_capital * self.rc_max_single
+        amount = order.quantity * order.signal.price
+        if amount > max_amount:
+            order.risk_flags.append("RC1")
+            order.risk_check_detail["RC1"] = False
+            logger.warning(f"RC1：{order.signal.code} 单笔金额 ¥{amount:,.0f} > ¥{max_amount:,.0f}")
+            return False
+        order.risk_check_detail["RC1"] = True
+        return True
+
+    def check_position_count(self, current_positions: int) -> bool:
+        """RC2：持仓数超限"""
+        if current_positions >= self.rc_max_positions:
+            logger.warning(f"RC2：持仓数 {current_positions} >= {self.rc_max_positions}")
+            return False
+        return True
+
+    def check_industry_concentration(self, order: TradeOrder,
+                                      industry_positions: Dict[str, float],
+                                      current_equity: float) -> bool:
+        """RC3：同行业持仓超比例"""
+        industry = order.signal.extra.get("industry", "")
+        if not industry or current_equity <= 0:
+            return True
+
+        industry_value = industry_positions.get(industry, 0)
+        new_value = industry_value + order.quantity * order.signal.price
+        concentration = new_value / current_equity
+        if concentration > self.rc_max_industry:
+            order.risk_flags.append("RC3")
+            order.risk_check_detail["RC3"] = False
+            logger.warning(f"RC3：行业 {industry} 集中度 {concentration * 100:.1f}% > {self.rc_max_industry * 100}%")
+            return False
+        order.risk_check_detail["RC3"] = True
+        return True
+
+    def filter_signals_by_risk(
+        self,
+        signals: List[Signal],
+        current_equity: float = None,
+        current_positions: Dict[str, dict] = None,
+        industry_positions: Dict[str, float] = None,
+        vix: float = None,
+        index_drop: float = None,
+    ) -> List[Signal]:
+        """
+        RC1~RC8 完整风控过滤，返回通过检查的信号列表。
+        未通过的信号会有 risk_flags 标注，但仍会保留在结果中供人工审查。
+        enforce=True 时直接过滤掉违规信号。
+        """
+        equity = current_equity or self.initial_capital
+        positions = current_positions or {}
+        industry_pos = industry_positions or {}
+
+        if not self.check_total_drawdown(equity):
+            return [] if self.rc_enforce else signals
+
+        if not self.check_circuit_breaker(vix=vix, index_drop=index_drop):
+            return [] if self.rc_enforce else signals
+
+        filtered = []
+        for sig in signals:
+            if sig.signal not in ("BUY", "SELL"):
+                continue
+
+            qty = self._calc_quantity(sig.price, equity)
+            if qty <= 0:
+                continue
+
+            order = TradeOrder(sig, qty, equity,
+                               stop_loss_ratio=self.rc_stop_loss,
+                               take_profit_ratio=self.rc_take_profit)
+
+            rc1_ok = self.check_single_position(order)
+            rc2_ok = self.check_position_count(len(positions))
+            rc3_ok = self.check_industry_concentration(order, industry_pos, equity)
+
+            # RC2 标记（对单个信号不直接标记 RC2，在生成指令单时全局检查）
+            if not rc2_ok:
+                order.risk_check_detail["RC2"] = False
+
+            all_ok = rc1_ok and rc2_ok and rc3_ok
+            if all_ok or not self.rc_enforce:
+                filtered.append(sig)
+            else:
+                logger.info(f"风控过滤 {sig.code} {sig.signal}: flags={order.risk_flags}")
+
+        return filtered
+
+    # ═══════════════════════════════════════════════════════════
+    # 指令单生成与管理
+    # ═══════════════════════════════════════════════════════════
 
     def generate_orders(self, signals: List[Signal],
-                        current_capital: float = None) -> List[TradeOrder]:
-        """根据信号生成待确认指令单"""
+                        current_capital: float = None,
+                        current_positions: int = 0) -> List[TradeOrder]:
+        """根据信号生成含止损止盈 + 风控标签的指令单"""
         capital = current_capital or self.initial_capital
         orders = []
+
         for sig in signals:
             if sig.signal not in ("BUY", "SELL"):
                 continue
             qty = self._calc_quantity(sig.price, capital)
             if qty <= 0:
                 continue
-            order = TradeOrder(sig, qty, capital)
+
+            order = TradeOrder(sig, qty, capital,
+                               stop_loss_ratio=self.rc_stop_loss,
+                               take_profit_ratio=self.rc_take_profit)
+
+            # RC 检查
+            self.check_single_position(order)
+            if current_positions >= self.rc_max_positions:
+                order.risk_flags.append("RC2")
+                order.risk_check_detail["RC2"] = False
+
             orders.append(order)
             self._save_order(order)
             logger.info(f"生成指令单: {order}")
+
         return orders
 
     def list_pending_orders(self) -> List[dict]:
@@ -97,7 +282,7 @@ class TradeAssistant:
         return orders
 
     def confirm_order(self, order_id: str) -> bool:
-        """确认指令单（标记为 CONFIRMED，等待人工在券商软件执行）"""
+        """确认指令单，记录预期买入价 + 时间戳"""
         path = ORDER_DIR / f"{order_id}.json"
         if not path.exists():
             logger.error(f"指令单不存在: {order_id}")
@@ -106,13 +291,16 @@ class TradeAssistant:
             d = json.load(f)
         d["status"] = "CONFIRMED"
         d["confirmed_at"] = datetime.now().isoformat()
+        # F1：记录预期买入价
+        if "expected_price" not in d:
+            d["expected_price"] = d.get("price")
         with open(path, "w") as f:
             json.dump(d, f, ensure_ascii=False, indent=2)
         logger.info(f"指令单已确认: {order_id}")
         return True
 
     def cancel_order(self, order_id: str) -> bool:
-        """取消指令单"""
+        """取消指令单，保留历史记录"""
         path = ORDER_DIR / f"{order_id}.json"
         if not path.exists():
             return False
@@ -124,8 +312,71 @@ class TradeAssistant:
         logger.info(f"指令单已取消: {order_id}")
         return True
 
+    def record_execution(self, order_id: str, actual_price: float,
+                         actual_quantity: int) -> bool:
+        """F1/F2：录入实际成交价和数量，状态变为 EXECUTED"""
+        path = ORDER_DIR / f"{order_id}.json"
+        if not path.exists():
+            logger.error(f"指令单不存在: {order_id}")
+            return False
+        with open(path) as f:
+            d = json.load(f)
+        d["status"] = "EXECUTED"
+        d["actual_price"] = actual_price
+        d["actual_quantity"] = actual_quantity
+        d["executed_at"] = datetime.now().isoformat()
+        # 计算成交偏差
+        expected = d.get("expected_price") or d.get("price")
+        if expected and expected > 0:
+            d["price_deviation"] = round((actual_price / expected - 1) * 100, 2)
+        with open(path, "w") as f:
+            json.dump(d, f, ensure_ascii=False, indent=2)
+        logger.info(f"执行结果已记录: {order_id} 实际¥{actual_price} x{actual_quantity}股")
+        return True
+
+    def list_executed_orders(self) -> List[dict]:
+        """F2：列出已执行的指令单供策略胜率分析"""
+        orders = []
+        for f in sorted(ORDER_DIR.glob("*.json")):
+            try:
+                with open(f) as fp:
+                    d = json.load(fp)
+                if d.get("status") in ("EXECUTED",):
+                    orders.append(d)
+            except Exception:
+                pass
+        return orders
+
+    def get_pnl_summary(self) -> dict:
+        """F2：策略汇总 — 按策略来源统计盈亏损"""
+        executed = self.list_executed_orders()
+        if not executed:
+            return {"total_trades": 0, "total_pnl": 0.0, "by_strategy": {}}
+
+        summary = {"total_trades": len(executed), "total_pnl": 0.0, "by_strategy": {}}
+        for o in executed:
+            pnl = 0.0
+            if o.get("actual_price") and o.get("actual_quantity"):
+                expected = o.get("expected_price") or o.get("price")
+                pnl = (o["actual_price"] - expected) * o["actual_quantity"]
+            summary["total_pnl"] += pnl
+
+            reason = o.get("reason", "unknown")
+            strategy_key = reason.split(" ")[0].split(",")[0] if reason else "unknown"
+            if strategy_key not in summary["by_strategy"]:
+                summary["by_strategy"][strategy_key] = {"trades": 0, "pnl": 0.0, "win": 0}
+            summary["by_strategy"][strategy_key]["trades"] += 1
+            summary["by_strategy"][strategy_key]["pnl"] += pnl
+            if pnl > 0:
+                summary["by_strategy"][strategy_key]["win"] += 1
+
+        return summary
+
+    # ═══════════════════════════════════════════════════════════
+    # 工具方法
+    # ═══════════════════════════════════════════════════════════
+
     def export_orders_csv(self, output_path: str = None) -> str:
-        """导出指令单为 CSV，方便导入券商软件"""
         orders = []
         for f in sorted(ORDER_DIR.glob("*.json")):
             try:
@@ -142,7 +393,6 @@ class TradeAssistant:
         return path
 
     def _calc_quantity(self, price: float, capital: float) -> int:
-        """计算买入数量（A股最小单位100股）"""
         if price <= 0:
             return 0
         alloc = capital * self.position_size

@@ -140,11 +140,13 @@ def _normalize(df: pd.DataFrame, market: str, asset_type: str) -> pd.DataFrame:
 
 def save(code: str, df: pd.DataFrame,
          asset_type: str = "stock",
-         market: str = "cn") -> None:
+         market: str = "cn",
+         force: bool = False) -> None:
     """
     写入/追加 K 线，自动去重排序。
     market: cn / hk / us（默认 cn）
     asset_type: stock / index / etf（默认 stock）
+    force: True 时允许覆盖已有日期的数据，False 时保留已有数据优先（DS2）
     """
     if df is None or df.empty:
         return
@@ -152,7 +154,8 @@ def save(code: str, df: pd.DataFrame,
     existing = load(code, asset_type=asset_type, market=market)
     if existing is not None and not existing.empty:
         df = pd.concat([existing, df])
-        df = df[~df.index.duplicated(keep="last")]
+        keep = "last" if force else "first"
+        df = df[~df.index.duplicated(keep=keep)]
     df.sort_index(inplace=True)
     df.to_parquet(_path(code, market, asset_type),
                   engine="pyarrow", compression="snappy")

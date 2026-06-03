@@ -47,8 +47,15 @@ class BacktestResult:
     total_trades: int
     trades: list[Trade] = field(default_factory=list)
     equity_curve: pd.Series = field(default_factory=pd.Series)
+    coverage_rate: float = 1.0   # B3：数据覆盖率（0~1）
+    reliability: str = "normal"  # B3：normal / limited
 
     def summary(self) -> str:
+        coverage_note = ""
+        if self.reliability == "limited":
+            coverage_note = (
+                f"\n[!] 数据覆盖率 {self.coverage_rate*100:.1f}% (< 80%)，回测结果参考价值有限"
+            )
         return (
             f"\n{'='*50}\n"
             f"策略: {self.strategy_name}\n"
@@ -62,6 +69,8 @@ class BacktestResult:
             f"胜率:     {self.win_rate*100:.1f}%\n"
             f"盈亏比:   {self.profit_factor:.2f}\n"
             f"总交易数: {self.total_trades}\n"
+            f"数据覆盖: {self.coverage_rate*100:.1f}%"
+            f"{coverage_note}\n"
             f"{'='*50}"
         )
 
@@ -126,6 +135,9 @@ class Backtester:
             raise ValueError("没有可用的历史数据，请先运行 python3 main.py init")
 
         print(f"有效数据: {len(data)} 只  数据不足跳过: {miss} 只", flush=True)
+
+        # B3：计算数据覆盖率
+        coverage_rate = len(data) / max(len(stock_codes), 1)
 
         # 获取所有交易日
         all_dates = sorted(set(
@@ -207,12 +219,14 @@ class Backtester:
             equity.append({"date": date, "equity": capital + market_value})
 
         equity_series = pd.DataFrame(equity).set_index("date")["equity"]
-        result = self._calc_metrics(strategy.name, start, end, equity_series, trades)
+        result = self._calc_metrics(strategy.name, start, end, equity_series, trades,
+                                    coverage_rate)
         logger.info(result.summary())
         return result
 
     def _calc_metrics(self, name: str, start: str, end: str,
-                      equity: pd.Series, trades: list[Trade]) -> BacktestResult:
+                      equity: pd.Series, trades: list[Trade],
+                      coverage_rate: float = 1.0) -> BacktestResult:
         initial = float(self.initial_capital)
         final = float(equity.iloc[-1]) if len(equity) > 0 else initial
         total_return = (final - initial) / initial
@@ -239,6 +253,8 @@ class Backtester:
         avg_loss = abs(np.mean([t.pnl for t in lose_trades])) if lose_trades else 1
         profit_factor = avg_win / max(avg_loss, 1e-9)
 
+        reliability = "limited" if coverage_rate < 0.80 else "normal"
+
         return BacktestResult(
             strategy_name=name,
             start_date=start, end_date=end,
@@ -248,4 +264,5 @@ class Backtester:
             win_rate=win_rate, profit_factor=profit_factor,
             total_trades=len(closed),
             trades=trades, equity_curve=equity,
+            coverage_rate=coverage_rate, reliability=reliability,
         )

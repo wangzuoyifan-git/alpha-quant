@@ -105,6 +105,40 @@ LOG = {
 }
 
 # ============================================================
+# 风控约束配置（RC1~RC8，硬性规则不得绕过）
+# ============================================================
+RISK_CONTROL = {
+    # RC1: 单笔仓位上限（占总资金比例）
+    "max_single_position": 0.10,
+    # RC2: 同时持有标的上限
+    "max_positions": 10,
+    # RC3: 同一申万一级行业持仓上限（占总仓位比例）
+    "max_industry_concentration": 0.30,
+    # RC4: 单笔止损线（从买入价下跌触发比例）
+    "stop_loss_ratio": 0.07,
+    # RC5: 总账户最大回撤上限（触发后暂停新开仓）
+    "max_total_drawdown": 0.15,
+    # RC6: 标的质量过滤（由扫描引擎完成，此处为预留）
+    "quality_filter": {
+        "exclude_st": True,
+        "exclude_beijing": True,
+        "exclude_new_ipo": True,
+    },
+    # RC7: 减持窗口期过滤（D8b 事件，当前预留）
+    "reduce_window_block": True,
+    # RC8: 突发事件熔断
+    "circuit_breaker": {
+        "vix_threshold": 30,
+        "index_drop_threshold": 0.03,
+        "pause_new_orders": True,
+    },
+    # 止盈比例
+    "take_profit_ratio": 0.20,
+    # 风控启用开关（Phase 1 半自动，人工最终决策）
+    "enforce": True,
+}
+
+# ============================================================
 # 调度配置（每日自动运行）
 # ============================================================
 SCHEDULE = {
