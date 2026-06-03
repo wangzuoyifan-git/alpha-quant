@@ -1,128 +1,144 @@
-# Alpha量化 — 项目基础信息文档
+# Alpha量化 — 项目总览
 
-> 本文档是所有 Session 的共同基础参考，包含项目环境、数据库状态、目录结构、CLI 命令等核心信息。
-> 专项文档直接引用本文档，不再重复基础信息。
->
-> **维护说明**：每次有重要变更（数据库更新、新模块、新命令、依赖变化）时更新本文档。
-> 最后更新：2026-05-28
+> 所有 Session 的共同基础参考。专项内容见各模块文档。
+> 最后更新：2026-05-29
 
 ---
 
-## 一、项目概览
+## 一、项目定位
 
 | 项目 | 说明 |
 |---|---|
-| 项目名称 | Alpha量化 — A股日线级别量化分析系统 |
+| 项目名称 | Alpha量化 — A股量化分析与自动交易系统 |
 | 根目录 | `/home/wz/alpha量化` |
 | Python | 3.12，虚拟环境 `venv/` |
-| 运行方式 | `venv/bin/python3 main.py <command>`（必须用 venv） |
+| 运行方式 | `venv/bin/python3 main.py <command>` |
 | 主入口 | `main.py`（CLI 分发） |
-| 配置文件 | `config/settings.py`（全局配置） |
-| 环境变量 | `.env`（不纳入 git，从 `.env.example` 复制） |
+| 配置文件 | `config/settings.py` |
+| 环境变量 | `.env`（从 `.env.example` 复制，不纳入 git） |
 
 ---
 
-## 二、Git 仓库
+## 二、目标、需求与约束
 
-| 项目 | 说明 |
+### 2.1 最终目标
+
+**全自动化量化交易系统**：从数据更新、信号生成、策略评估到交易执行，全流程由系统自主完成，人工只做监控和异常干预。
+
+### 2.2 阶段规划
+
+| 阶段 | 目标 | Agent 自主程度 | 当前状态 |
+|---|---|---|---|
+| Phase 1（当前） | 辅助决策 | 数据更新、扫描、信号生成自动化；交易决策由人工判断后手动执行 | 基础功能已完成，多 Agent 体系建设中 |
+| Phase 2 | 半自动交易 | Agent 可自主调整策略参数、选择策略组合；生成指令单后人工确认再执行 | 待开发 |
+| Phase 3 | 全自动交易 | Agent 在风控规则约束内自主完成从分析到下单的全流程 | 待开发 |
+
+### 2.3 功能需求边界
+
+**在范围内：**
+- A 股日线级别量化分析（当前），未来扩展至日内（分钟线）
+- 多策略并行扫描与信号合并
+- 策略回测与绩效评估
+- 多渠道信号推送（企微/邮件/Telegram）
+- 半自动交易指令单生成与确认
+- 多 Agent 协作：数据 Agent、策略 Agent、风控/交易 Agent
+
+**不在范围内（当前阶段）：**
+- 港股、美股（store 层已预留结构，数据未接入）
+- 分钟线策略（数据未接入）
+- 合规报备（个人投资，暂不考虑）
+
+### 2.4 技术约束
+
+| 约束 | 说明 |
 |---|---|
-| 仓库类型 | 本地 Git 仓库 |
-| 主分支 | `main` |
-| user.name | `wz` |
-| user.email | `wz@alpha` |
-
-### 提交规范
-
-```
-feat:     新功能
-fix:      Bug 修复
-refactor: 重构（不改变功能）
-test:     测试相关
-docs:     文档更新
-chore:    构建/依赖/配置等杂项
-```
-
-### 常用命令
-
-```bash
-git status && git diff          # 查看改动
-git add <file> && git commit -m "fix: 描述"
-git log --oneline               # 查看历史
-git checkout <hash> -- <file>   # 回滚单个文件
-```
-
-### .gitignore 说明
-
-以下内容不纳入版本控制：
-- `data/market/`、`data/kline/`、`data/fundamental/`、`data/meta/`、`data/factor/`、`data/macro/` — 数据文件
-- `venv/` — 虚拟环境
-- `.env` — 含密钥的环境变量
-- `logs/` — 运行日志
-- `__pycache__/`、`*.pyc` — Python 缓存
+| LLM 接入 | 国内 API 为主（DeepSeek / Qwen / 文心），OpenAI/Anthropic 通过代理备用；API 格式兼容 OpenAI |
+| 数据源 | BaoStock（免费，A股/基本面主力）、AKShare（免费，ETF/宏观/因子主力）、Tushare Pro（已付费，积分充足）；详细限制见 `docs/data.md` 第五章 |
+| 运行环境 | Linux，Python 3.12，本地部署，无 K8s/云原生要求 |
+| 开发工具 | opencode 作为主要编码辅助，不依赖 Claude Code |
+| 时间周期 | 当前日线，未来扩展日内 |
 
 ---
 
-## 三、当前数据库状态
+## 三、系统架构
 
-> 最后更新：2026-05-28
+> 架构设计原则与约束见 `docs/architecture.md`
 
-### market 域（已完成）
+### 3.1 分层架构
 
-| 类型 | 数量 | 行数 | 大小 | 时间范围 | 关键字段 |
-|---|---|---|---|---|---|
-| cn/stock | 5207只 | 294万行 | 348MB | 2024-01-02~今 | OHLCV+换手率+PE/PB/PS/PCF+isST |
-| cn/index | 541只 | 30万行 | 25MB | 2024-01-02~今 | OHLCV+pct_chg |
-| cn/etf | 1535只 | 65万行 | 42MB | 2024-01-02~今 | OHLCV+pct_chg |
-| ipo_dates.json | 8624只 | — | — | — | ipo_date/market/type/name |
+```
+┌─────────────────────────────────────────────────────────┐
+│                    应用层 / CLI                          │
+│              main.py（argparse 分发，18个子命令）         │
+│              web/（Flask 看板）                          │
+└──────────────────────┬──────────────────────────────────┘
+                       │
+┌──────────────────────▼──────────────────────────────────┐
+│                   Agent 层（建设中）                      │
+│  Orchestrator Agent（LangGraph + DeepSeek/Qwen）         │
+│  ├── Data Agent      数据更新、质量检查                   │
+│  ├── Strategy Agent  策略选择、参数优化、回测评估          │
+│  └── Risk/Trade Agent 风控过滤、指令单生成、推送           │
+│                                                         │
+│  Tool Layer（agent_tools/）                              │
+│  薄适配层，将下层能力封装为结构化 Tool 供 Agent 调用       │
+└──────────────────────┬──────────────────────────────────┘
+                       │
+┌──────────────────────▼──────────────────────────────────┐
+│                   引擎层                                 │
+│  engine/scanner.py    全市场并发扫描（20线程）             │
+│  backtest/engine.py   事件驱动回测                        │
+│  signals/manager.py   信号持久化                          │
+│  trader/assistant.py  指令单生成与管理                    │
+│  notifier/push.py     多渠道推送                          │
+└──────────────────────┬──────────────────────────────────┘
+                       │
+┌──────────────────────▼──────────────────────────────────┐
+│                   策略层                                 │
+│  strategies/base.py          BaseStrategy + Signal       │
+│  strategies/builtin/         内置策略（4个）              │
+│  strategies/custom/          自定义策略目录               │
+└──────────────────────┬──────────────────────────────────┘
+                       │
+┌──────────────────────▼──────────────────────────────────┐
+│                   数据层                                 │
+│  data/store*.py       本地存储（Parquet，6个域）           │
+│  data/downloader*.py  批量下载器（6个域）                  │
+│  data/fetcher.py      网络获取（AKShare主/BaoStock备）     │
+└─────────────────────────────────────────────────────────┘
+```
 
-### meta 域（已完成）
+### 3.2 数据域概览
 
-| 数据 | 规模 | 数据源 |
-|---|---|---|
-| industry_csrc.parquet | 5207只，83个证监会行业 | BaoStock |
-| industry_sw.parquet | 5203只，31个申万一级行业 | AKShare |
-| sw_index/{code}.parquet | 31个行业指数日线，2024-01-02~今 | AKShare |
-| calendar.parquet | 877天，578个交易日 | BaoStock |
-
-### fundamental 域（已完成）
-
-| 类型 | 规模 | 数据源 | 说明 |
+| 域 | 路径 | 状态 | 说明 |
 |---|---|---|---|
-| profit/{code}.parquet | 5207只，35.7MB | BaoStock | 盈利能力，季频，2024Q1起 |
-| balance/{code}.parquet | 5207只，31.0MB | BaoStock | 资产负债，季频 |
-| cashflow/{code}.parquet | 5207只，33.5MB | BaoStock | 现金流，季频 |
-| growth/{code}.parquet | 5207只，26.8MB | BaoStock | 成长能力，季频 |
-| dupont/{code}.parquet | 5207只，38.2MB | BaoStock | 杜邦分析，季频 |
+| market | `data/market/` | 完成 | A股/指数/ETF 日线，5207只，2024起 |
+| meta | `data/meta/` | 完成 | 申万/证监会行业分类，交易日历 |
+| fundamental | `data/fundamental/` | 完成 | 季频财务（利润/资产/现金流/成长/杜邦） |
+| factor | `data/factor/` | 部分完成 | 北向资金已有；个股资金流向、行业资金流向待补全 |
+| macro | `data/macro/` | 部分完成 | 国内：国债收益率/M2/CPI-PPI/PMI 已有；社融/汇率 待下载。境外：美联储利率/VIX/美债/美元/原油/铜/标普/恒生 待下载 |
+| tushare | `data/tushare/` | 部分完成 | moneyflow/moneyflow_ind/moneyflow_mkt 已有；daily/top_list/margin/分钟线 待下载（已付费） |
+| events | `data/events/` | 待建设 | E1 定期事件日历、E2 企业事件（减持/质押）、E3 突发事件归档；见 `docs/requirements.md` D8 节 |
 
-### tushare 域（已完成，2024起；moneyflow 待补全 2010~2023）
+> 详细接口和数据结构见 `docs/data.md`
 
-| 数据 | 规模 | 数据源 | 说明 |
-|---|---|---|---|
-| moneyflow/{code}.parquet | 5208只，2024起（晚上补全2010起） | Tushare Pro | 个股历史资金流向（小/中/大/超大单净额） |
-| daily/{code}.parquet | 待下载，2024起 | Tushare Pro | 日线行情（可替代 BaoStock，更稳定） |
-| daily_basic/{code}.parquet | 待下载，2024起 | Tushare Pro | 每日指标（PE/PB/换手率/市值等） |
-| top_list/{date}.parquet | 待下载，2024起 | Tushare Pro | 龙虎榜（上榜原因/净买入/席位） |
-| margin/{code}.parquet | 待下载，2024起 | Tushare Pro | 融资融券明细（融资余额/融券余量） |
-| moneyflow_ind/{date}.parquet | 579个交易日，2024起 | Tushare Pro | 行业+概念+地域资金流（东财，超大/大/中/小单分层） |
-| moneyflow_mkt.parquet | 579行，2024起 | Tushare Pro | 大盘整体资金流（东财，超大/大/中/小单分层） |
+### 3.3 模块依赖关系
 
-### factor 域（部分完成）
+```
+main.py
+  ├── config/settings.py
+  ├── data/fetcher.DataFetcher      → akshare / baostock
+  ├── data/downloader.KlineDownloader → fetcher + store
+  ├── engine/scanner.ScanEngine     → fetcher + store + strategies
+  ├── backtest/engine.Backtester    → fetcher + store + strategies
+  ├── strategies/builtin            → strategies/base
+  ├── notifier/push.Notifier        → strategies/base.Signal
+  ├── trader/assistant.TradeAssistant → strategies/base.Signal
+  └── signals/manager               → strategies/base.Signal
 
-| 数据 | 规模 | 数据源 | 说明 |
-|---|---|---|---|
-| northbound.parquet | 2675行，最新2026-05-26 | AKShare | 北向资金（沪股通+深股通）日频 |
-| moneyflow_sector.parquet | 未获取 | AKShare | 东财非交易时段封锁 |
-
-### macro 域（已完成）
-
-| 数据 | 规模 | 最新日期 | 数据源 |
-|---|---|---|---|
-| bond_yield.parquet | 640行 | 2026-05-26 | AKShare |
-| m2.parquet | 220行 | 2026-04-01 | AKShare |
-| cpi_ppi.parquet | 737行 | — | AKShare |
-| pmi.parquet | 220行 | 2026-04-01 | AKShare |
-
-> 详细缺口分析见 `docs/data_gap_analysis.md`
+store_*.py  各自独立，互不依赖
+downloader_*.py  各自独立，依赖对应 store_*
+```
 
 ---
 
@@ -131,58 +147,31 @@ git checkout <hash> -- <file>   # 回滚单个文件
 ```
 alpha量化/
 ├── main.py                      # CLI 主入口
-├── requirements.txt             # 依赖清单
-├── .env.example                 # 环境变量模板
+├── requirements.txt
+├── .env.example
 │
-├── config/
-│   └── settings.py              # 全局配置（SCAN/BACKTEST/NOTIFIER等）
+├── config/settings.py           # 全局配置
 │
-├── data/
-│   ├── store.py                 # market 域存取（勿随意修改）
-│   ├── store_meta.py            # meta 域存取
-│   ├── store_fundamental.py     # fundamental 域存取
-│   ├── store_factor.py          # factor 域存取
-│   ├── store_macro.py           # macro 域存取
-│   ├── fetcher.py               # 网络数据获取（AKShare/BaoStock）
-│   ├── downloader.py            # K线批量下载器
-│   ├── downloader_meta.py       # meta 域下载器
-│   ├── downloader_fundamental.py# fundamental 域下载器
-│   ├── downloader_factor.py     # factor 域下载器
-│   ├── downloader_macro.py      # macro 域下载器
-│   ├── downloader_tushare.py    # tushare 域下载器
-│   ├── store_tushare.py         # tushare 域存取
-│   ├── market/                  # 行情数据（已完成）
-│   │   ├── cn/stock/            # A股日线 Parquet
-│   │   ├── cn/index/            # 指数日线
-│   │   ├── cn/etf/              # ETF日线
-│   │   └── ipo_dates.json       # 上市日期索引
-│   ├── fundamental/             # 财务数据（已完成）
-│   │   ├── profit/              # 盈利能力
-│   │   ├── balance/             # 资产负债
-│   │   ├── cashflow/            # 现金流
-│   │   ├── growth/              # 成长能力
-│   │   └── dupont/              # 杜邦分析
-│   ├── meta/                    # 行业分类（已完成）
-│   │   ├── industry_csrc.parquet
-│   │   ├── industry_sw.parquet
-│   │   ├── sw_index/            # 申万行业指数日线
-│   │   └── calendar.parquet
-│   ├── factor/                  # 因子数据（部分完成）
-│   │   ├── northbound.parquet   # 北向资金
-│   │   └── moneyflow/           # 个股资金流向（待获取）
-│   ├── macro/                   # 宏观数据（已完成）
-│   │   ├── bond_yield.parquet
-│   │   ├── m2.parquet
-│   │   ├── cpi_ppi.parquet
-│   │   └── pmi.parquet
-│   ├── tushare/                 # Tushare 数据（部分完成）
-│   │   ├── moneyflow/           # 个股资金流向（5208只，2024起）
-│   │   ├── moneyflow_ind/       # 行业资金流（579个交易日，2024起）
-│   │   ├── moneyflow_mkt.parquet# 大盘资金流（579行，2024起）
-│   │   ├── daily/               # 日线行情（待下载）
-│   │   ├── daily_basic/         # 每日指标（待下载）
-│   │   ├── top_list/            # 龙虎榜（待下载）
-│   │   └── margin/              # 融资融券（待下载）
+├── data/                        # 数据层
+│   ├── store.py                 # market 域存取
+│   ├── store_meta.py
+│   ├── store_fundamental.py
+│   ├── store_factor.py
+│   ├── store_macro.py
+│   ├── store_tushare.py
+│   ├── fetcher.py               # 网络数据获取
+│   ├── downloader.py            # K线批量下载
+│   ├── downloader_meta.py
+│   ├── downloader_fundamental.py
+│   ├── downloader_factor.py
+│   ├── downloader_macro.py
+│   ├── downloader_tushare.py
+│   ├── market/                  # A股/指数/ETF 日线 Parquet
+│   ├── fundamental/             # 季频财务数据
+│   ├── meta/                    # 行业分类 + 交易日历
+│   ├── factor/                  # 因子数据
+│   ├── macro/                   # 宏观数据
+│   ├── tushare/                 # Tushare 数据
 │   ├── processed/               # 扫描信号 JSON
 │   └── orders/                  # 交易指令单 JSON
 │
@@ -193,187 +182,82 @@ alpha量化/
 │   └── engine.py                # 历史回测引擎
 │
 ├── strategies/
-│   ├── base.py                  # BaseStrategy + Signal 基类
-│   ├── builtin/
-│   │   ├── __init__.py          # 策略注册表
-│   │   ├── ma_cross.py          # 均线金叉策略
-│   │   ├── macd_rsi.py          # MACD+RSI 策略
-│   │   ├── vol_price_breakout.py # 量价突破策略
-│   │   └── etf_momentum.py      # ETF动量轮动策略
-│   └── custom/                  # 自定义策略目录
+│   ├── base.py                  # BaseStrategy + Signal
+│   ├── builtin/                 # 内置策略 + 注册表
+│   └── custom/                  # 自定义策略
 │
-├── notifier/push.py             # 多渠道推送（企微/邮件/Telegram）
-├── trader/assistant.py          # 半自动交易辅助
-├── signals/manager.py           # 信号持久化
+├── agent_tools/                 # Tool Layer（待建设）
+│   ├── data_tools.py            # 数据相关 Tools
+│   ├── strategy_tools.py        # 策略/回测 Tools
+│   └── trade_tools.py           # 交易/风控 Tools
+│
+├── agents/                      # Agent 实现（待建设）
+│   ├── orchestrator.py          # Orchestrator（LangGraph）
+│   ├── data_agent.py
+│   ├── strategy_agent.py
+│   └── trade_agent.py
+│
+├── notifier/push.py
+├── trader/assistant.py
+├── signals/manager.py
 │
 ├── scripts/                     # 定期更新脚本
-│   ├── update_daily.sh          # 每日更新（K线+北向资金+扫描）
-│   ├── update_weekly.sh         # 每周更新（meta域）
-│   └── update_quarterly.sh      # 每季更新（fundamental域）
+│   ├── update_daily.sh
+│   ├── update_weekly.sh
+│   └── update_quarterly.sh
 │
-├── tools/
-│   ├── plot_kline.py            # K线图验证工具
-│   └── test_init_flow.py        # init 流程端到端测试
+├── tools/                       # 开发验证工具
+│   ├── plot_kline.py
+│   └── test_init_flow.py
 │
-├── tests/                       # 单元测试（61个）
-├── docs/                        # 文档目录
-└── logs/                        # 运行日志
+├── tests/                       # 单元测试
+├── docs/                        # 文档
+│   ├── project.md               # 本文档
+│   ├── data.md                  # 数据层文档
+│   ├── strategy.md              # 策略层文档
+│   ├── agent.md                 # Agent 层文档
+│   ├── testing.md               # 测试与验证
+│   ├── ops.md                   # 运维手册
+│   └── archive/                 # 过程文档归档
+└── logs/
 ```
 
 ---
 
-## 五、CLI 命令速查
+## 五、Git 仓库
 
-```bash
-cd ~/alpha量化
-
-# ---- 数据管理：market 域 ----
-venv/bin/python3 main.py init                        # 全量初始化（stock+index+etf）
-venv/bin/python3 main.py init --types stock          # 只下载 A股
-venv/bin/python3 main.py init --types etf --force    # 强制重新下载 ETF
-venv/bin/python3 main.py update                      # 每日增量更新
-venv/bin/python3 main.py dbstats                     # 数据库统计
-
-# ---- 数据管理：扩展域（已完成初始化，日常用 update-all）----
-venv/bin/python3 main.py init-meta                   # 初始化行业分类+申万指数+交易日历
-venv/bin/python3 main.py init-fundamental            # 初始化季频财务数据（2024起，约3小时）
-venv/bin/python3 main.py init-fundamental --start-year 2022  # 从2022年开始
-venv/bin/python3 main.py init-factor                 # 初始化北向资金
-venv/bin/python3 main.py init-macro                  # 初始化宏观数据
-venv/bin/python3 main.py update-all                  # 更新所有域（market+meta+fundamental+factor+macro+tushare）
-
-# ---- 数据管理：tushare 域 ----
-venv/bin/python3 main.py init-tushare                                      # 全量初始化（moneyflow 2010起，其余 2024起）
-venv/bin/python3 main.py init-tushare --types moneyflow                    # 只下载个股资金流向
-venv/bin/python3 main.py init-tushare --types moneyflow_ind moneyflow_mkt  # 只下载行业+大盘资金流
-venv/bin/python3 main.py init-tushare --types daily                        # 只下载日线行情
-venv/bin/python3 main.py init-tushare --types top_list margin              # 只下载龙虎榜+融资融券
-venv/bin/python3 main.py init-tushare --moneyflow-start 2010-01-01         # 个股资金流从2010年开始（补全历史）
-venv/bin/python3 main.py update-tushare                                    # 增量更新 tushare 域
-
-# ---- 定期更新脚本（推荐 crontab）----
-bash scripts/update_daily.sh                         # 每日收盘后：K线+北向资金+扫描
-bash scripts/update_weekly.sh                        # 每周六：meta域
-bash scripts/update_quarterly.sh                     # 每季度：fundamental域
-
-# ---- 分析 ----
-venv/bin/python3 main.py scan                        # 全市场扫描（A股）
-venv/bin/python3 main.py scan --date 2026-05-20      # 指定日期扫描
-venv/bin/python3 main.py scan --types etf            # 扫描 ETF（动量轮动）
-venv/bin/python3 main.py scan --types stock etf      # 同时扫描 A股 + ETF
-venv/bin/python3 main.py backtest --strategy macd_rsi
-venv/bin/python3 main.py backtest --strategy ma_cross \
-    --start 2024-01-02 --end 2026-05-25 \
-    --codes 600519 000001 300750
-
-# ---- 交易辅助 ----
-venv/bin/python3 main.py orders                      # 查看待确认指令单
-venv/bin/python3 main.py confirm <order_id>
-venv/bin/python3 main.py cancel <order_id>
-
-# ---- 服务 ----
-venv/bin/python3 main.py web                         # Web看板 http://localhost:8888
-venv/bin/python3 main.py schedule                    # 定时任务（收盘后自动更新+扫描）
-
-# ---- 工具 ----
-venv/bin/python3 tools/plot_kline.py 600519 000001   # 绘制K线图
-venv/bin/python3 tools/test_init_flow.py             # 验证 init 流程
-
-# ---- 后台运行（推荐用 tmux）----
-tmux new-session -d -s alpha "cd ~/alpha量化 && venv/bin/python3 -u main.py init > logs/init.log 2>&1"
-tmux attach -t alpha
-tail -f logs/init.log
-```
-
----
-
-## 六、数据源说明
-
-### BaoStock（主力数据源）
-
-- **特点**：免费、稳定、专为量化设计、支持历史数据
-- **覆盖**：A股/指数/ETF 日线、季频财务数据、行业分类
-- **限制**：不支持实时行情、不支持港美股、socket 非线程安全（必须串行）
-- **使用注意**：
-  ```python
-  import baostock as bs
-  import socket
-  socket.setdefaulttimeout(60)   # 全量查询用 60s
-  bs.login()
-  # login 后立即设置已连接 socket 的 timeout
-  import baostock.common.context as bs_ctx
-  bs_ctx.default_socket.settimeout(10)  # 单只查询用 10s
-  # ... 查询 ...
-  bs.logout()
-  time.sleep(3)  # logout 后等 3 秒再下次 login，避免限流
-  ```
-
-### AKShare（补充数据源）
-
-- **特点**：免费、覆盖面广（资金流/宏观/公告等）
-- **限制**：依赖东方财富等第三方网站，接口可能失效，有频率限制
-- **使用注意**：每次请求后 `time.sleep(0.5~1)`，失败时指数退避重试（最多3次）
-
-### Tushare Pro（付费数据源）
-
-- **特点**：数据质量高、覆盖分钟线/龙虎榜/港美股等高级数据
-- **配置**：在 `.env` 中设置 `TUSHARE_TOKEN=your_token`
-- **当前状态**：Token 未配置，相关功能未开发
-
----
-
-## 七、依赖清单
-
-```
-akshare>=1.12.0       # 主数据源（免费）
-baostock>=0.8.8       # 备用数据源（免费）
-tushare>=1.2.89       # 付费数据源（可选）
-pandas>=2.0.0
-numpy>=1.24.0
-pyarrow>=12.0.0       # Parquet 存储
-mplfinance>=0.12.0    # K线图
-matplotlib>=3.7.0
-flask>=3.0.0          # Web 看板
-apscheduler<4         # 定时任务
-pytz
-requests>=2.31.0
-python-dotenv>=1.0.0
-rich>=13.0.0          # 终端美化
-```
-
----
-
-## 八、环境变量（.env）
-
-```bash
-# 数据源
-TUSHARE_TOKEN=          # Tushare Pro Token（可选）
-
-# 企业微信机器人（填真实 key 才会推送）
-WECOM_WEBHOOK=https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=YOUR_KEY
-
-# 邮件（填真实账号才会推送）
-SMTP_HOST=smtp.qq.com
-SMTP_PORT=465
-EMAIL_USER=your@qq.com
-EMAIL_PASS=your_smtp_auth_code
-EMAIL_TO=recipient@example.com
-
-# Telegram（可选）
-TELEGRAM_TOKEN=
-TELEGRAM_CHAT_ID=
-```
-
-> 推送渠道自动检测：占位符（含 `your_key`/`example.com`）视为未配置，自动跳过，不会报错。
-
----
-
-## 九、专项文档索引
-
-| 文档 | 用途 |
+| 项目 | 说明 |
 |---|---|
-| `docs/project.md` | **本文档**，项目基础信息，所有 Session 共用 |
-| `docs/review_context.md` | 代码 Review 上下文：模块接口、已知 Bug、单元测试建议 |
-| `docs/strategy_dev_context.md` | 策略开发上下文：BaseStrategy 用法、ETF 策略建议、待开发清单 |
-| `docs/data_gap_analysis.md` | 数据缺口分析：各数据源覆盖范围、优先级建议 |
-| `docs/data_init_session_context.md` | 扩展数据初始化：fundamental/meta/factor/macro 域的 API 和实现方案 |
+| 仓库类型 | 本地 Git 仓库 |
+| 主分支 | `main` |
+| user.name | `wz` |
+| user.email | `wz@alpha` |
+
+提交规范：
+```
+feat:     新功能
+fix:      Bug 修复
+refactor: 重构（不改变功能）
+test:     测试相关
+docs:     文档更新
+chore:    构建/依赖/配置等杂项
+```
+
+`.gitignore` 排除：`data/market/`、`data/kline/`、`data/fundamental/`、`data/meta/`、`data/factor/`、`data/macro/`、`venv/`、`.env`、`logs/`、`__pycache__/`
+
+---
+
+## 六、文档索引
+
+| 文档 | 内容 |
+|---|---|---|
+| `docs/project.md` | **本文档**：项目总览、目标、架构 |
+| `docs/architecture.md` | 架构设计原则、性能/可靠性指标、监控要求、Agent 接口规范 |
+| `docs/requirements.md` | 需求详细分解：Phase 1 功能需求、验收标准、架构兼容性约束 |
+| `docs/traceability.md` | 需求与测试追溯矩阵：需求编号↔测试用例双向映射、覆盖缺口分析 |
+| `docs/data.md` | 数据层：各域结构、store/downloader 接口、数据源、待办缺口 |
+| `docs/strategy.md` | 策略层：BaseStrategy 接口、内置策略、开发指南 |
+| `docs/agent.md` | Agent 层：架构设计、Tool Layer 规范、LLM 接入、阶段规划 |
+| `docs/testing.md` | 测试分层策略、覆盖缺口、运行规范 |
+| `docs/ops.md` | CLI 速查、定时脚本、环境变量配置 |
+| `docs/archive/` | 过程文档归档（不再维护） |
