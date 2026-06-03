@@ -241,9 +241,17 @@ class TradeAssistant:
     def generate_orders(self, signals: List[Signal],
                         current_capital: float = None,
                         current_positions: int = 0) -> List[TradeOrder]:
-        """根据信号生成含止损止盈 + 风控标签的指令单"""
+        """根据信号生成含止损止盈 + 风控标签的指令单（RC1~RC8 全覆盖）"""
         capital = current_capital or self.initial_capital
         orders = []
+
+        # RC5/RC8 全局检查（任一触发则全部拦截并记录告警）
+        if not self.check_total_drawdown(capital):
+            logger.warning("RC5 触发：generating_orders 全量阻止")
+            return []
+        if not self.check_circuit_breaker():
+            logger.warning("RC8 触发：generating_orders 全量阻止")
+            return []
 
         for sig in signals:
             if sig.signal not in ("BUY", "SELL"):
@@ -256,11 +264,13 @@ class TradeAssistant:
                                stop_loss_ratio=self.rc_stop_loss,
                                take_profit_ratio=self.rc_take_profit)
 
-            # RC 检查
+            # RC 检查（逐项记录）
             self.check_single_position(order)
             if current_positions >= self.rc_max_positions:
                 order.risk_flags.append("RC2")
-                order.risk_check_detail["RC2"] = False
+            order.risk_check_detail["RC2"] = current_positions < self.rc_max_positions
+            order.risk_check_detail["RC5"] = self.check_total_drawdown(capital)
+            order.risk_check_detail["RC8"] = self.check_circuit_breaker()
 
             orders.append(order)
             self._save_order(order)

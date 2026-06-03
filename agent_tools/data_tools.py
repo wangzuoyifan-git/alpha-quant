@@ -22,7 +22,14 @@ def check_data_freshness() -> dict:
 
     calendar = load_calendar("calendar")
     if calendar is not None and not calendar.empty:
-        last_trading = calendar.index[calendar.index <= today].max().strftime("%Y-%m-%d")
+        filtered = calendar.index[calendar.index <= today]
+        if len(filtered) > 0:
+            last_trading = filtered.max().strftime("%Y-%m-%d")
+        else:
+            dt = today
+            while dt.weekday() >= 5:
+                dt -= timedelta(days=1)
+            last_trading = dt.strftime("%Y-%m-%d")
     else:
         dt = today
         while dt.weekday() >= 5:

@@ -283,7 +283,12 @@ class ScanEngine:
             trading_dates = calendar.index[
                 calendar.index <= today
             ].sort_values()
-            last_trading = trading_dates[-1]
+            if len(trading_dates) > 0:
+                last_trading = trading_dates[-1]
+            else:
+                last_trading = today
+                while last_trading.weekday() >= 5:
+                    last_trading -= timedelta(days=1)
         else:
             # 无日历则回退：跳过周末判断
             last_trading = today
