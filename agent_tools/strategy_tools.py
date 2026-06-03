@@ -97,3 +97,31 @@ def list_strategies() -> dict:
             for key, cls in BUILTIN_STRATEGIES.items()
         ],
     }
+
+
+def notify_signals(signals: list[dict], title: str = None) -> dict:
+    """I1：推送信号到所有配置渠道"""
+    from config.settings import NOTIFIER
+    from notifier.push import Notifier
+    from strategies.base import Signal
+
+    try:
+        sig_objs = [Signal(**s) for s in signals]
+        notifier = Notifier(NOTIFIER)
+        notifier.send_signals(sig_objs, title=title or "Alpha量化选股信号")
+        return {"success": True, "count": len(signals)}
+    except Exception as e:
+        logger.error(f"notify_signals 失败: {e}")
+        return {"success": False, "error": str(e)}
+
+
+def compare_strategies(strategy_keys: list[str], start: str, end: str) -> dict:
+    """
+    并行回测多个策略，返回对比结果用于 Strategy Agent 选择最优组合。
+    """
+    results = {}
+    for key in strategy_keys:
+        r = run_backtest(key, start=start, end=end)
+        if r["success"]:
+            results[key] = r
+    return {"success": True, "results": results, "compared": len(results)}

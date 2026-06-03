@@ -146,3 +146,24 @@ SCHEDULE = {
     "pre_market_time": "09:15",  # 盘前预警时间
     "timezone": "Asia/Shanghai",
 }
+
+# ============================================================
+# LLM 配置（Phase 2 Agent 体系建设）
+# ============================================================
+LLM = {
+    "primary": {
+        "provider": "deepseek",
+        "model": "deepseek-chat",
+        "api_key_env": "DEEPSEEK_API_KEY",
+        "base_url": "https://api.deepseek.com/v1",
+    },
+    "fallback": {
+        "provider": "openai",
+        "model": "gpt-4o-mini",
+        "api_key_env": "OPENAI_API_KEY",
+        "base_url_env": "OPENAI_BASE_URL",
+    },
+    "temperature": 0.1,
+    "timeout": 30,
+    "max_retries": 2,
+}
