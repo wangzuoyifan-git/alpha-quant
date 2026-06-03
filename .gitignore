@@ -24,6 +24,12 @@ data/raw/
 data/processed/
 data/orders/
 data/charts/
+data/fundamental/
+data/meta/
+data/factor/
+data/macro/
+data/tushare/
+data/events/
 
 # 日志
 logs/
