@@ -48,13 +48,19 @@ def _parse_month_col(df: pd.DataFrame) -> pd.DataFrame:
 
     col = df["date"]
     if not pd.api.types.is_datetime64_any_dtype(col):
-        # 兼容 "2026年04月份" 和 "2026-04-01" 两种格式
-        df["date"] = (col
-                      .astype(str)
-                      .str.replace("年", "-", regex=False)
-                      .str.replace("月份", "-01", regex=False)
-                      .str.replace("月", "-01", regex=False))
-        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        col_str = col.astype(str).str.strip()
+        # 处理 YYYYMM 格式（如 "201501" → "2015-01-01"）
+        yyyymm_mask = col_str.str.match(r"^\d{6}$")
+        if yyyymm_mask.any():
+            col_str.loc[yyyymm_mask] = col_str.loc[yyyymm_mask].str[:4] + "-" + col_str.loc[yyyymm_mask].str[4:6] + "-01"
+        # 处理文本月份格式（"2026年04月份" → "2026-04-01"）
+        text_mask = ~col_str.str.match(r"^\d{4}-\d{2}-\d{2}$") & ~pd.api.types.is_datetime64_any_dtype(col)
+        if text_mask.any():
+            col_str.loc[text_mask] = (col_str.loc[text_mask]
+                                      .str.replace("年", "-", regex=False)
+                                      .str.replace("月份", "-01", regex=False)
+                                      .str.replace("月", "-01", regex=False))
+        df["date"] = pd.to_datetime(col_str, errors="coerce")
         df = df.dropna(subset=["date"])
     return df
 
@@ -96,7 +102,10 @@ class MacroDownloader:
         _log("[5/6] 下载 CNY/USD 汇率...")
         self._download_cny_usd()
 
-        _log("[6/6] 下载境外宏观指标...")
+        _log("[6/7] 下载社会融资规模...")
+        self._download_shrongji()
+
+        _log("[7/7] 下载境外宏观指标...")
         self._download_overseas()
 
         _log("Macro 域初始化完成！")
@@ -106,23 +115,36 @@ class MacroDownloader:
         """每月增量更新"""
         _log("Macro 域增量更新...")
 
-        _log("[1/4] 更新国债收益率...")
+        _log("[1/5] 更新国债收益率...")
         self._download_bond_yield(incremental=True)
 
-        _log("[2/4] 更新 M2...")
+        _log("[2/5] 更新 M2...")
         self._download_m2()
 
-        _log("[3/4] 更新 CPI/PPI...")
+        _log("[3/5] 更新 CPI/PPI...")
         self._download_cpi_ppi()
 
-        _log("[4/4] 更新 PMI...")
+        _log("[4/5] 更新 PMI...")
         self._download_pmi()
+
+        _log("[5/5] 更新社融规模...")
+        self._download_shrongji()
 
         _log("Macro 域更新完成！")
 
     # ------------------------------------------------------------------
-    # 国债收益率
+    # 统计
     # ------------------------------------------------------------------
+
+    def _print_stats(self) -> None:
+        _log("Macro 域统计:")
+        for dtype in store.VALID_TYPES:
+            df = store.load(dtype)
+            if df is not None:
+                ld = store.last_date(dtype)
+                _log(f"  {dtype:16s}: {len(df):5d} 行  最新: {ld}")
+            else:
+                _log(f"  {dtype:16s}: 无数据")
 
     def _download_bond_yield(self, start: str = DEFAULT_START,
                              incremental: bool = False) -> None:
@@ -267,6 +289,24 @@ class MacroDownloader:
             logger.warning(f"PMI 下载失败: {e}")
 
         time.sleep(1)
+
+    # ------------------------------------------------------------------
+    # 社融规模
+    # ------------------------------------------------------------------
+
+    def _download_shrongji(self) -> None:
+        import akshare as ak
+        try:
+            df = _retry(lambda: ak.macro_china_shrzgm())
+            if df is None or df.empty:
+                _log("  社融规模：无数据")
+                return
+
+            df = _parse_month_col(df)
+            store.save("shrongji", df)
+            _log(f"  社融规模：{len(df)} 条记录")
+        except Exception as e:
+            logger.warning(f"社融规模下载失败: {e}")
 
     # ------------------------------------------------------------------
     # 统计
