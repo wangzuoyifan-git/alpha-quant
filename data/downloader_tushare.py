@@ -57,7 +57,8 @@ try:
     _orig_request = requests.Session.request
 
     def _patched_request(self, method, url, **kwargs):
-        kwargs.setdefault("timeout", _REQUEST_TIMEOUT)
+        # 强制覆盖 timeout（Tushare 可能显式传 timeout=None 导致 socket 永久阻塞）
+        kwargs["timeout"] = _REQUEST_TIMEOUT
         return _orig_request(self, method, url, **kwargs)
 
     requests.Session.request = _patched_request
@@ -87,12 +88,21 @@ def _to_dash_date(d: str) -> str:
 
 
 def _retry(func, max_retries: int = 3, wait_base: float = 2.0):
-    """指数退避重试，用线程池实现真正的超时（对任何阻塞调用有效）"""
+    """指数退避重试，用线程池实现真正的超时（对任何阻塞调用有效）
+
+    每次调用使用独立的单线程池：若某次请求底层 socket 卡死，超时后
+    用 shutdown(wait=False) 丢弃该线程池（让卡死线程自生自灭，最终被
+    socket timeout 终止），避免下一个请求排队在死线程后面造成永久死锁。
+    """
     for attempt in range(max_retries):
+        ex = ThreadPoolExecutor(max_workers=1)
         try:
-            future = _executor.submit(func)
-            return future.result(timeout=_REQUEST_TIMEOUT)
+            future = ex.submit(func)
+            result = future.result(timeout=_REQUEST_TIMEOUT)
+            ex.shutdown(wait=False)
+            return result
         except FuturesTimeoutError:
+            ex.shutdown(wait=False)  # 不等待，丢弃卡死线程
             e = TimeoutError(f"请求超时（>{_REQUEST_TIMEOUT}s）")
             if attempt < max_retries - 1:
                 wait = wait_base ** attempt
@@ -101,6 +111,7 @@ def _retry(func, max_retries: int = 3, wait_base: float = 2.0):
             else:
                 raise e
         except Exception as e:
+            ex.shutdown(wait=False)
             if attempt < max_retries - 1:
                 wait = wait_base ** attempt
                 logger.debug(f"第{attempt+1}次失败，{wait:.0f}s 后重试: {e}")
@@ -554,7 +565,7 @@ class TushareDownloader:
         if existing:
             last = max(existing)
             fetch_start = (
-                datetime.strptime(last, _FMT_DASH) + timedelta(days=1)
+                datetime.strptime(_to_dash_date(last), _FMT_DASH) + timedelta(days=1)
             ).strftime(_FMT_DASH)
         else:
             fetch_start = DEFAULT_START
@@ -781,7 +792,7 @@ class TushareDownloader:
         if existing:
             last = max(existing)
             fetch_start = (
-                datetime.strptime(last, _FMT_DASH) + timedelta(days=1)
+                datetime.strptime(_to_dash_date(last), _FMT_DASH) + timedelta(days=1)
             ).strftime(_FMT_DASH)
         else:
             fetch_start = DEFAULT_START
