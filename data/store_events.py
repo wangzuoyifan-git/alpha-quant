@@ -98,7 +98,8 @@ def has_reduce_window(code: str, date: str = None) -> bool:
         if e.get("event_type") not in reduce_types:
             continue
         ev_date = datetime.strptime(e["date"], "%Y-%m-%d")
-        end_date = datetime.strptime(e.get("end_date", e["date"]), "%Y-%m-%d")
+        end_str = e.get("end_date") or e["date"]
+        end_date = datetime.strptime(end_str, "%Y-%m-%d")
         if ev_date <= d <= end_date:
             return True
     return False
