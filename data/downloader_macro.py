@@ -383,8 +383,10 @@ class MacroDownloader:
                         symbol="WTI", start_date="20200101"))
                     if df is not None and not df.empty:
                         df = df.copy()
-                        if "日期" in df.columns:
-                            df = df.rename(columns={"日期": "date"})
+                        for col in df.columns:
+                            if "日期" in col or "时间" in col:
+                                df = df.rename(columns={col: "date"})
+                                break
                         if "date" in df.columns:
                             df["date"] = pd.to_datetime(df["date"])
                             df = df.set_index("date")
