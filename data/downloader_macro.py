@@ -336,41 +336,58 @@ class MacroDownloader:
     def _download_vix(self) -> None:
         import akshare as ak
         try:
-            df = _retry(lambda: ak.index_vix())
+            # VIX 恐慌指数：使用外盘期货 VX（CBOE VIX 期货）数据
+            df = _retry(lambda: ak.futures_foreign_hist(symbol="VX"))
             if df is None or df.empty:
                 _log("  VIX：无数据")
                 return
             df = df.copy()
-            if "日期" in df.columns:
-                df = df.rename(columns={"日期": "date"})
-            if "date" in df.columns:
-                df["date"] = pd.to_datetime(df["date"])
-                df = df.set_index("date")
+            # futures_foreign_hist 返回英文列名：date, open, high, low, close, volume
+            df["date"] = pd.to_datetime(df["date"])
+            df = df.set_index("date")
             store.save("vix", df)
-            _log(f"  VIX：{len(df)} 条记录")
+            _log(f"  VIX（VIX期货）：{len(df)} 条记录")
         except Exception as e:
             logger.warning(f"VIX 下载失败: {e}")
 
     def _download_dxy(self) -> None:
         import akshare as ak
         try:
-            df = _retry(lambda: ak.currency_boc_sina(symbol="美元指数"))
-            if df is None or df.empty:
-                # 试用别的接口
-                df = _retry(lambda: ak.fx_spot_quote())
-                if df is None or df.empty:
-                    _log("  DXY：无数据")
-                    return
-            df = df.copy()
-            if "日期" in df.columns:
-                df = df.rename(columns={"日期": "date"})
-            if "date" in df.columns:
-                df["date"] = pd.to_datetime(df["date"])
-                df = df.set_index("date")
-            store.save("dxy", df)
-            _log(f"  DXY：{len(df)} 条记录")
+            # 方法1：东方财富全球指数接口（美元指数，code=100.UDI）
+            df = _retry(lambda: ak.index_global_hist_em(symbol="美元指数"))
+            if df is not None and not df.empty:
+                df = df.copy()
+                if "日期" in df.columns:
+                    df = df.rename(columns={"日期": "date"})
+                for src, dst in [("最新价", "close"), ("今开", "open"),
+                                 ("最高", "high"), ("最低", "low")]:
+                    if src in df.columns and dst not in df.columns:
+                        df = df.rename(columns={src: dst})
+                if "date" in df.columns:
+                    df["date"] = pd.to_datetime(df["date"])
+                    df = df.set_index("date")
+                store.save("dxy", df)
+                _log(f"  DXY（东方财富）：{len(df)} 条记录")
+                return
         except Exception as e:
-            logger.warning(f"DXY 下载失败: {e}")
+            logger.debug(f"DXY 东方财富接口失败: {e}")
+
+        # 方法2：外盘期货 DX（ICE 美元指数期货，仅2019年13条，作为保底）
+        try:
+            df = _retry(lambda: ak.futures_foreign_hist(symbol="DX"))
+            if df is not None and not df.empty:
+                df = df.copy()
+                df = df[df["close"] > 0]  # 过滤无效数据
+                if not df.empty:
+                    df["date"] = pd.to_datetime(df["date"])
+                    df = df.set_index("date")
+                    store.save("dxy", df)
+                    _log(f"  DXY（DX期货）：{len(df)} 条记录（保底数据）")
+                    return
+        except Exception as e:
+            logger.debug(f"DXY DX期货接口失败: {e}")
+
+        _log("  DXY：无可用数据源")
 
     def _download_oil_wti(self) -> None:
         import akshare as ak
@@ -423,13 +440,11 @@ class MacroDownloader:
     def _download_hsi(self) -> None:
         import akshare as ak
         try:
-            df = _retry(lambda: ak.stock_hk_index_daily_em(symbol="HSI"))
+            df = _retry(lambda: ak.stock_hk_index_daily_sina(symbol="HSI"))
             if df is None or df.empty:
                 _log("  恒生指数：无数据")
                 return
             df = df.copy()
-            if "日期" in df.columns:
-                df = df.rename(columns={"日期": "date"})
             if "date" in df.columns:
                 df["date"] = pd.to_datetime(df["date"])
                 df = df.set_index("date")
