@@ -296,6 +296,10 @@ def download_all_corp_events(codes: list = None,
     total = len(codes)
     _log(f"E2 企业事件下载: {total} 只, {start} ~ {end}")
 
+    # 增量更新（短时间范围）时质押只取最近26条，全量初始化取52条
+    is_incremental = start >= (datetime.now() - timedelta(days=730)).strftime(_FMT_DASH)
+    pledge_limit = 26 if is_incremental else 52
+
     result = {"reduce": 0, "pledge": 0, "dividend": 0, "fail": 0}
     for i, ts_code in enumerate(codes):
         code6 = ts_code.split(".")[0]
@@ -310,7 +314,7 @@ def download_all_corp_events(codes: list = None,
             result["fail"] += 1
 
         try:
-            ev = _fetch_pledge(ts_code)
+            ev = _fetch_pledge(ts_code, max_records=pledge_limit)
             if ev:
                 events += ev
                 result["pledge"] += len(ev)
@@ -408,12 +412,13 @@ def _fetch_reduce(ts_code: str, start: str, end: str) -> list:
     return events
 
 
-def _fetch_pledge(ts_code: str) -> list:
-    """股权质押统计 (Tushare pledge_stat)"""
+def _fetch_pledge(ts_code: str, max_records: int = 52) -> list:
+    """股权质押统计 (Tushare pledge_stat)，最多保留最新 max_records 条"""
     pro = _get_pro()
     df = pro.pledge_stat(ts_code=ts_code)
     if df is None or df.empty:
         return []
+    df = df.sort_values("end_date", ascending=False).head(max_records)
     events = []
     for _, row in df.iterrows():
         end_d = _fmt_date(row.get("end_date"))
