@@ -62,9 +62,9 @@
 | D5b-字段 | 美联储利率/美债2Y10Y/VIX/DXY/原油/铜/标普500/恒生 | — | — | — | — | ❌ 无覆盖 |
 | D6-覆盖 | A 股交易日历含节假日 | — | — | ST-CA-01/ST-CA-02 | AT-05 | ✅ L3+L4 |
 | D8a-内容 | E1 定期事件日历字段完整（宏观/政策/财报季） | — | — | — | — | ❌ 无覆盖 |
-| D8a-窗口查询 | get_active_event_windows 返回当日窗口期事件 | — | — | — | — | ❌ 无覆盖 |
+| D8a-窗口查询 | get_active_event_windows 返回当日窗口期事件 | UT-AT-01 | — | — | — | ✅ L1 |
 | D8b-内容 | E2 企业事件字段完整（reduce/pledge 等） | — | — | — | — | ❌ 无覆盖 |
-| D8b-RC7联动 | has_reduce_window 正确识别减持窗口期 | — | — | — | — | ❌ 无覆盖 |
+| D8b-RC7联动 | has_reduce_window 正确识别减持窗口期 | UT-AT-02 | — | — | — | ✅ L1（经 check_reduce_window 工具封装验证） |
 | D8c-结构 | E3 突发事件存储结构可读写 | — | — | — | — | ❌ 无覆盖 |
 
 ### 3.2 C1 市场感知 — 数据可信度
@@ -208,9 +208,9 @@
 
 | 需求编号 | 需求描述 | L1 测试用例 | L2 测试用例 | L3 测试用例 | L4 测试用例 | 覆盖状态 |
 |---|---|---|---|---|---|---|
-| AC1-Tool封装 | 核心逻辑通过agent_tools封装，返回dict | — | — | ST-E2E-01 | — | ⚠️ 部分覆盖（端到端验证，无接口契约测试） |
+| AC1-Tool封装 | 核心逻辑通过agent_tools封装，返回dict | UT-AT-01~09 | — | ST-E2E-01 | — | ✅ L1+L3（接口契约测试 `tests/test_agent_tools.py` + 端到端验证） |
 | AC2-配置驱动 | 风控参数从配置读取 | UT-RC-06 | — | — | — | ✅ L1 |
-| AC3-接口可调用 | 指令单确认可被程序调用 | — | — | — | — | ❌ 无覆盖 |
+| AC3-接口可调用 | 指令单确认可被程序调用 | UT-AT-09 | — | — | — | ✅ L1（confirm_order 工具返回结构化 dict + confirmed_at） |
 | AC4-状态持久化 | 运行状态持久化 | UT-OD-04 | IT-SC-05 | ST-E2E-01 | AT-01 | ✅ L1+L2+L3+L4 |
 | AC5-策略元数据 | 策略携带market_condition字段 | UT-ST-06 | — | — | — | ✅ L1 |
 | AC6-预留API字段 | 交易记录预留券商API字段 | — | — | — | — | ❌ 无覆盖 |
@@ -237,7 +237,7 @@
 | GAP-07 | F2-持仓盈亏更新 | 每日更新持仓盈亏 | L2 | 依赖本地行情数据，验证盈亏计算正确性 |
 | GAP-08 | F2-平仓记录 | 平仓后记录完整交易记录 | L1+L2 | 验证交易记录字段完整性和持久化 |
 | GAP-09 | B3-结果持久化 | 回测结果持久化供胜率展示 | L1+L2 | 验证持久化文件格式和读取一致性 |
-| GAP-10 | AC3-接口可调用 | 指令单确认流程可被程序调用 | L1 | 验证 confirm_order() 返回结构化 dict |
+| GAP-10 | AC3-接口可调用 | 指令单确认流程可被程序调用 | L1 | ✅ 已覆盖（UT-AT-09，confirm_order 返回结构化 dict + confirmed_at） |
 | GAP-11 | D7-时效 | 融资融券数据收盘后当日可用 | L2 | 依赖本地已有 tushare/margin 数据，验证 last_date |
 | GAP-12 | D7-个股字段 | 融资余额/融资买入额/融券余量字段完整 | L1+L2 | store 接口 save/load 往返一致性；IT-AA 补充情绪因子字段验证 |
 | GAP-13 | D7-市场字段 | 两融余额合计等市场级字段完整 | L1+L2 | 同上 |
@@ -247,9 +247,9 @@
 | GAP-17 | D5b-字段 | 境外宏观8个指标字段完整性 | L1+L2 | store 接口往返一致性；抽查近5条记录非空 |
 | GAP-18 | D5b-时效-事件 | 美联储议息后利率记录在3日内更新 | L3 | 历史议息日期核对，验证数据存在 |
 | GAP-31 | D8a-内容 | E1 定期事件日历 CRUD 接口和字段完整性 | L1+L2 | store_events 接口往返一致性；构造测试事件验证窗口期查询 |
-| GAP-32 | D8a-窗口查询 | get_active_event_windows 返回当日窗口期事件 | L1 | 构造含 pre_window/post_window 的测试事件，验证边界日期 |
+| GAP-32 | D8a-窗口查询 | get_active_event_windows 返回当日窗口期事件 | L1 | ✅ 已覆盖（UT-AT-01，`tests/test_agent_tools.py`） |
 | GAP-33 | D8b-内容 | E2 企业事件 CRUD 接口和字段完整性 | L1+L2 | store_events 企业事件接口往返一致性 |
-| GAP-34 | D8b-RC7联动 | has_reduce_window 正确识别减持窗口期 | L1 | 构造减持事件，验证窗口期内返回 True，窗口期外返回 False |
+| GAP-34 | D8b-RC7联动 | has_reduce_window 正确识别减持窗口期 | L1 | ✅ 已覆盖（UT-AT-02，经 check_reduce_window 工具封装验证） |
 | GAP-35 | RC7-减持窗口期 | 减持窗口期内 BUY 信号指令单标注 RC7 违规 | L1+L2 | mock D8b 数据，验证 risk_flags 含 RC7 |
 | GAP-36 | RC8-突发事件熔断 | VIX 超阈值时 filter_signals_by_risk 拦截全部新开仓 | L1 | mock D5b VIX 数据，验证所有信号被拦截 |
 | GAP-37 | D8c-结构 | E3 突发事件存储结构可读写，字段完整 | L1 | store_events 突发事件接口往返一致性 |
@@ -269,7 +269,7 @@
 | GAP-25 | I1-字符限制 | 推送内容 ≤ 2000 字符 | L1 | 验证推送消息构建函数的输出长度 |
 | GAP-26 | I1-推送失败重试 | 失败时重试一次不影响其他渠道 | L1 | mock 推送失败，验证重试和渠道隔离 |
 | GAP-27 | F2-策略汇总 | 交易记录按策略分类汇总 | L2 | 验证汇总统计的正确性 |
-| GAP-28 | AC1-Tool封装 | agent_tools 返回结构化 dict | L1 | 为每个 Tool 函数补充契约测试 |
+| GAP-28 | AC1-Tool封装 | agent_tools 返回结构化 dict | L1 | ✅ 已覆盖（UT-AT-01~09，`tests/test_agent_tools.py` 接口契约测试） |
 | GAP-29 | AC6-预留API字段 | 交易记录预留券商API字段 | L1 | 验证数据结构包含预留字段 |
 | GAP-30 | AC8-双价格存储 | 同时保留原始价和复权价 | L1 | 验证 store 存储结构包含两列 |
 
@@ -331,6 +331,15 @@
 | UT-BT-03 | L1 | B2-夏普比率 |
 | UT-BT-04 | L1 | B3-覆盖率标注 |
 | UT-BT-05 | L1 | B3-低覆盖率警告 |
+| UT-AT-01 | L1 | D8a-窗口查询、AC1-Tool封装 |
+| UT-AT-02 | L1 | D8b-RC7联动、AC1-Tool封装 |
+| UT-AT-03 | L1 | update_domain 多域路由、AC7-域隔离 |
+| UT-AT-04 | L1 | update_domain 非法域校验、AC1-Tool封装 |
+| UT-AT-05 | L1 | update_domain 异常捕获、AC1-Tool封装 |
+| UT-AT-06 | L1 | query_kline 摘要结构、AC8-双价格存储 |
+| UT-AT-07 | L1 | validate_data 数据完整性校验 |
+| UT-AT-08 | L1 | get_pending_orders 封装、AC1-Tool封装 |
+| UT-AT-09 | L1 | confirm_order/cancel_order 生命周期、AC3-接口可调用 |
 | IT-DF-01 | L2 | DR3-正常通过 |
 | IT-DF-02 | L2 | DR3-关键域过期 |
 | IT-DF-03 | L2 | DR3-非关键域过期 |

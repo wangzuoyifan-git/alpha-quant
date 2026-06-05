@@ -80,7 +80,7 @@
 │  ├── Strategy Agent  策略选择、参数优化、回测评估          │
 │  └── Risk/Trade Agent 风控过滤、指令单生成、推送           │
 │                                                         │
-│  Tool Layer（agent_tools/）                              │
+│  Tool Layer（agent_tools/）✅ 已完成                     │
 │  薄适配层，将下层能力封装为结构化 Tool 供 Agent 调用       │
 └──────────────────────┬──────────────────────────────────┘
                        │
@@ -118,7 +118,7 @@
 | factor | `data/factor/` | 部分完成 | 北向资金已有；个股资金流向、行业资金流向待补全 |
 | macro | `data/macro/` | 部分完成 | 国内：国债收益率/M2/CPI-PPI/PMI 已有；社融/汇率 待下载。境外：美联储利率/VIX/美债/美元/原油/铜/标普/恒生 待下载 |
 | tushare | `data/tushare/` | 部分完成 | moneyflow/moneyflow_ind/moneyflow_mkt 已有；daily/top_list/margin/分钟线 待下载（已付费） |
-| events | `data/events/` | 待建设 | E1 定期事件日历、E2 企业事件（减持/质押）、E3 突发事件归档；见 `docs/requirements.md` D8 节 |
+| events | `data/events/` | 已建设 | E1 定期事件日历、E2 企业事件（减持/质押/分红）、E3 突发事件归档；见 `docs/requirements.md` D8 节 |
 
 > 详细接口和数据结构见 `docs/data.md`
 
@@ -186,7 +186,7 @@ alpha量化/
 │   ├── builtin/                 # 内置策略 + 注册表
 │   └── custom/                  # 自定义策略
 │
-├── agent_tools/                 # Tool Layer（待建设）
+├── agent_tools/                 # Tool Layer（已完成，18个工具）
 │   ├── data_tools.py            # 数据相关 Tools
 │   ├── strategy_tools.py        # 策略/回测 Tools
 │   └── trade_tools.py           # 交易/风控 Tools

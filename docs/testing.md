@@ -85,11 +85,15 @@
 - `store_meta / store_fundamental / store_factor / store_macro / store_tushare` 的 save/load 往返一致性 → 对应 UT-DS-01~08
 - margin（D7）字段结构验证 → 对应 GAP-12/13
 
-### 3.3 Agent Tool Layer（待建设后补充，对应 GAP-28）
+### 3.3 Agent Tool Layer（已建设，`tests/test_agent_tools.py`，对应 GAP-28）
 
 **agent_tools/data_tools.py**
 - `check_data_freshness` 返回结构（`domains` / `stale` 字段）
-- `update_domain` 失败时 `success=False` + `error` 字段
+- `update_domain` 非法域校验 + 7 域路由（mock downloader）+ 异常捕获 `success=False`
+- `get_active_event_windows` E1 窗口边界 + `days_to_event` 计算
+- `check_reduce_window` RC7 减持窗口期 + holder/end_date 回填
+- `query_kline` 摘要结构（末3行 sample、NaN→None）+ 无数据分支
+- `validate_data` 非 market 域拒绝、空数据标记、干净数据通过
 
 **agent_tools/strategy_tools.py**
 - `run_scan` 返回结构与 Signal 字段一致性
@@ -98,6 +102,7 @@
 **agent_tools/trade_tools.py**
 - `filter_signals_by_risk` 过滤逻辑
 - `generate_orders` 金额计算、预留字段存在性 → 对应 GAP-29
+- `get_pending_orders` / `cancel_order` / `confirm_order` 生命周期封装
 
 ---
 
