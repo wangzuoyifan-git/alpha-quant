@@ -299,6 +299,7 @@ def download_all_corp_events(codes: list = None,
     # 增量更新（短时间范围）时质押只取最近26条，全量初始化取52条
     is_incremental = start >= (datetime.now() - timedelta(days=730)).strftime(_FMT_DASH)
     pledge_limit = 26 if is_incremental else 52
+    dividend_limit = 10 if is_incremental else 20
 
     result = {"reduce": 0, "pledge": 0, "dividend": 0, "fail": 0}
     for i, ts_code in enumerate(codes):
@@ -322,7 +323,7 @@ def download_all_corp_events(codes: list = None,
             logger.debug(f"{ts_code} 质押失败: {e}")
 
         try:
-            ev = _fetch_dividend(ts_code)
+            ev = _fetch_dividend(ts_code, max_records=dividend_limit)
             if ev:
                 events += ev
                 result["dividend"] += len(ev)
@@ -443,12 +444,13 @@ def _fetch_pledge(ts_code: str, max_records: int = 52) -> list:
     return events
 
 
-def _fetch_dividend(ts_code: str) -> list:
-    """分红送转 (Tushare dividend)"""
+def _fetch_dividend(ts_code: str, max_records: int = 20) -> list:
+    """分红送转 (Tushare dividend)，最多保留最新 max_records 条"""
     pro = _get_pro()
     df = pro.dividend(ts_code=ts_code)
     if df is None or df.empty:
         return []
+    df = df.sort_values("ann_date", ascending=False).head(max_records)
     events = []
     for _, row in df.iterrows():
         ann_date = _fmt_date(row.get("ann_date"))
