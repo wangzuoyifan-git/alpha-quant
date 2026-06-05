@@ -29,8 +29,8 @@
 
 | 阶段 | 目标 | Agent 自主程度 | 当前状态 |
 |---|---|---|---|
-| Phase 1（当前） | 辅助决策 | 数据更新、扫描、信号生成自动化；交易决策由人工判断后手动执行 | 基础功能已完成，多 Agent 体系建设中 |
-| Phase 2 | 半自动交易 | Agent 可自主调整策略参数、选择策略组合；生成指令单后人工确认再执行 | 待开发 |
+| Phase 1（当前） | 辅助决策 | 数据更新、扫描、信号生成自动化；交易决策由人工判断后手动执行 | 已完成（含 agents 规则版编排） |
+| Phase 2 | 半自动交易 | Agent 可自主调整策略参数、选择策略组合；生成指令单后人工确认再执行 | 部分完成（Strategy Agent 规则版已实现，LLM 推理/回测驱动待开发） |
 | Phase 3 | 全自动交易 | Agent 在风控规则约束内自主完成从分析到下单的全流程 | 待开发 |
 
 ### 2.3 功能需求边界
@@ -74,11 +74,11 @@
 └──────────────────────┬──────────────────────────────────┘
                        │
 ┌──────────────────────▼──────────────────────────────────┐
-│                   Agent 层（建设中）                      │
-│  Orchestrator Agent（LangGraph + DeepSeek/Qwen）         │
-│  ├── Data Agent      数据更新、质量检查                   │
-│  ├── Strategy Agent  策略选择、参数优化、回测评估          │
-│  └── Risk/Trade Agent 风控过滤、指令单生成、推送           │
+│                   Agent 层                               │
+│  Orchestrator Agent（LangGraph，规则编排；LLM 待接入）   │
+│  ├── Data Agent      数据更新、质量检查      ✅ 规则版    │
+│  ├── Strategy Agent  环境评估、策略选择      ✅ 规则版    │
+│  └── Risk/Trade Agent 风控过滤、指令单生成   ✅ 规则版    │
 │                                                         │
 │  Tool Layer（agent_tools/）✅ 已完成                     │
 │  薄适配层，将下层能力封装为结构化 Tool 供 Agent 调用       │
@@ -96,7 +96,7 @@
 ┌──────────────────────▼──────────────────────────────────┐
 │                   策略层                                 │
 │  strategies/base.py          BaseStrategy + Signal       │
-│  strategies/builtin/         内置策略（4个）              │
+│  strategies/builtin/         内置策略（6个）              │
 │  strategies/custom/          自定义策略目录               │
 └──────────────────────┬──────────────────────────────────┘
                        │
@@ -115,9 +115,9 @@
 | market | `data/market/` | 完成 | A股/指数/ETF 日线，5207只，2024起 |
 | meta | `data/meta/` | 完成 | 申万/证监会行业分类，交易日历 |
 | fundamental | `data/fundamental/` | 完成 | 季频财务（利润/资产/现金流/成长/杜邦） |
-| factor | `data/factor/` | 部分完成 | 北向资金已有；个股资金流向、行业资金流向待补全 |
-| macro | `data/macro/` | 部分完成 | 国内：国债收益率/M2/CPI-PPI/PMI 已有；社融/汇率 待下载。境外：美联储利率/VIX/美债/美元/原油/铜/标普/恒生 待下载 |
-| tushare | `data/tushare/` | 部分完成 | moneyflow/moneyflow_ind/moneyflow_mkt 已有；daily/top_list/margin/分钟线 待下载（已付费） |
+| factor | `data/factor/` | 部分完成 | 北向资金、个股资金流向（AKShare近60天）、行业资金流向已有；Tushare 历史资金流见 tushare 域 |
+| macro | `data/macro/` | 基本完成 | 国内：国债收益率/M2/CPI-PPI/PMI/社融/汇率 已有。境外：VIX/DXY/原油WTI/标普/恒生 已有；美联储利率/LME铜 待下载 |
+| tushare | `data/tushare/` | 基本完成 | moneyflow/moneyflow_ind/moneyflow_mkt/daily/daily_basic/top_list/margin 已有；分钟线 待下载 |
 | events | `data/events/` | 已建设 | E1 定期事件日历、E2 企业事件（减持/质押/分红）、E3 突发事件归档；见 `docs/requirements.md` D8 节 |
 
 > 详细接口和数据结构见 `docs/data.md`
@@ -159,6 +159,7 @@ alpha量化/
 │   ├── store_factor.py
 │   ├── store_macro.py
 │   ├── store_tushare.py
+│   ├── store_events.py
 │   ├── fetcher.py               # 网络数据获取
 │   ├── downloader.py            # K线批量下载
 │   ├── downloader_meta.py
@@ -166,12 +167,14 @@ alpha量化/
 │   ├── downloader_factor.py
 │   ├── downloader_macro.py
 │   ├── downloader_tushare.py
+│   ├── downloader_events.py
 │   ├── market/                  # A股/指数/ETF 日线 Parquet
 │   ├── fundamental/             # 季频财务数据
 │   ├── meta/                    # 行业分类 + 交易日历
 │   ├── factor/                  # 因子数据
 │   ├── macro/                   # 宏观数据
 │   ├── tushare/                 # Tushare 数据
+│   ├── events/                  # 事件数据（E1/E2/E3）
 │   ├── processed/               # 扫描信号 JSON
 │   └── orders/                  # 交易指令单 JSON
 │
@@ -191,7 +194,7 @@ alpha量化/
 │   ├── strategy_tools.py        # 策略/回测 Tools
 │   └── trade_tools.py           # 交易/风控 Tools
 │
-├── agents/                      # Agent 实现（待建设）
+├── agents/                      # Agent 实现（已建设，规则版）
 │   ├── orchestrator.py          # Orchestrator（LangGraph）
 │   ├── data_agent.py
 │   ├── strategy_agent.py
@@ -243,7 +246,7 @@ docs:     文档更新
 chore:    构建/依赖/配置等杂项
 ```
 
-`.gitignore` 排除：`data/market/`、`data/kline/`、`data/fundamental/`、`data/meta/`、`data/factor/`、`data/macro/`、`venv/`、`.env`、`logs/`、`__pycache__/`
+`.gitignore` 排除：`data/market/`、`data/kline/`、`data/fundamental/`、`data/meta/`、`data/factor/`、`data/macro/`、`data/tushare/`、`data/events/`、`data/processed/`、`data/orders/`、`data/cache/`、`venv/`、`.env`、`logs/`、`__pycache__/`
 
 ---
 

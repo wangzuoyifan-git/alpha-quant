@@ -1,8 +1,9 @@
 """
 agents/orchestrator.py — LangGraph 工作流编排
 
-Phase 2 核心：多 Agent 协作工作流
-  check_data → (update_data?) → run_scan → evaluate → risk_filter → await_approval → generate_orders → notify
+多 Agent 协作工作流（规则编排，LLM 待接入）：
+  check_data → (update_data?) → run_scan → risk_filter → await_approval → generate_orders → notify → log_result
+  注：evaluate（策略评估）节点为 Phase 2 计划，当前未接入工作流。
 """
 import logging
 from datetime import datetime

@@ -31,7 +31,7 @@ EMAIL_TO=
 TELEGRAM_TOKEN=       # 可选
 TELEGRAM_CHAT_ID=     # 可选
 
-# LLM（Agent 层，Phase 1 建设时填写）
+# LLM（Agent 层，config/settings.py 已配置；接入 LLM 推理时填写）
 DEEPSEEK_API_KEY=
 QWEN_API_KEY=
 WENXIN_API_KEY=       # 文心一言（备用）
@@ -65,13 +65,15 @@ python3 main.py dbstats                           # 查看 market 域统计
 python3 main.py init-meta                         # 行业分类+申万指数+交易日历
 python3 main.py init-fundamental                  # 季频财务数据（2024起）
 python3 main.py init-fundamental --start-year 2022
-python3 main.py init-factor                       # D3a 个股资金流+D3c 北向资金
-python3 main.py init-macro                        # D5a 国内宏观（已有：国债/M2/CPI/PMI；待下载：社融/汇率）
-                                                  # D5b 境外宏观全部待下载，见 docs/data.md 六节缺口清单
+python3 main.py init-factor                       # D3a 个股资金流+D3c 北向资金+行业资金流
+python3 main.py init-macro                         # D5a 国内宏观（国债/M2/CPI/PMI/社融/汇率）
+                                                  # D5b 境外宏观（VIX/DXY/原油WTI/标普/恒生）；LME铜/美联储利率待下载
 
-# 事件数据（D8，待建设）
-# python3 main.py init-events                     # 初始化事件域（store_events.py 建设后启用）
-# python3 main.py update-events                   # 每日更新企业事件（减持/质押）
+# 事件数据（D8，store/downloader 已建设，暂无 CLI 入口）
+# events 域目前通过 Python 调用：
+#   from data.downloader_events import init_events, update_events
+#   init_events()      # E1 日历 + E2 企业事件全量
+#   update_events()    # E1 补充 + E2 近3月增量
 
 # Tushare 域
 python3 main.py init-tushare                      # 全部类型（moneyflow 2010起，其余 2024起）
@@ -82,7 +84,16 @@ python3 main.py init-tushare --moneyflow-start 2015-01-01
 python3 main.py update-tushare                    # 增量更新 tushare 域
 
 # 全域更新
-python3 main.py update-all                        # 更新所有域
+python3 main.py update-all                        # 更新 market+meta+fundamental+factor+macro+tushare（不含 events）
+```
+
+### Agent 工作流（暂无 CLI 入口）
+
+```python
+# agents 已实现（规则版），目前通过 Python 导入调用，尚未接入 main.py CLI：
+from agents import run_daily_workflow
+run_daily_workflow()              # check_data→scan→risk_filter→approval→orders→notify
+from agents import check_and_update, recommend_daily_plan
 ```
 
 ### 分析
@@ -132,21 +143,22 @@ python3 tools/test_init_flow.py                                 # init 流程端
 
 ```bash
 scripts/update_daily.sh
-# 执行：update-all → scan → 推送信号
+# 执行：update(market) → meta(周一init/其余update) → factor → update-tushare → scan(stock)
+# 注意：脚本未走 update-all，不含 fundamental/macro 域（分别由季度/每周脚本覆盖）
 ```
 
-### 每周（周五收盘后）
+### 每周（周六 10:00）
 
 ```bash
 scripts/update_weekly.sh
-# 执行：update-meta（申万行业指数）
+# 执行：meta 域 update_db（申万行业指数） → macro 域 update_db（月频宏观）
 ```
 
-### 每季度（季报披露后，约1月/4月/7月/10月）
+### 每季度（季报披露后，约1月/4月/8月/10月）
 
 ```bash
 scripts/update_quarterly.sh
-# 执行：init-fundamental --force（更新财务数据）
+# 执行：fundamental 域 update_db（更新财务数据）
 ```
 
 ### 用 crontab 配置自动运行
@@ -155,10 +167,13 @@ scripts/update_quarterly.sh
 crontab -e
 
 # 每个交易日 15:35 运行每日更新
-35 15 * * 1-5 /home/wz/alpha量化/scripts/update_daily.sh >> /home/wz/alpha量化/logs/cron.log 2>&1
+35 15 * * 1-5 /home/wz/alpha量化/scripts/update_daily.sh >> /home/wz/alpha量化/logs/update_daily.log 2>&1
 
-# 每周五 16:00 运行每周更新
-0 16 * * 5 /home/wz/alpha量化/scripts/update_weekly.sh >> /home/wz/alpha量化/logs/cron.log 2>&1
+# 每周六 10:00 运行每周更新（与脚本头注释一致）
+0 10 * * 6 /home/wz/alpha量化/scripts/update_weekly.sh >> /home/wz/alpha量化/logs/update_weekly.log 2>&1
+
+# 每季度首月1日 09:00 运行季度更新
+0 9 1 1,4,8,10 * /home/wz/alpha量化/scripts/update_quarterly.sh >> /home/wz/alpha量化/logs/update_quarterly.log 2>&1
 ```
 
 ### 用 APScheduler 运行（内置调度器）
@@ -245,10 +260,10 @@ rich>=13.0.0
 pytest
 pytest-cov
 
-# Agent 层依赖（Phase 1 建设时安装）
-# langgraph
-# langchain
-# langchain-openai   # 兼容 DeepSeek/Qwen 的 OpenAI 格式接口
+# Agent 层依赖（已安装，agents/ 使用 langgraph 编排）
+# langgraph            # 已安装；⚠️ 尚未写入 requirements.txt，需补充
+# langchain            # LLM 接入时安装
+# langchain-openai     # 兼容 DeepSeek/Qwen 的 OpenAI 格式接口（LLM 接入时安装）
 ```
 
 ---

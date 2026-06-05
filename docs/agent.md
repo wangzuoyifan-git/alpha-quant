@@ -253,74 +253,85 @@ def notify_signals(signals: list[dict], title: str = None) -> dict:
 
 ## 四、Agent 实现
 
-### 4.1 Orchestrator（agents/orchestrator.py）
+> **实现状态（截至最新）**：`agents/` 4 个文件均已实现，为**纯规则编排**（LangGraph + 阈值判断），**尚未接入 LLM 推理**（LLM 配置已就绪，见第五章）。
+> 导出接口：`run_daily_workflow / build_workflow / WorkflowState`（orchestrator），`check_and_update`（data），`evaluate_market_condition / select_strategies / recommend_daily_plan`（strategy），`process_signals / confirm_trade / cancel_trade`（trade）。
+> 注意：当前 agents 无 CLI 入口，需通过 Python 导入调用（如 `from agents import run_daily_workflow`）。
 
-使用 LangGraph `StateGraph` 实现，状态在节点间流转：
+### 4.1 Orchestrator（agents/orchestrator.py）✅ 已实现
+
+使用 LangGraph `StateGraph` 实现，状态在节点间流转。以下为**实际实现**：
 
 ```python
-from langgraph.graph import StateGraph
-from typing import TypedDict
+from langgraph.graph import StateGraph, END
+from typing import TypedDict, Optional
 
-class WorkflowState(TypedDict):
+class WorkflowState(TypedDict, total=False):
     date: str
+    asset_types: list[str]
+    strategy_keys: list[str]
     data_status: dict       # check_data_freshness 结果
     scan_results: dict      # run_scan 结果
-    backtest_results: dict  # compare_strategies 结果（Phase 2+）
     filtered_signals: list  # filter_signals_by_risk 结果
     orders: list            # generate_orders 结果
-    human_approved: bool    # 人工确认标志（Phase 1/2 必须为 True 才能推进）
-    error: str              # 异常信息
+    human_approved: bool    # 人工确认标志（Phase 1/2）
+    error: Optional[str]    # 异常信息
+    log: list[str]          # 各节点执行日志
 
-# 工作流节点
+# 实际节点（build_workflow）：
+#   check_data → (update_data?) → run_scan → risk_filter
+#   → await_approval → generate_orders → notify → log_result → END
 graph = StateGraph(WorkflowState)
 graph.add_node("check_data",      check_data_node)
 graph.add_node("update_data",     update_data_node)
 graph.add_node("run_scan",        scan_node)
-graph.add_node("evaluate",        strategy_eval_node)   # Phase 2+
 graph.add_node("risk_filter",     risk_filter_node)
-graph.add_node("await_approval",  human_approval_node)  # Phase 1/2
-graph.add_node("notify",          notify_node)
+graph.add_node("await_approval",  human_approval_node)   # Phase 1/2 自动放行，人工在 CLI 确认
 graph.add_node("generate_orders", order_node)
+graph.add_node("notify",          notify_node)
+graph.add_node("log_result",      log_result_node)       # 持久化运行日志到 data/processed/
 
-# 条件边：数据不新鲜 → 先更新
-graph.add_conditional_edges(
-    "check_data",
-    lambda s: "update_data" if s["data_status"].get("stale") else "run_scan"
-)
+# 条件边：market/stock 过期 → 先更新
+graph.add_conditional_edges("check_data", route_after_check, {...})
 ```
 
-### 4.2 Data Agent（agents/data_agent.py）
+> **尚未接入工作流的节点**：`evaluate`（策略评估）当前未注册进 `build_workflow()`。Strategy Agent 的评估能力以独立函数存在（见 4.3），尚未串入 Orchestrator。
 
-职责：数据更新、质量检查、缺口补全
+### 4.2 Data Agent（agents/data_agent.py）✅ 已实现
 
-- 每日收盘后检查各域数据新鲜度
-- 发现缺口时自动触发对应 downloader
-- 校验更新结果，异常时告警
+职责：数据更新、质量检查。入口 `check_and_update()`。
 
-### 4.3 Strategy Agent（agents/strategy_agent.py）
+- 调 `check_data_freshness` 检查各域新鲜度
+- 对 `stale` 域逐个调 `update_domain` 增量更新
+- 返回 `{all_fresh, domains_checked, stale_before, updated, issues, stats_summary}`
 
-职责：策略选择、参数优化、回测评估（Phase 2 核心）
+### 4.3 Strategy Agent（agents/strategy_agent.py）✅ 已实现（规则版）
 
-- 读取近期回测结果，判断当前市场环境（趋势/震荡/高波动）
-- 根据环境选择合适的策略组合和参数
-- 将优选参数写入运行时配置，下次扫描生效
+职责：市场环境评估、策略选择。
 
-### 4.4 Risk/Trade Agent（agents/trade_agent.py）
+- `evaluate_market_condition()`：读宏观指标（国债利差/PMI/M2/VIX），按阈值规则判断 bull/bear/range/volatile
+- `select_strategies(market_condition)`：按策略的 `market_condition` 元数据（AC5）筛选适用策略组合
+- `recommend_daily_plan()`：评估环境 → 选策略 → 给出扫描参数建议
 
-职责：风控过滤、指令单生成、推送通知
+> Phase 2 计划：升级为基于历史回测绩效动态选择 + 参数优化（当前为静态阈值规则）。
 
-- 对扫描信号做仓位、行业集中度、评分过滤
-- 生成结构化指令单，等待人工确认（Phase 1/2）
-- Phase 3 在风控规则约束内自主执行
+### 4.4 Risk/Trade Agent（agents/trade_agent.py）✅ 已实现
+
+职责：风控过滤、指令单生成、确认/取消。
+
+- `process_signals(signals, current_equity, vix)`：调 `filter_signals_by_risk`（RC1~RC8）+ `generate_orders`
+- `confirm_trade(order_id)` / `cancel_trade(order_id)`：指令单生命周期
+- Phase 3 计划：在风控规则约束内自主执行下单
 
 ---
 
 ## 五、LLM 接入
 
-### 5.1 配置
+> **状态**：LLM 配置已写入 `config/settings.py`（见下），但 **agents 当前为纯规则实现，尚未实际调用 LLM**。本节描述的是预留的接入方案，待 Phase 2 将 LLM 推理接入 Strategy Agent / Event Agent。
+
+### 5.1 配置（已存在于 config/settings.py）
 
 ```python
-# config/settings.py（待新增）
+# config/settings.py（已配置）
 LLM = {
     "primary": {
         "provider": "deepseek",          # deepseek / qwen / wenxin
@@ -336,6 +347,7 @@ LLM = {
     },
     "temperature": 0.1,   # 量化决策场景，低温度
     "timeout": 30,
+    "max_retries": 2,
 }
 ```
 
@@ -366,28 +378,29 @@ LLM = {
 - 自主执行交易
 - E3 突发事件自动识别（Phase 1 依赖人工记录）
 
-**交付物：**
-- `agent_tools/data_tools.py`（含 `get_active_event_windows` / `check_reduce_window`）
-- `agent_tools/strategy_tools.py`（scan 部分）
-- `agent_tools/trade_tools.py`（notify + generate_orders）
-- `agents/orchestrator.py`（基础工作流）
-- `agents/data_agent.py`
-- `data/store_events.py`（E1/E2/E3 存储接口）
+**交付物（Phase 1 均已交付）：**
+- ✅ `agent_tools/data_tools.py`（含 `get_active_event_windows` / `check_reduce_window`）
+- ✅ `agent_tools/strategy_tools.py`（scan 部分）
+- ✅ `agent_tools/trade_tools.py`（notify + generate_orders）
+- ✅ `agents/orchestrator.py`（基础工作流，LangGraph）
+- ✅ `agents/data_agent.py`
+- ✅ `data/store_events.py`（E1/E2/E3 存储接口）
 
 ### Phase 2：半自动交易
 
 **新增能力：**
-- Strategy Agent 自主评估策略绩效，调整参数组合
+- Strategy Agent 自主评估策略绩效，调整参数组合（⏳ 当前为静态阈值规则版，待升级为回测绩效驱动）
 - 指令单生成后推送给人工，人工一键确认执行
-- Orchestrator 支持多策略并行评估和对比
+- Orchestrator 支持多策略并行评估和对比（⏳ `evaluate` 节点尚未接入工作流）
 - D8b 扩展：接入新闻 API，LLM 解析非结构化企业公告（重组/实控人变更）
 - E3 升级：LLM 对新闻做事件分类和市场影响评估，自动生成 D8c 记录
 
 **交付物：**
-- `agents/strategy_agent.py`
-- `agents/event_agent.py`（新增，负责 E2 NLP 解析和 E3 识别）
-- `agent_tools/strategy_tools.py`（backtest + compare 部分）
-- Orchestrator 增加 `evaluate` 节点、`await_approval` 节点、`event_monitor` 节点
+- ✅ `agents/strategy_agent.py`（规则版已实现：`evaluate_market_condition` / `select_strategies` / `recommend_daily_plan`）
+- ⏳ `agents/event_agent.py`（新增，负责 E2 NLP 解析和 E3 识别）— 未实现
+- ✅ `agent_tools/strategy_tools.py`（backtest + compare 部分）
+- ⏳ Orchestrator 增加 `evaluate` 节点、`event_monitor` 节点；`await_approval` 节点已实现
+- ⏳ agents 接入 LLM 推理（当前为纯规则编排）
 
 ### Phase 3：全自动交易
 
@@ -403,9 +416,9 @@ LLM = {
 - 接入券商 API（需单独评估）
 
 **交付物：**
-- `agents/trade_agent.py`
-- 风控规则引擎
-- 券商 API 适配层
+- ⏳ `agents/trade_agent.py` 自主执行能力（当前仅实现 Phase 1/2 的风控过滤 + 人工确认）
+- ⏳ 风控规则引擎
+- ⏳ 券商 API 适配层
 
 ---
 

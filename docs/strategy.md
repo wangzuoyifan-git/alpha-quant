@@ -25,11 +25,16 @@ class Signal:
     reason: str
     score: float = 0.0  # 0~100，越高越优先
     extra: Dict[str, Any] = field(default_factory=dict)
+    market_condition: str = ""   # AC5：信号适用市场环境（bull/bear/range/volatile）
+
+# 模块常量
+MARKET_CONDITIONS = ("bull", "bear", "range", "volatile")
 
 class BaseStrategy(ABC):
-    name: str           # 策略名称（类属性）
-    description: str    # 策略描述
-    version: str        # 版本号
+    name: str = "未命名策略"        # 策略名称（类属性）
+    description: str = ""           # 策略描述
+    version: str = "1.0.0"          # 版本号
+    market_condition: str = "range" # AC5：策略适用市场环境，供 Strategy Agent 选股
 
     def __init__(self, params: dict = None):
         self.params = params or {}
@@ -58,12 +63,16 @@ class BaseStrategy(ABC):
 
 注册表在 `strategies/builtin/__init__.py` 的 `BUILTIN_STRATEGIES` 字典中。
 
-| key | 类 | BUY 条件 | SELL 条件 | requires_bars |
-|---|---|---|---|---|
-| `ma_cross` | `MACrossStrategy` | MA5 上穿 MA20 + 量能放大 | MA5 下穿 MA20 | `max(slow*2, 60)` |
-| `macd_rsi` | `MACDRSIStrategy` | MACD 金叉 **且** RSI 超卖回升（双重必要条件） | MACD 死叉 | 60 |
-| `vol_price_breakout` | `VolPriceBreakoutStrategy` | 突破近N日高点 + 放量 | 跌破近N日低点 | `lookback+10` |
-| `etf_momentum` | `ETFMomentumStrategy` | 动量为正 → WATCH（Top K 候选） | 动量为负 → SELL | `max(lookback+5, ma_trend+5)` |
+| key | 类 | BUY 条件 | SELL 条件 | requires_bars | market_condition |
+|---|---|---|---|---|---|
+| `ma_cross` | `MACrossStrategy` | MA5 上穿 MA20 + 量能放大 | MA5 下穿 MA20 | `max(slow*2, 60)` | range |
+| `macd_rsi` | `MACDRSIStrategy` | MACD 金叉 **且** RSI 超卖回升（双重必要条件） | MACD 死叉 | 60 | range |
+| `vol_price_breakout` | `VolPriceBreakoutStrategy` | 突破近N日高点 + 放量 | 跌破近N日低点 | `lookback+10` | volatile |
+| `etf_momentum` | `ETFMomentumStrategy` | 动量为正 → WATCH（Top K 候选） | 动量为负 → SELL | `max(lookback+5, ma_trend+5)` | bull |
+| `fundamental_value` | `FundamentalValueStrategy` | 基于 ROE/盈利增长/负债率筛选财务健康低估标的 | — | 5（仅读基本面） | range |
+| `money_flow` | `MoneyFlowStrategy` | 主力净流入 / 北向资金识别机构动向 | — | 10 | bull |
+
+> 各策略 `market_condition` 元数据被 `agents/strategy_agent.select_strategies()` 用于按市场环境筛选策略组合（AC5）。
 
 ### 已知问题
 
@@ -206,6 +215,6 @@ print(result.summary())
 
 ### 低优先级
 - [ ] `signal` 字段改为枚举类型，避免拼写错误
-- [ ] 策略元数据扩展：描述适用市场环境（趋势/震荡/高波动），供 Agent 做策略选择
+- [x] 策略元数据扩展：`market_condition` 字段（趋势/震荡/高波动），供 Agent 做策略选择 — 已实现（base.py + strategy_agent）
 - [ ] 网格交易策略（低波动宽基 ETF）
 - [ ] 跨资产轮动策略（股票 ETF + 债券 ETF）

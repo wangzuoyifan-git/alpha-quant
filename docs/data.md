@@ -32,41 +32,42 @@ data/meta/
 
 data/factor/
   northbound.parquet     北向资金（日频，2024起）
-  moneyflow/             个股资金流向（⚠️ 待补全，见缺口说明）
-  moneyflow_sector/      行业资金流向（⚠️ 待补全，Tushare moneyflow_ind）
+  moneyflow/             个股资金流向（AKShare 近60天，每日增量）
+  moneyflow_sector/      行业资金流向（AKShare 当日榜）
 
 data/macro/
   国内宏观（D5a）：
-  bond_yield.parquet     中国国债收益率2Y/10Y（日频）
-  cny_usd.parquet        人民币汇率CNY/USD（日频）       ⚠️ 待下载
+  bond_yield.parquet     中外国债收益率2Y/5Y/10Y/30Y（含美债，日频）
+  cny_usd.parquet        人民币汇率CNY/USD（日频）
   m2.parquet             M2货币供应同比（月频）
-  shrongji.parquet       社融规模增量/存量同比（月频）   ⚠️ 待下载
+  shrongji.parquet       社融规模增量/存量同比（月频）
   cpi_ppi.parquet        CPI/PPI同比（月频）
   pmi.parquet            PMI制造业/非制造业（月频）
   境外宏观（D5b）：
-  fed_rate.parquet       美联储基准利率（事件触发）       ⚠️ 待下载
-  us_bond_yield.parquet  美债收益率2Y/10Y（日频）        ⚠️ 待下载
-  vix.parquet            VIX恐慌指数（日频）             ⚠️ 待下载
-  dxy.parquet            美元指数DXY（日频）             ⚠️ 待下载
-  oil.parquet            原油价格WTI/布伦特（日频）      ⚠️ 待下载
-  copper.parquet         LME铜价（日频）                 ⚠️ 待下载
-  sp500.parquet          标普500指数（日频）             ⚠️ 待下载
-  hsi.parquet            恒生指数（日频）                ⚠️ 待下载
+  fed_rate.parquet       美联储基准利率（事件触发）       ⚠️ 待下载（VALID_TYPES 已留，无下载器）
+  us_bond_yield.parquet  美债收益率（实际并入 bond_yield，无独立文件）
+  vix.parquet            VIX恐慌指数（VIX期货代理，日频）
+  dxy.parquet            美元指数DXY（日频）
+  oil_wti.parquet        WTI原油价格（日频）
+  copper_lme.parquet     LME铜价（日频）                 ⚠️ 待下载（VALID_TYPES 已留，无下载器）
+  sp500.parquet          标普500指数（日频）
+  hsi.parquet            恒生指数（日频）
 
 data/tushare/
   moneyflow/             个股资金流向（2010起，按code分片）
-  moneyflow_ind/         行业资金流向
-  moneyflow_mkt/         大盘资金流向
-  daily/                 ⚠️ 待下载
-  top_list/              ⚠️ 待下载
-  margin/                ⚠️ 待下载
+  moneyflow_ind/         行业资金流向（按date分片）
+  moneyflow_mkt/         大盘资金流向（单文件）
+  daily/                 日线行情（按code分片）
+  daily_basic/           每日指标 PE/PB/换手率/市值（按code分片）
+  top_list/              龙虎榜（按date分片）
+  margin/                融资融券明细（按code分片）
 
-data/events/                                              ⚠️ 待建设（D8）
+data/events/                                              （D8，已建设）
   calendar.json          E1 定期事件日历（宏观/政策/财报季窗口期）
-  corporate/             E2 企业事件（按code分片，结构化接口优先）
-    {code}.parquet       单股所有企业事件记录
+  corporate/             E2 企业事件（按code分片）
+    {code}.json          单股所有企业事件记录（减持/质押/分红）
   market_shock/          E3 突发事件归档（事后人工记录，Phase 2+ LLM 驱动）
-    {date}.json          按日期归档的突发事件记录
+    {event_id}.json      按 event_id 归档的突发事件记录
 ```
 
 ---
@@ -137,9 +138,10 @@ store_factor.save(data_type, df, code=None) -> None
 store_factor.load(data_type, code=None, start=None, end=None) -> Optional[DataFrame]
 store_factor.exists(data_type, code=None) -> bool
 store_factor.last_date(data_type) -> Optional[str]
+store_factor.list_moneyflow_codes() -> List[str]
 ```
 
-`data_type` 取值：`northbound` / `moneyflow` / `moneyflow_sector`
+`data_type` 取值：`northbound` / `moneyflow` / `moneyflow_sector` / `moneyflow_market`
 
 ### 2.5 macro 域（data/store_macro.py）
 
@@ -152,9 +154,10 @@ store_macro.exists(data_type) -> bool
 store_macro.last_date(data_type) -> Optional[str]
 ```
 
-`data_type` 取值（已有数据）：`bond_yield` / `m2` / `cpi_ppi` / `pmi`
+`data_type` 取值（已实现下载）：`bond_yield`（含美债）/ `m2` / `cpi_ppi` / `pmi` / `shrongji` / `cny_usd` / `vix` / `dxy` / `oil_wti` / `sp500` / `hsi`
 
-待下载数据使用同一接口，完整 `data_type` 列表见本文档第一节数据库状态中 `data/macro/` 目录清单。
+仍未实现下载器（VALID_TYPES 已预留）：`fed_rate` / `copper_lme` / `us_bond_yield`（美债已并入 `bond_yield`）。
+注：`update_db()` 仅增量更新 bond_yield/m2/cpi_ppi/pmi/shrongji，境外指标和汇率需手动重跑 `init_db()` 或单独下载方法。
 
 ### 2.6 tushare 域（data/store_tushare.py）
 
@@ -167,51 +170,54 @@ store_ts.load(data_type, code=None, date=None, start=None, end=None) -> Optional
 store_ts.list_codes(data_type) -> List[str]
 store_ts.list_dates(data_type) -> List[str]
 store_ts.last_date(data_type, code=None) -> Optional[str]
+store_ts.stats() -> dict
 ```
 
-`data_type` 取值：`moneyflow` / `moneyflow_ind` / `moneyflow_mkt` / `daily` / `top_list` / `margin`
+`data_type` 取值：`moneyflow` / `moneyflow_ind` / `moneyflow_mkt` / `daily` / `daily_basic` / `top_list` / `margin`
 
-**margin（D7 情绪因子）字段说明**（字段需求来源见 `docs/requirements.md` D7 节）：
+**margin（D7 情绪因子）字段说明**（来源 Tushare `margin_detail`，均为个股级别；字段需求来源见 `docs/requirements.md` D7 节）：
 
-| 字段 | 说明 | 级别 |
-|---|---|---|
-| ts_code | 股票代码 | 个股 |
-| trade_date | 交易日期 | 个股 |
-| rzye | 融资余额（元） | 个股 |
-| rzmre | 融资买入额（元） | 个股 |
-| rzche | 融资偿还额（元） | 个股 |
-| rqye | 融券余额（元） | 个股 |
-| rqmcl | 融券卖出量（股） | 个股 |
-| rzrqye | 融资融券余额合计（元） | 个股 |
-| rzye_sum | 全市场融资余额合计 | 市场 |
-| rqye_sum | 全市场融券余额合计 | 市场 |
-| rzrqye_sum | 全市场两融余额合计 | 市场 |
+| 字段 | 说明 |
+|---|---|
+| ts_code | 股票代码 |
+| trade_date | 交易日期 |
+| rzye | 融资余额（元） |
+| rzmre | 融资买入额（元） |
+| rzche | 融资偿还额（元） |
+| rqye | 融券余额（元） |
+| rqyl | 融券余量（股） |
+| rqmcl | 融券卖出量（股） |
+| rqchl | 融券偿还量（股） |
+| rzrqye | 融资融券余额合计（元） |
 
-### 2.7 events 域（data/store_events.py）⚠️ 待建设
+> 注：`margin_detail` 不含市场级聚合字段（如全市场两融余额合计）。市场级数据需另用 Tushare `margin` 接口，当前未接入。
+
+### 2.7 events 域（data/store_events.py）
 
 > 事件域需求定义见 `docs/requirements.md` D8 节
+> E1/E2/E3 存储接口已建设。E1 用单文件 `calendar.json`，E2 按 `corporate/{code}.json` 分片，E3 按 `market_shock/{event_id}.json` 归档。
 
 ```python
 import data.store_events as store_events
 
 # E1 定期事件日历
-store_events.save_calendar(events: list[dict]) -> None
-store_events.load_calendar(start: str = None, end: str = None,
-                           event_type: str = None) -> list[dict]
-store_events.get_active_windows(date: str) -> list[dict]
-    # 返回指定日期处于窗口期内的所有事件（pre_window/post_window范围内）
+store_events.save_event_calendar(events: list[dict]) -> None      # 增量合并，按 event_id 去重
+store_events.load_event_calendar() -> list[dict]                  # 返回全部 E1 事件（无过滤参数）
+store_events.get_active_event_windows(date: str = None) -> list[dict]
+    # 返回指定日期处于窗口期内的所有事件（pre_window/post_window 范围内）
 
 # E2 企业事件
-store_events.save_corporate(code: str, events: list[dict]) -> None
-store_events.load_corporate(code: str, start: str = None, end: str = None,
-                            event_type: str = None) -> list[dict]
-store_events.has_reduce_window(code: str, date: str) -> bool
+store_events.save_corp_events(code: str, events: list[dict]) -> None   # 增量合并，默认填 source/phase
+store_events.load_corp_events(code: str) -> list[dict]
+store_events.has_reduce_window(code: str, date: str = None) -> bool
     # 判断指定股票在指定日期是否处于大股东减持窗口期（对应 RC7）
 
 # E3 突发事件
-store_events.save_shock(event: dict) -> None
-store_events.load_shocks(start: str = None, end: str = None) -> list[dict]
+store_events.save_market_shock(event: dict) -> None
+store_events.load_market_shocks(date: str = None) -> list[dict]   # 可按 date 过滤
 ```
+
+> Tool Layer 封装：`agent_tools.get_active_event_windows()` / `check_reduce_window()` 在上述接口之上返回结构化 dict，供 Agent 调用。
 
 **E1 事件字段：**
 
@@ -290,8 +296,23 @@ FactorDownloader().update_db()                  # 每日更新
 MacroDownloader().init_db(start="2024-01-01")
 MacroDownloader().update_db()                   # 每月更新
 
+TushareDownloader().init_db(start="2024-01-01")     # 全域：moneyflow/daily/top_list/margin/moneyflow_ind/moneyflow_mkt
 TushareDownloader().init_moneyflow(start="2010-01-01")
-TushareDownloader().init_daily(start="2024-01-01")
+TushareDownloader().init_daily(start="2024-01-01")  # 同步下载 daily + daily_basic
+TushareDownloader().init_top_list(start="2024-01-01")
+TushareDownloader().init_margin(start="2024-01-01")
+TushareDownloader().update_db()                     # 每日增量更新全域
+```
+
+events 域下载器为函数式接口（非类）：
+
+```python
+from data.downloader_events import init_events, update_events, build_calendar, download_all_corp_events
+
+init_events(year=None)            # E1 日历生成 + E2 企业事件全量下载
+update_events()                   # E1 补充 + E2 近3月增量
+build_calendar(year=None)         # 仅生成 E1 定期事件日历
+download_all_corp_events(codes=None, start="2024-01-01", end=None)  # E2 减持/质押/分红
 ```
 
 ---
@@ -326,32 +347,21 @@ fetcher.get_financial(code) -> DataFrame
 
 ## 六、数据缺口与待办
 
-### 待下载（有接口，未执行）
+### 已完成（接口已实现并执行）
+
+factor 域 `moneyflow`（AKShare 近60天）/ `moneyflow_sector`；tushare 域 `daily` / `daily_basic` / `top_list` / `margin` / `moneyflow`(2010起) / `moneyflow_ind` / `moneyflow_mkt`；macro 域 `cny_usd` / `shrongji` / `vix` / `dxy` / `oil_wti` / `sp500` / `hsi`（含 `bond_yield` 内的美债字段）；events 域 E1 日历 + E2 减持/质押/分红 + E3 结构。
+
+### 待下载（仍未实现下载器或未接入）
 
 | 数据 | 域 | 接口 | 优先级 | 说明 |
 |---|---|---|---|---|
-| 个股资金流向历史 | factor/moneyflow | Tushare `moneyflow`（2010起） | P1 | 已付费，优先用 Tushare；AKShare 仅近60天备用 |
-| 行业资金流向 | factor/moneyflow_sector | Tushare `moneyflow_ind` | P1 | 已有部分数据，补全历史 |
-| 融资融券（D7） | tushare/margin | Tushare `margin` | P1 | 情绪因子，个股+市场级别 |
-| Tushare daily | tushare/daily | Tushare `daily` | P1 | 日线行情补充，含复权因子 |
-| 龙虎榜 | tushare/top_list | Tushare `top_list` | P1 | 游资跟踪策略基础数据 |
-| 人民币汇率 CNY/USD（D5a） | macro/cny_usd | AKShare `forex_pair_hist` | P1 | 影响北向资金流向，市场环境判断 |
-| 社融规模增量/存量（D5a） | macro/shrongji | AKShare `macro_china_shrhbzs` 等 | P1 | 信用周期核心指标 |
-| 美债收益率 2Y/10Y（D5b） | macro/us_bond_yield | AKShare `bond_zh_us_rate` | P1 | 中美利差，已有接口，扩展字段 |
-| VIX 恐慌指数（D5b） | macro/vix | AKShare `index_vix` | P1 | 全球风险偏好指标 |
-| 美元指数 DXY（D5b） | macro/dxy | AKShare `index_investing_global` | P1 | 强美元压制新兴市场 |
-| 原油价格 WTI/布伦特（D5b） | macro/oil | AKShare `oil_hist_em` | P1 | 能源板块直接驱动因素 |
-| 铜价 LME（D5b） | macro/copper | AKShare `futures_hist_em` | P2 | 工业景气度领先指标 |
-| 标普500指数（D5b） | macro/sp500 | AKShare `index_investing_global` | P1 | 全球情绪传导 |
-| 恒生指数（D5b） | macro/hsi | AKShare `stock_hk_index_daily_em` | P1 | 港股联动，AH溢价参考 |
-| 美联储基准利率（D5b） | macro/fed_rate | AKShare `macro_bank_usa_interest_rate` | P2 | 事件触发，全球流动性锚 |
+| 铜价 LME（D5b） | macro/copper_lme | AKShare `futures_hist_em` | P2 | VALID_TYPES 已预留，`_download_overseas` 未调用铜价下载 |
+| 美联储基准利率（D5b） | macro/fed_rate | AKShare `macro_bank_usa_interest_rate` | P2 | VALID_TYPES 已预留，无下载方法 |
+| 美债独立文件（D5b） | macro/us_bond_yield | — | P2 | 当前美债字段已并入 `bond_yield`，独立文件未单独生成 |
 | 分钟K线 | tushare/mins | Tushare `stk_mins` | P2 | 日内策略基础；日线体系稳定后再接入 |
 | 十大流通股东 | tushare/holders | Tushare `top10_floatholders` | P2 | 季频，机构持仓变化 |
 | 股东人数 | tushare/holders | Tushare `stk_holdernumber` | P2 | 筹码集中度判断 |
-| E1 定期事件日历（D8a） | events/calendar | 人工维护 + AKShare 财报日期接口 | P1 | Phase 1 先建结构，手动维护宏观和财报窗口期 |
-| E2 企业事件-减持（D8b） | events/corporate | Tushare `stk_holdertrade` | P1 | RC7 大股东减持窗口期风控依赖此数据 |
-| E2 企业事件-质押（D8b） | events/corporate | Tushare `pledge_stat` | P2 | 股权质押风险预警 |
-| E3 突发事件归档（D8c） | events/market_shock | Phase 1 人工记录；Phase 2 新闻 API + LLM | P2 | Phase 1 只需建好存储结构，内容事后补录 |
+| E3 突发事件自动识别（D8c） | events/market_shock | Phase 2 新闻 API + LLM | P2 | Phase 1 结构已建，内容人工补录 |
 
 ### 已知设计问题
 
