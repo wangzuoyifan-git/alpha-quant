@@ -56,11 +56,38 @@ def generate_orders(signals: list, current_capital: float = None) -> dict:
         return {"success": False, "error": str(e)}
 
 
+def get_pending_orders() -> dict:
+    """返回所有待确认指令单"""
+    try:
+        orders = ta.list_pending_orders()
+        return {"success": True, "orders": orders, "count": len(orders)}
+    except Exception as e:
+        logger.error(f"get_pending_orders 失败: {e}")
+        return {"success": False, "error": str(e)}
+
+
 def confirm_order(order_id: str) -> dict:
-    """确认指令单"""
+    """确认指令单，返回确认时间戳（AC3：可被 Phase 2 Agent 程序化调用）"""
     try:
         ok = ta.confirm_order(order_id)
-        return {"success": ok, "order_id": order_id}
+        result = {"success": ok, "order_id": order_id}
+        if ok:
+            from trader.assistant import ORDER_DIR
+            import json
+            path = ORDER_DIR / f"{order_id}.json"
+            if path.exists():
+                with open(path) as f:
+                    result["confirmed_at"] = json.load(f).get("confirmed_at")
+        return result
+    except Exception as e:
+        return {"success": False, "order_id": order_id, "error": str(e)}
+
+
+def cancel_order(order_id: str, reason: str = None) -> dict:
+    """取消指令单，历史记录保留不删除"""
+    try:
+        ok = ta.cancel_order(order_id)
+        return {"success": ok, "order_id": order_id, "reason": reason}
     except Exception as e:
         return {"success": False, "order_id": order_id, "error": str(e)}
 

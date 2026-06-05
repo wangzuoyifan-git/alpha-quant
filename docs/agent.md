@@ -149,14 +149,15 @@ def check_reduce_window(code: str, date: str = None) -> dict:
 
 ```python
 def run_scan(date: str = None,
-             asset_types: list[str] = None,
-             strategy_keys: list[str] = None) -> dict:
+             strategies: list[str] = None) -> dict:
     """
     执行全市场扫描，返回结构化信号列表。
+    strategies: 策略 key 列表，默认全部内置策略。
 
     Returns:
-        {"success": bool, "date": str, "signals": [Signal.to_dict()],
-         "total_scanned": int, "elapsed": float}
+        {"success": bool, "signals": [{"code","name","signal",
+          "price","score","reason"}],
+         "count": int, "elapsed": float}
     """
 
 def run_backtest(strategy_key: str,
@@ -194,14 +195,20 @@ def compare_strategies(strategy_keys: list[str],
 
 ```python
 def filter_signals_by_risk(signals: list[dict],
-                            max_positions: int = 5,
-                            min_score: float = 60.0) -> dict:
+                            current_equity: float = None,
+                            vix: float = None,
+                            index_drop: float = None) -> dict:
     """
-    风控过滤：按仓位上限、最低评分、行业集中度过滤信号。
+    RC1~RC8 完整风控过滤。风控阈值（持仓上限、单笔上限、行业集中度、
+    回撤、VIX/指数熔断）全部从 config.settings.RISK_CONTROL 读取，
+    不在签名中硬编码（符合 AC2）。
+
+    入参 signals: [{"code","name","signal","price","score","reason"}]
+    current_equity: 当前账户权益（RC5 回撤判断），缺省用初始资金
+    vix / index_drop: RC8 熔断输入
 
     Returns:
-        {"success": bool, "passed": [signal_dict], "filtered": [signal_dict],
-         "reasons": {code: reason}}
+        {"success": bool, "passed": [signal_dict], "blocked_count": int}
     """
 
 def generate_orders(signals: list[dict],
