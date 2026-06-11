@@ -1,7 +1,7 @@
 # Alpha量化 — 策略层文档
 
 > 策略基类接口、内置策略说明、开发指南、待开发清单。
-> 最后更新：2026-05-29
+> 最后更新：2026-06-11（新增：与分层决策集成说明）
 >
 > **项目基础信息见 `docs/project.md`**
 > **策略信号需求定义（S1~S4 含信号本质、多维度合并、扫描过滤规则）见 `docs/requirements.md` 第三章 3.1 节**
@@ -73,6 +73,26 @@ class BaseStrategy(ABC):
 | `money_flow` | `MoneyFlowStrategy` | 主力净流入 / 北向资金识别机构动向 | — | 10 | bull |
 
 > 各策略 `market_condition` 元数据被 `agents/strategy_agent.select_strategies()` 用于按市场环境筛选策略组合（AC5）。
+
+### 与分层决策的集成（2026-06-11 新增）
+
+阶段一引入分层决策架构后，L1 宏观层输出 `risk_mode`（defensive/balanced/aggressive），
+`select_strategies()` 据此选择策略组合。当前映射关系（硬编码于 `strategy_agent.py`）：
+
+| risk_mode | 选用策略 | 设计理由 |
+|---|---|---|
+| `defensive` | `fundamental_value` + `etf_momentum` | 偏防御、低波动、价值/红利 |
+| `balanced` | 全部 6 个内置策略 | 不做筛选 |
+| `aggressive` | `ma_cross` + `vol_price_breakout` + `money_flow` | 偏动量、突破、资金驱动 |
+
+**两套筛选机制并存说明**：
+- `select_strategies(risk_mode=...)`：阶段一新增，**优先使用**，基于 risk_mode 直接映射
+- `select_strategies(market_condition=...)`：旧机制，向后兼容，基于策略的 `market_condition` 元数据
+
+**已知不一致（待阶段二/五解决）**：
+- 当前 risk_mode 映射为**硬编码**，未读取各策略的 `market_condition` 元数据
+- 内置策略的 `market_condition` 字段（bull/bear/range/volatile）与 risk_mode（defensive/balanced/aggressive）**语义未对齐**
+- 阶段五（绩效驱动）将统一为：按 regime 下历史胜率动态选择，届时两套机制合并
 
 ### 已知问题
 

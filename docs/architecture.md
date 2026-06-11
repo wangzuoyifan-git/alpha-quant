@@ -1,7 +1,7 @@
 # Alpha量化 — 系统架构设计
 
 > 架构设计原则、性能与可靠性指标、运行监控要求，以及 Agent 设计边界与接口规范。
-> 最后更新：2026-06-03
+> 最后更新：2026-06-11（新增：分层决策架构约束）
 >
 > **具体分层结构和组件布局见 `docs/project.md` 第三章**
 
@@ -14,6 +14,29 @@
 - 系统整体按数据层、策略层、引擎层、Agent 层、应用层分层（具体布局见 `docs/project.md` 3.1 节）
 - 各层责任明确，通过明确接口和数据契约解耦
 - 数据域严格物理隔离，支持单域独立更新、迁移和扩展
+
+**Agent 层内部分层决策结构（2026-06-11 新增）：**
+
+Agent 层实现三层决策架构（L1 宏观 → L2 行业 → L3 个股），遵循以下约束：
+
+1. **约束传递原则**：上层输出约束上下文（decision_context），下层在约束内决策
+   - L1 宏观层输出 regime / risk_mode / max_position
+   - L2 行业层输出 allowed_industries / industry_weights
+   - L3 个股层在行业池约束内扫描
+
+2. **约束前置原则**：下层动作空间必须在进入前收窄，不能"扫完再过滤"
+   - 错误模式：全市场扫描 → 过滤行业
+   - 正确模式：行业筛选 → 只扫行业池内标的
+
+3. **决策可回流原则**：每层决策持久化，支持下次运行时绩效反馈
+   - decision_log 记录每层输入输出
+   - 阶段五实现"收益回填 → 策略调整"闭环
+
+4. **混合架构原则**：规则负责广度，LLM 负责深度
+   - 核心信号生成路径不含 LLM（确保可回测）
+   - LLM 用于外围辅助（regime 研判、候选深度分析、事件解读）
+
+详细设计见 `docs/agent.md` 第六章、`docs/requirements.md` 第八章。
 
 ### 1.2 接口与封装规范
 
@@ -108,8 +131,31 @@
 - 支持批量操作及超时控制
 - 接口严格定义参数类型和返回结果格式
 
-### 4.3 运行监控
+### 4.3 分层决策接口契约（2026-06-11 新增）
+
+**decision_context 数据契约**：贯穿 L1→L2→L3 的全局约束对象
+
+```python
+decision_context = {
+    "regime": str,                       # L1: 宏观状态
+    "risk_mode": str,                    # L1: defensive/balanced/aggressive
+    "max_position": float,               # L1: 总仓位上限
+    "allowed_industries": list[str],     # L2: 行业池（阶段二填充）
+    "industry_weights": dict[str, float],# L2: 行业权重（阶段二填充）
+    "strategy_keys": list[str],          # L1/L2: 策略组合
+    "timestamp": str,                    # 决策时间戳
+}
+```
+
+**分层节点接口约束**：
+- 每个决策节点接收 WorkflowState，读取上层写入的 decision_context
+- 节点只能**收窄**约束，不能放宽（如 L2 不能扩大 L1 限定的仓位）
+- 条件边路由函数必须有 default 分支（AC11），避免新增状态时流程卡死
+- WorkflowState 新增字段必须 `total=False`（AC10），保证向后兼容
+
+### 4.4 运行监控
 
 - 采集 Agent 运行日志和调用链路
 - 支持动态配置更新和实时权重调整
 - 记录决策依据，支持审计追溯
+- **分层决策日志**：decision_log_<date>.json 记录每层（L1/L2/L3）的输入输出和判定理由（对应 requirements.md OB-R1）

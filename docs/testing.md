@@ -1,7 +1,7 @@
 # Alpha量化 — 测试与验证
 
 > 测试分层定义、当前测试文件、关键测试用例模板、运行规范。
-> 最后更新：2026-05-29
+> 最后更新：2026-06-11（新增：分层决策测试覆盖）
 >
 > **项目基础信息见 `docs/project.md`**
 > **需求与测试追溯矩阵（含完整 GAP 编号覆盖缺口）见 `docs/traceability.md`**
@@ -49,6 +49,26 @@
 | `tests/test_backtest.py` | BacktestResult 指标计算、数据加载逻辑 | 已有 |
 | `tests/test_signals.py` | save_signals/load_signals 往返一致性 | 已有 |
 | `tests/test_downloader.py` | `_is_trading_day`、日期格式、DEFAULT_START | 已有，仅覆盖工具函数 |
+| `tests/test_agent_tools.py` | agent_tools 18 个单元测试（data/strategy/trade） | 已有，全通过 |
+| **`tests/test_macro_regime.py`** | **L1 宏观层分层决策测试（阶段一新增）** | **✅ 10 passed, 1 skipped** |
+
+### 2.1 分层决策测试覆盖（2026-06-11 新增）
+
+`tests/test_macro_regime.py` 对应 `docs/requirements.md` 第八章测试需求（NT-L1-01~04）：
+
+| 测试类 | 测试用例 | 覆盖需求 | 状态 |
+|---|---|---|---|
+| `TestMacroRegimeOutput` | `test_evaluate_market_condition_structure` | L1-R1 结构化输出 | ✅ 通过 |
+| | `test_regime_defensive_scenario` | L1-R2 防御模式映射 | ✅ 通过 |
+| | `test_regime_aggressive_scenario` | L1-R2 进攻模式映射 | ✅ 通过 |
+| `TestStrategySelection` | `test_select_strategies_defensive` | L3-R1 策略选择 | ✅ 通过 |
+| | `test_select_strategies_aggressive` | L3-R1 策略选择 | ✅ 通过 |
+| | `test_route_after_macro_logic` | L1-R4 条件边路由 | ✅ 通过 |
+| `TestDecisionContext` | `test_decision_context_structure` | L1-R3 数据契约 | ✅ 通过 |
+| | `test_workflow_state_extension` | AC10 向后兼容 | ✅ 通过 |
+| `TestDecisionLogPersistence` | `test_log_result_structure` | OB-R1 日志结构 | ✅ 通过 |
+| | `test_log_file_naming_convention` | 日志命名规范 | ✅ 通过 |
+| `TestWorkflowIntegration` | `test_full_workflow_with_macro_regime` | L1-L3 贯通 | ⏭️ Skipped（需真实数据） |
 
 ---
 
