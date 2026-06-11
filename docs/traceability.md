@@ -1,7 +1,7 @@
 # Alpha量化 — 需求与测试追溯矩阵
 
 > 需求编号 → 测试用例的完整双向追溯，包含覆盖缺口分析。
-> 最后更新：2026-05-29
+> 最后更新：2026-06-11（新增：分层决策架构追溯）
 >
 > **需求详细描述见 `docs/requirements.md`**
 > **测试运行规范见 `docs/testing.md`**
@@ -216,6 +216,50 @@
 | AC6-预留API字段 | 交易记录预留券商API字段 | — | — | — | — | ❌ 无覆盖 |
 | AC7-域隔离 | 数据存储按域物理隔离 | UT-DS-08 | — | ST-ND-01/ST-ND-02 | — | ✅ L1+L3 |
 | AC8-双价格存储 | 同时保留原始价和复权价 | — | — | — | — | ❌ 无覆盖 |
+| AC9-D8预留字段 | 事件存储预留NLP解析字段 | — | — | — | — | ❌ 无覆盖 |
+
+### 3.12 分层决策架构（阶段一，2026-06-11 新增）
+
+> 对应 `docs/requirements.md` 第八章，测试文件 `tests/test_macro_regime.py`
+
+| 需求编号 | 需求描述 | L1 测试用例 | L2 测试用例 | L3 测试用例 | L4 测试用例 | 覆盖状态 |
+|---|---|---|---|---|---|---|
+| **L1 宏观场景层** |
+| L1-R1 | evaluate_market_condition 结构化输出（regime/risk_mode/confidence/trigger_reason） | NT-L1-01 | — | — | — | ✅ L1 |
+| L1-R2 | Regime 到 risk_mode 映射规则（5 种 regime 正确映射） | NT-L1-01b/NT-L1-01c | — | — | — | ✅ L1 |
+| L1-R3 | decision_context 结构定义（7 个必须字段） | NT-L1-03a | — | — | — | ✅ L1 |
+| L1-R4 | 条件边路由 route_after_macro 逻辑 | NT-L1-02c | — | — | — | ✅ L1 |
+| L1-R5 | 阶段演进约束（规则→LLM 辅助→HMM 融合） | — | — | — | — | ❌ 无覆盖（设计约束，非功能性需求） |
+| **L3 个股选择层（L2 待阶段二）** |
+| L3-R1 | select_strategies 按 risk_mode 返回策略组合 | NT-L1-02a/NT-L1-02b | — | — | — | ✅ L1 |
+| L3-R2 | scan_node 从 decision_context 读取 strategy_keys | NT-L1-03b | — | — | — | ✅ L1（mock 验证） |
+| **决策可观测与回流（阶段三/五）** |
+| OB-R1 | 决策日志结构化输出（含 macro_regime/decision_context） | NT-L1-04a | — | — | — | ✅ L1 |
+| OB-R2 | 收益回填机制（阶段五） | — | — | — | — | ❌ 无覆盖（Phase 2 待开发） |
+| OB-R3 | 绩效驱动策略选择（阶段五） | — | — | — | — | ❌ 无覆盖（Phase 2 待开发） |
+| **架构兼容性约束（新增）** |
+| AC10 | WorkflowState 新字段 total=False（向后兼容） | NT-L1-03b | — | — | — | ✅ L1 |
+| AC11 | 条件边路由函数必须有 default 分支 | NT-L1-02c | — | — | — | ✅ L1（代码检查） |
+| AC12 | L2 行业筛选独立封装为 industry_agent.py | — | — | — | — | ⏳ 阶段二交付 |
+| AC13 | run_scan 的 industry_filter 参数可选（默认 None） | — | — | — | — | ⏳ 阶段二交付 |
+
+**测试用例编号说明（`tests/test_macro_regime.py`）：**
+- `NT-L1-01`：`TestMacroRegimeOutput::test_evaluate_market_condition_structure` — 结构化输出验证
+- `NT-L1-01b`：`TestMacroRegimeOutput::test_regime_defensive_scenario` — 防御模式映射（VIX=35, PMI=47）
+- `NT-L1-01c`：`TestMacroRegimeOutput::test_regime_aggressive_scenario` — 进攻模式映射（VIX=15, PMI=53）
+- `NT-L1-02a`：`TestStrategySelection::test_select_strategies_defensive` — 防御策略组合
+- `NT-L1-02b`：`TestStrategySelection::test_select_strategies_aggressive` — 进攻策略组合
+- `NT-L1-02c`：`TestStrategySelection::test_route_after_macro_logic` — 路由逻辑验证
+- `NT-L1-03a`：`TestDecisionContext::test_decision_context_structure` — decision_context 数据契约
+- `NT-L1-03b`：`TestDecisionContext::test_workflow_state_extension` — WorkflowState 扩展向后兼容
+- `NT-L1-04a`：`TestDecisionLogPersistence::test_log_result_structure` — 决策日志结构
+- `NT-L1-04b`：`TestDecisionLogPersistence::test_log_file_naming_convention` — 日志命名规范
+- `NT-L1-INT`：`TestWorkflowIntegration::test_full_workflow_with_macro_regime` — 完整 workflow 集成测试（⏭️ Skipped）
+
+**阶段一覆盖缺口：**
+- L2 行业轮动层需求（L2-R1~R4）待阶段二补充测试
+- LLM 接入需求（LLM-R1~R3）待阶段四补充测试
+- 收益回填与绩效驱动（OB-R2/OB-R3）待阶段五补充测试
 
 
 ---
@@ -253,6 +297,22 @@
 | GAP-35 | RC7-减持窗口期 | 减持窗口期内 BUY 信号指令单标注 RC7 违规 | L1+L2 | mock D8b 数据，验证 risk_flags 含 RC7 |
 | GAP-36 | RC8-突发事件熔断 | VIX 超阈值时 filter_signals_by_risk 拦截全部新开仓 | L1 | mock D5b VIX 数据，验证所有信号被拦截 |
 | GAP-37 | D8c-结构 | E3 突发事件存储结构可读写，字段完整 | L1 | store_events 突发事件接口往返一致性 |
+
+**阶段一（2026-06-11）补充：**
+
+| 缺口编号 | 需求编号 | 需求描述 | 建议测试级别 | 状态 |
+|---|---|---|---|---|
+| ✅ GAP-38 | L1-R1 | evaluate_market_condition 结构化输出 | L1 | ✅ 已补充（NT-L1-01，`tests/test_macro_regime.py`） |
+| ✅ GAP-39 | L1-R2 | Regime 到 risk_mode 映射规则 | L1 | ✅ 已补充（NT-L1-01b/c，防御/进攻模式场景测试） |
+| ✅ GAP-40 | L1-R3 | decision_context 数据契约 | L1 | ✅ 已补充（NT-L1-03a，结构验证） |
+| ✅ GAP-41 | L1-R4 | 条件边路由逻辑 | L1 | ✅ 已补充（NT-L1-02c，route_after_macro） |
+| ✅ GAP-42 | L3-R1 | select_strategies 按 risk_mode 选择 | L1 | ✅ 已补充（NT-L1-02a/b，defensive/aggressive） |
+| ✅ GAP-43 | OB-R1 | 决策日志结构化输出 | L1 | ✅ 已补充（NT-L1-04a，decision_log 结构） |
+| ✅ GAP-44 | AC10 | WorkflowState 向后兼容 | L1 | ✅ 已补充（NT-L1-03b，total=False 验证） |
+| ⏳ GAP-45 | L2-R1~R4 | 行业轮动层需求（资金流+基本面筛选） | L1+L2 | ⏳ 待阶段二补充 |
+| ⏳ GAP-46 | AC13 | run_scan 的 industry_filter 参数 | L1+L2 | ⏳ 待阶段二补充 |
+| ⏳ GAP-47 | LLM-R1~R3 | LLM 接入约束（grounding/降级/禁入核心路径） | L1+L3 | ⏳ 待阶段四补充 |
+| ⏳ GAP-48 | OB-R2/R3 | 收益回填与绩效驱动策略选择 | L2 | ⏳ 待阶段五补充 |
 
 ### 4.2 建议补充的测试用例（质量提升）
 
