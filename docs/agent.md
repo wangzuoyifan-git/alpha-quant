@@ -361,7 +361,163 @@ LLM = {
 
 ---
 
-## 六、阶段规划
+## 六、分层决策架构落地路径（2026-06-11 更新）
+
+> 基于 TradingAgents 多 Agent 辩论、Qlib Nested Decision 思想，设计"宏观→行业→个股"三层架构。
+> 详细需求定义见 `docs/requirements.md` 第八章。
+
+### 阶段一（P0）：分层决策骨架 — L1 宏观层结构化
+
+**目标**：把现有扁平流程改造成分层结构，先打通 L1 宏观层和约束传递机制。
+
+**关键交付：**
+
+1. **扩展 `WorkflowState`**（`agents/orchestrator.py:17`）
+   - 新增字段：`macro_regime: dict`（L1 输出）、`decision_context: dict`（逐层约束对象）
+
+2. **升级 `evaluate_market_condition()`**（`agents/strategy_agent.py:11`）
+   - 从 4 状态扩展为结构化 regime 输出（见 requirements.md L1-R1）
+   - 显式映射 regime → risk_mode（defensive / balanced / aggressive）
+
+3. **改造 `select_strategies()`**（`agents/strategy_agent.py:63`）
+   - 接收 `risk_mode`，返回该模式下的策略组合
+   - defensive → 防御策略（fundamental_value/红利 ETF）
+   - aggressive → 进攻策略（ma_cross/vol_price_breakout/money_flow）
+
+4. **新增 `macro_regime_node` + 条件边路由**（`agents/orchestrator.py`）
+   - 在 `check_data` → `run_scan` 之间插入 L1 节点
+   - 仿照 `route_after_check`（:148）写 `route_after_macro`，按 risk_mode 路由到不同策略配置
+
+**验收标准：**
+- ✅ 运行 `run_daily_workflow()`，日志能看到 regime 判定 + risk_mode + 据此选出的策略组合
+- ✅ 不同宏观输入（VIX=35 vs VIX=15）能切换到不同策略集
+- ✅ 测试用例 NT-L1-01 ~ NT-L1-04 全部通过（见 requirements.md 8.8 节）
+
+**阶段演进约束：**
+- 此阶段 L3 扫描可暂时仍全市场，只验证 L1 决策和路由生效
+- L2 收窄留到阶段二，避免一次改动太大
+
+---
+
+### 阶段二（P0）：L2 行业轮动层 — 扫描范围前置收窄
+
+**目标**：插入行业层，用资金流+基本面筛出行业池，**真正收窄 L3 扫描范围**。
+
+**关键交付：**
+
+1. **新增 `agents/industry_agent.py`**
+   - 资金流维度：用 Tushare `moneyflow_ind` 看行业主力净流入趋势
+   - 基本面维度：用季频财务数据看行业收入/利润趋势
+   - 结合 `decision_context.risk_mode` 调整偏好（防御选稳定，进攻选高景气）
+   - 输出 `allowed_industries` + `industry_weights`，写入 `decision_context`
+
+2. **`run_scan` 增加 `industry_filter` 参数**（`agent_tools/strategy_tools.py`）
+   - 进入扫描前就只扫行业池内标的（**约束前置**）
+   - 禁止全市场扫描后再过滤
+
+3. **Orchestrator 串入 L2 节点**（L1 → L2 → L3）
+
+**验收标准：**
+- ✅ 扫描标的数明显少于全市场（从 5207 减至行业池内标的数）
+- ✅ 切换 risk_mode 时行业池随之变化
+- ✅ 日志能追溯到 L2 的行业评分明细
+
+---
+
+### 阶段三（P1）：可靠性与可观测加固
+
+**目标**：分层链路变长，需要断点续跑和决策留痕。
+
+**关键交付：**
+
+1. **LangGraph Checkpoint**（借鉴 TradingAgents）
+   - 给 `build_workflow()` 加 `checkpointer`（SQLite）
+   - 崩溃后从最后成功节点恢复
+
+2. **决策日志结构化**
+   - 扩展 `log_result_node`（orchestrator.py:112），按 requirements.md OB-R1 输出结构化日志
+   - 每层决策（regime/行业池/信号）按 schema 落盘
+
+3. **每层输入输出审计**
+   - 每个节点的决策理由持久化
+
+**验收标准：**
+- ✅ 人为中断后重跑能从断点恢复
+- ✅ 决策日志可追溯每层的判断依据
+- ✅ `data/processed/decision_log_YYYYMMDD.json` 结构完整
+
+---
+
+### 阶段四（P1）：LLM 接入（仅外围，不碰核心信号）
+
+**目标**：把 `config/settings.py` 已配置的 LLM 用起来，只在外围环节。
+
+**关键交付：**
+
+1. **L1 regime 辅助研判**（借鉴 TradingAgents Bull/Bear 辩论）
+   - LLM 对宏观指标做定性多空研判，作为规则 regime 的**校验/置信度调整**
+   - 务必 **grounding**：数值来自 store 层，LLM 只做定性解读
+
+2. **L3 候选标的深度分析**
+   - 规则扫描筛出 Top N 候选后，仅对这少量标的用 LLM 做基本面/消息面分析
+
+3. **建立 `llm_clients` 适配层**
+   - 封装 primary(DeepSeek)/fallback(OpenAI) 为统一 client
+   - 支持多 provider（Qwen/GLM/MiniMax）
+
+**验收标准：**
+- ✅ LLM 调用全部可降级（失败回退规则）
+- ✅ 核心信号生成路径不含任何 LLM 调用，回测仍完全确定可复现
+- ✅ LLM 输出符合 grounding 要求（不生成数字）
+
+---
+
+### 阶段五（P2）：反思闭环 — 激活绩效驱动
+
+**目标**：实现 Phase 2 承诺的"绩效驱动策略选择"，落地 TradingAgents 的决策记忆模式。
+
+**关键交付：**
+
+1. **收益回填**
+   - 基于阶段三的决策日志，下次运行时回填上次信号的实际收益（raw + alpha vs 沪深300）
+
+2. **反思生成**
+   - 对每个 regime/策略组合生成"什么有效/无效"的反思
+
+3. **绩效驱动 `select_strategies`**
+   - 从"静态阈值映射"升级为"按历史 regime 下实际绩效动态选择"
+
+**验收标准：**
+- ✅ 策略选择能体现历史表现差异
+- ✅ 反思记录可解释选择理由
+
+---
+
+### 阶段六（P2）：宏观事件感知 — 补全第 1 层
+
+**目标**：补上"地缘政治/央行政策"这层（业界无开源现成品，需自研）。
+
+**关键交付：**
+
+1. **结构化事件先行**
+   - FOMC 日历、利率期货隐含概率、重要经济数据发布日（对应 `store_events` E1）
+
+2. **LLM 事件解读**
+   - 接新闻 API，LLM 对突发事件做分类 + 市场影响评估，产出 regime 调整信号
+
+3. **熔断联动**
+   - 重大风险事件 → 直接触发 L1 切到 defensive，联动现有 RC8 VIX 熔断
+
+**验收标准：**
+- ✅ FOMC/重大政策日能自动识别并影响 regime
+- ✅ 突发利空能触发防御模式切换
+
+---
+
+## 七、原 Phase 1/2/3 规划（保留）
+
+> 以下为原有阶段规划，与上述阶段一~六并行，不冲突。
+> 阶段一~六聚焦"分层决策架构"；原 Phase 1/2/3 聚焦"Agent 能力边界演进"。
 
 ### Phase 1（当前目标）：自动化辅助决策
 
@@ -389,18 +545,18 @@ LLM = {
 ### Phase 2：半自动交易
 
 **新增能力：**
-- Strategy Agent 自主评估策略绩效，调整参数组合（⏳ 当前为静态阈值规则版，待升级为回测绩效驱动）
+- Strategy Agent 自主评估策略绩效，调整参数组合（⏳ 当前为静态阈值规则版，待升级为回测绩效驱动 — 对应阶段五）
 - 指令单生成后推送给人工，人工一键确认执行
 - Orchestrator 支持多策略并行评估和对比（⏳ `evaluate` 节点尚未接入工作流）
-- D8b 扩展：接入新闻 API，LLM 解析非结构化企业公告（重组/实控人变更）
-- E3 升级：LLM 对新闻做事件分类和市场影响评估，自动生成 D8c 记录
+- D8b 扩展：接入新闻 API，LLM 解析非结构化企业公告（重组/实控人变更 — 对应阶段六）
+- E3 升级：LLM 对新闻做事件分类和市场影响评估（对应阶段六）
 
 **交付物：**
 - ✅ `agents/strategy_agent.py`（规则版已实现：`evaluate_market_condition` / `select_strategies` / `recommend_daily_plan`）
-- ⏳ `agents/event_agent.py`（新增，负责 E2 NLP 解析和 E3 识别）— 未实现
+- ⏳ `agents/event_agent.py`（新增，负责 E2 NLP 解析和 E3 识别）— 对应阶段六
 - ✅ `agent_tools/strategy_tools.py`（backtest + compare 部分）
 - ⏳ Orchestrator 增加 `evaluate` 节点、`event_monitor` 节点；`await_approval` 节点已实现
-- ⏳ agents 接入 LLM 推理（当前为纯规则编排）
+- ⏳ agents 接入 LLM 推理（对应阶段四）
 
 ### Phase 3：全自动交易
 

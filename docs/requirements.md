@@ -684,3 +684,229 @@
 | AC7 | 数据存储按域物理隔离，各域可独立更新 | 不同更新周期的数据互不影响，Agent 可按需触发单域更新 |
 | AC8 | 价格数据存储同时保留原始价和复权价 | Phase 2 实时价接入时，复权因子计算不依赖历史重算 |
 | AC9 | D8 事件存储结构预留 Phase 2 NLP 解析字段（source/phase/nlp_confidence） | Phase 1 结构化事件和 Phase 2 NLP 解析事件使用同一存储结构，无需迁移 |
+
+---
+
+## 八、分层决策架构需求（Nested Decision Framework）
+
+> 新增于 2026-06-11，对应阶段一~六落地路径
+> 参考：TradingAgents 多 Agent 辩论结构、Qlib Nested Decision 思想
+
+### 8.1 总体设计原则
+
+**DP1 — 混合架构原则**
+- 规则引擎负责广度（全市场扫描 5207 只标的，快速、确定性、可回测）
+- LLM 负责深度（少量候选标的定性分析、事件解读、辅助研判）
+- **LLM 永不进入核心信号生成路径**，确保回测可复现性
+
+**DP2 — 分层约束传递原则**
+- 上层输出的是**约束上下文**（decision_context），而非直接信号
+- 下层在进入前就被收窄动作空间（如 L2 筛出行业池，L3 只扫该池内标的）
+- 约束必须前置，不能"扫完再过滤"
+
+**DP3 — 决策可回流原则**
+- 每层决策结果持久化，供下次运行参考（决策日志）
+- 下层执行结果可反馈回上层（收益回填、绩效驱动）
+
+**DP4 — 复用现有架构原则**
+- 基于现有 LangGraph `WorkflowState` 和条件边机制扩展
+- 复用现有 `run_scan` / `filter_signals_by_risk` 接口
+- 不引入 Qlib 等外部依赖
+
+### 8.2 三层决策架构定义
+
+```
+L1 宏观场景层（Macro Regime Layer）
+  │ 职责：识别当前宏观环境（regime），输出 risk_mode 和总仓位约束
+  │ 输入：宏观指标（bond/PMI/M2/VIX/DXY）、事件日历
+  │ 输出：decision_context.regime / risk_mode / max_position
+  ▼
+
+L2 行业轮动层（Industry Rotation Layer）
+  │ 职责：基于 risk_mode，用资金流+基本面筛出行业池和行业权重
+  │ 输入：decision_context.risk_mode、Tushare 行业资金流、季频财务
+  │ 输出：decision_context.allowed_industries / industry_weights
+  ▼
+
+L3 个股选择层（Stock Selection Layer）
+  │ 职责：在行业池约束内执行规则扫描，产出具体信号
+  │ 输入：decision_context（行业池、策略组合）
+  │ 输出：scan_results（仅行业池内标的的信号）
+  ▼
+
+风控+交易执行（现有流程）
+```
+
+### 8.3 L1 宏观场景层需求（阶段一）
+
+**L1-R1 — 结构化 Regime 输出**
+
+`evaluate_market_condition()` 必须输出结构化 dict：
+```python
+{
+  "regime": str,           # crisis / risk_off / balanced / risk_on / volatile
+  "risk_mode": str,        # defensive / balanced / aggressive
+  "confidence": float,     # 0.0~1.0，判断置信度
+  "indicators": {          # 原始指标值（可观测）
+    "cn_10y": float,
+    "pmi": float,
+    "m2_yoy": float,
+    "vix": float,
+    ...
+  },
+  "trigger_reason": str    # 人类可读的判定理由
+}
+```
+
+**L1-R2 — Regime 到 Risk Mode 映射规则**
+
+| Regime 状态 | Risk Mode | 说明 |
+|---|---|---|
+| crisis（金融危机级别） | defensive | VIX > 40 或 A 股单日跌幅 > 5% |
+| risk_off（风险收缩） | defensive | VIX > 30 或 PMI < 48 |
+| balanced（震荡） | balanced | 上述条件均不满足 |
+| risk_on（风险扩张） | aggressive | PMI > 52 且 VIX < 20 |
+| volatile（高波动） | defensive | VIX 20日标准差 > 5 |
+
+**L1-R3 — Decision Context 结构定义**
+
+`decision_context` 作为全局约束对象，贯穿三层：
+```python
+decision_context = {
+  "regime": str,                      # L1 输出
+  "risk_mode": str,                   # L1 输出
+  "max_position": float,              # L1 输出，总仓位上限（0.0~1.0）
+  "allowed_industries": list[str],    # L2 输出，通过的行业代码
+  "industry_weights": dict[str, float], # L2 输出，行业配置权重
+  "strategy_keys": list[str],         # L1/L2 联合决定的策略组合
+  "timestamp": str,                   # 决策时间戳
+}
+```
+
+**L1-R4 — 条件边路由需求**
+
+仿照现有 `route_after_check`（orchestrator.py:148），新增 `route_after_macro`：
+- 输入：`state["macro_regime"]["risk_mode"]`
+- 输出：路由到不同的策略配置节点（defensive_path / balanced_path / aggressive_path）
+- 不同路径通过不同 `strategy_keys` 参数传给下层
+
+**L1-R5 — 阶段演进约束**
+- 阶段一（P0）：纯规则 regime 判定（基于现有阈值）
+- 阶段四（P1）：规则 + LLM 辅助研判（LLM 调整置信度，不替代规则）
+- 阶段六（P2）：规则 + LLM 事件解读 + HMM 状态识别（三者融合）
+
+### 8.4 L2 行业轮动层需求（阶段二）
+
+**L2-R1 — 行业筛选数据源需求**
+
+必须使用以下数据：
+- Tushare `moneyflow_ind`（行业资金流，已有 `data/tushare/moneyflow_ind.parquet`）
+- 季频财务数据聚合到行业（`data/fundamental/` 已有，需增加行业聚合逻辑）
+- 申万行业分类（`data/meta/industry_sw.parquet` 已有）
+
+**L2-R2 — 行业评分维度**
+
+| 维度 | 权重（defensive） | 权重（aggressive） | 数据来源 |
+|---|---|---|---|
+| 行业资金流趋势 | 30% | 50% | Tushare moneyflow_ind 近 20 日累计 |
+| 行业收入增速 | 40% | 30% | 财务数据按行业聚合 |
+| 行业利润率 | 30% | 20% | 财务数据按行业聚合 |
+
+**L2-R3 — 行业池输出约束**
+- 必须输出 `allowed_industries: list[str]`（申万一级行业代码）
+- defensive 模式：取评分 Top 5~7 行业
+- aggressive 模式：取评分 Top 8~12 行业
+- balanced 模式：取评分 Top 6~10 行业
+
+**L2-R4 — 扫描范围前置收窄需求（关键）**
+- `run_scan()` 必须新增 `industry_filter: list[str]` 参数
+- 进入扫描前，从全市场标的池筛出仅属于 `allowed_industries` 的标的
+- **禁止全市场扫描后再过滤**，否则失去分层意义
+
+### 8.5 L3 个股选择层需求（阶段一/二）
+
+**L3-R1 — 策略选择需求**
+
+`select_strategies(risk_mode)` 必须根据 risk_mode 返回不同策略组合：
+
+| Risk Mode | 策略组合 | 理由 |
+|---|---|---|
+| defensive | `fundamental_value` + `etf_momentum`（红利 ETF） | 偏防御、低波动 |
+| balanced | 全部 6 个内置策略 | 不做筛选 |
+| aggressive | `ma_cross` + `vol_price_breakout` + `money_flow` | 偏动量、成长 |
+
+**L3-R2 — 扫描输入约束传递**
+- `scan_node` 必须从 `decision_context` 读取 `allowed_industries` 和 `strategy_keys`
+- 传递给 `run_scan(strategies=..., industry_filter=...)`
+
+### 8.6 决策可观测与回流需求（阶段三/五）
+
+**OB-R1 — 决策日志结构**
+
+扩展现有 `log_result_node`（orchestrator.py:112），输出结构化日志：
+```python
+{
+  "date": str,
+  "macro_regime": {...},           # L1 完整输出
+  "decision_context": {...},       # 完整约束上下文
+  "industry_scores": {...},        # L2 行业评分明细
+  "scan_results_summary": {        # L3 扫描摘要
+    "total_signals": int,
+    "by_industry": {...},
+    "by_strategy": {...},
+  },
+  "filtered_signals": [...],       # 最终通过风控的信号
+  "orders": [...],
+  "execution_log": [...],          # 现有日志
+}
+```
+
+**OB-R2 — 收益回填需求（阶段五）**
+- 下次运行时，读取上次决策日志
+- 根据 `filtered_signals` 中的标的，计算实际收益（raw + alpha vs 沪深300）
+- 追加到决策日志：`{"signal_id": ..., "actual_return_5d": ..., "alpha_5d": ...}`
+
+**OB-R3 — 绩效驱动策略选择需求（阶段五）**
+- `select_strategies()` 从"静态映射"升级为"查询历史决策日志，按 regime 分组统计策略胜率"
+- 优先选择当前 regime 下历史胜率 > 60% 的策略
+
+### 8.7 LLM 接入约束（阶段四/六）
+
+**LLM-R1 — 严格禁入核心路径**
+- LLM 只能用于：L1 regime 辅助研判、L3 候选标的深度分析、E3 事件解读
+- **禁止用于**：L3 信号生成、风控过滤、回测计算
+
+**LLM-R2 — Grounding 强制要求**
+- LLM 对数值型指标做定性解读时，**数值一律来自 store 层，禁止 LLM 生成**
+- Prompt 必须明确："你的任务是解读给定的数据，不要生成任何数字"
+
+**LLM-R3 — 可降级要求**
+- 所有 LLM 调用必须有规则 fallback
+- LLM 失败（超时/限流/错误）时，自动回退规则版，记录降级日志
+
+### 8.8 测试需求（阶段一验收）
+
+**NT-L1-01 — L1 宏观层单元测试**
+- 输入：模拟宏观指标（VIX=35, PMI=47）
+- 期望输出：`regime="risk_off"`, `risk_mode="defensive"`, `confidence > 0.7`
+
+**NT-L1-02 — 条件边路由测试**
+- 输入：`state["macro_regime"]["risk_mode"] = "defensive"`
+- 期望：路由到 defensive_path，`strategy_keys = ["fundamental_value", "etf_momentum"]`
+
+**NT-L1-03 — Decision Context 贯通测试**
+- 运行完整 workflow
+- 验证：`scan_node` 收到的 `state["decision_context"]` 含 `regime/risk_mode/allowed_industries`（阶段二后）
+
+**NT-L1-04 — 决策日志持久化测试**
+- 运行一次 workflow
+- 验证：`data/processed/decision_log_YYYYMMDD.json` 存在且结构完整
+
+### 8.9 架构兼容性约束（新增）
+
+| 编号 | 约束 | 原因 |
+|---|---|---|
+| AC10 | `WorkflowState` 新增字段必须 `total=False`（可选字段） | 保证现有 workflow 不因新字段报错 |
+| AC11 | 条件边路由函数必须有 default 分支 | 避免新增 regime 状态时 workflow 卡死 |
+| AC12 | L2 行业筛选逻辑必须独立封装为 `agents/industry_agent.py` | 便于后续升级为 LLM 驱动或因子模型驱动 |
+| AC13 | `run_scan` 的 `industry_filter` 参数必须可选（默认 None=全市场） | 保证现有调用方不受影响 |
