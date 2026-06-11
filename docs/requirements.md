@@ -864,25 +864,65 @@ decision_context = {
 
 ### 8.6 决策可观测与回流需求（阶段三/五）
 
-**OB-R1 — 决策日志结构**
+**OB-R1 — 决策日志结构（阶段三补全）**
 
-扩展现有 `log_result_node`（orchestrator.py:112），输出结构化日志：
+扩展现有 `log_result_node`（orchestrator.py），输出结构化日志：
 ```python
 {
   "date": str,
   "macro_regime": {...},           # L1 完整输出
   "decision_context": {...},       # 完整约束上下文
-  "industry_scores": {...},        # L2 行业评分明细
+  "industry_scores": [...],        # L2 行业评分明细（阶段三补全：从 decision_context 回写）
   "scan_results_summary": {        # L3 扫描摘要
     "total_signals": int,
-    "by_industry": {...},
-    "by_strategy": {...},
+    "elapsed": float,
+    "by_industry": {...},          # 阶段三补全：按行业分组的信号数
+    "by_strategy": {...},          # 阶段三补全：按策略分组的信号数
   },
-  "filtered_signals": [...],       # 最终通过风控的信号
-  "orders": [...],
-  "execution_log": [...],          # 现有日志
+  "node_audit": [...],             # 阶段三新增：每层节点的 input/output 快照（OB-R5）
+  "filtered_signals_count": int,   # 最终通过风控的信号数
+  "orders_count": int,
+  "logs": [...],                   # 现有执行日志
+  "error": str | None,
 }
 ```
+
+**阶段三实现说明：**
+- `industry_scores`：阶段二的 L2 评分明细已经写入 `decision_context["industry_weights"]`，
+  阶段三在 `log_result_node` 把完整评分（含 industry_name/score/排名）落盘到 `industry_scores`
+- `scan_results_summary.by_industry` / `by_strategy`：对 `scan_results["signals"]` 按
+  申万行业、策略 key 分组计数，便于事后分析"哪类行业/哪个策略贡献了信号"
+- `node_audit`：见 OB-R5
+
+**OB-R4 — Checkpoint 断点续跑需求（阶段三，借鉴 TradingAgents）**
+
+分层链路变长（L1→L2→L3→风控→订单），全市场扫描耗时长，崩溃后整轮重来代价大。
+要求工作流支持断点续跑：
+
+- `build_workflow(checkpointer=...)` 接受可选 checkpointer 参数
+- 持久化方案：优先 `langgraph.checkpoint.sqlite.SqliteSaver`（SQLite 落盘），
+  存储位置 `data/cache/checkpoints/workflow.sqlite`
+- 依赖未装时（`langgraph-checkpoint-sqlite`）可降级到 `InMemorySaver`（仅进程内，
+  不跨进程恢复，但保证逻辑可用），并记录降级日志
+- 运行时通过 `config={"configurable": {"thread_id": <date>}}` 标识一次运行
+- 中断（任一节点抛异常）后，用相同 thread_id 重跑，应从最后成功 checkpoint 的状态恢复，
+  已完成节点不重复执行
+- 向后兼容：`checkpointer=None`（默认）时行为与阶段二一致（无 checkpoint，AC14）
+
+**OB-R5 — 每层节点输入输出审计需求（阶段三）**
+
+对应 architecture.md「可观测」原则，每个决策节点持久化决策理由：
+- 每个节点执行后，向 `state["node_audit"]` 追加一条快照：
+  ```python
+  {
+    "node": str,           # 节点名（macro_regime / industry_rotation / run_scan / risk_filter ...）
+    "timestamp": str,      # 节点完成时间
+    "input_summary": {...},  # 该节点关注的输入字段摘要（不全量复制 state）
+    "output_summary": {...}, # 该节点产出的关键字段摘要
+  }
+  ```
+- `node_audit` 随 decision_log 一起落盘，可逐节点回溯链路决策依据
+- 审计快照只记摘要（非全量 state），避免日志膨胀
 
 **OB-R2 — 收益回填需求（阶段五）**
 - 下次运行时，读取上次决策日志
@@ -925,6 +965,31 @@ decision_context = {
 - 运行一次 workflow
 - 验证：`data/processed/decision_log_YYYYMMDD.json` 存在且结构完整
 
+### 8.8b 测试需求（阶段三验收）
+
+**NT-L3-01 — Checkpoint 断点恢复测试（OB-R4）**
+- mock 一个节点首次执行时抛异常，第二次正常
+- 用相同 thread_id 两次 invoke
+- 验证：第二次从断点恢复，已成功节点不重复执行，最终能跑完
+
+**NT-L3-02 — Checkpointer 工厂降级测试（OB-R4/AC15）**
+- 验证：sqlite 依赖可用时返回 SqliteSaver；不可用时降级 InMemorySaver，不抛异常
+
+**NT-L3-03 — build_workflow 向后兼容测试（AC14）**
+- 验证：`build_workflow()`（无参）与 `build_workflow(checkpointer=None)` 均正常编译运行
+
+**NT-L3-04 — decision_log industry_scores 明细测试（OB-R1）**
+- 构造含 industry_weights 的 decision_context
+- 验证：decision_log 含 `industry_scores` 明细
+
+**NT-L3-05 — scan_results_summary 分组统计测试（OB-R1）**
+- 构造含多行业/多策略信号的 scan_results
+- 验证：`by_industry` / `by_strategy` 分组计数正确
+
+**NT-L3-06 — node_audit 审计快照测试（OB-R5）**
+- 运行 workflow（mock 下层）
+- 验证：`node_audit` 含各节点快照，每条有 node/timestamp/input_summary/output_summary
+
 ### 8.9 架构兼容性约束（新增）
 
 | 编号 | 约束 | 原因 |
@@ -933,3 +998,5 @@ decision_context = {
 | AC11 | 条件边路由函数必须有 default 分支 | 避免新增 regime 状态时 workflow 卡死 |
 | AC12 | L2 行业筛选逻辑必须独立封装为 `agents/industry_agent.py` | 便于后续升级为 LLM 驱动或因子模型驱动 |
 | AC13 | `run_scan` 的 `industry_filter` 参数必须可选（默认 None=全市场） | 保证现有调用方不受影响 |
+| AC14 | `build_workflow` 的 `checkpointer` 参数必须可选（默认 None=无 checkpoint） | 保证现有调用方与测试不受影响，checkpoint 为增强而非强制 |
+| AC15 | checkpoint 持久化依赖缺失时必须可降级到 InMemorySaver，不得让 workflow 报错 | 依赖（langgraph-checkpoint-sqlite）可能未装，可靠性加固不能引入新的硬失败 |

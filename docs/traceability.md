@@ -241,14 +241,18 @@
 | L3-R1 | select_strategies 按 risk_mode 返回策略组合 | NT-L1-02a/NT-L1-02b | — | — | — | ✅ L1 |
 | L3-R2 | scan_node 从 decision_context 读取 strategy_keys/allowed_industries | NT-L1-03b | NT-L2-INT | — | — | ✅ L1+L2 |
 | **决策可观测与回流（阶段三/五）** |
-| OB-R1 | 决策日志结构化输出（含 macro_regime/decision_context） | NT-L1-04a | — | — | — | ✅ L1 |
+| OB-R1 | 决策日志结构化输出（含 industry_scores/by_industry/by_strategy/node_audit） | NT-L1-04a/NT-L3-04a/NT-L3-05a/NT-L3-INT | — | — | — | ✅ L1+L3 |
 | OB-R2 | 收益回填机制（阶段五） | — | — | — | — | ❌ 无覆盖（Phase 2 待开发） |
 | OB-R3 | 绩效驱动策略选择（阶段五） | — | — | — | — | ❌ 无覆盖（Phase 2 待开发） |
+| OB-R4 | Checkpoint 断点续跑（SqliteSaver/降级 InMemorySaver/thread_id 恢复） | NT-L3-01a~c/NT-L3-03a~c | NT-L3-REC | — | — | ✅ L1+L2 |
+| OB-R5 | 每层节点输入输出审计快照（node_audit） | NT-L3-06a~c | — | — | — | ✅ L1 |
 | **架构兼容性约束（新增）** |
 | AC10 | WorkflowState 新字段 total=False（向后兼容） | NT-L1-03b | — | — | — | ✅ L1 |
 | AC11 | 条件边路由函数必须有 default 分支 | NT-L1-02c | — | — | — | ✅ L1（代码检查） |
 | AC12 | L2 行业筛选独立封装为 industry_agent.py | NT-L2-01 | — | — | — | ✅ L1（已交付 agents/industry_agent.py） |
 | AC13 | run_scan 的 industry_filter 参数可选（默认 None） | NT-L2-06/08 | — | — | — | ✅ L1（已交付，向后兼容验证） |
+| AC14 | build_workflow 的 checkpointer 参数可选（默认 None） | NT-L3-03a~c | — | — | — | ✅ L1 |
+| AC15 | checkpoint 依赖缺失时降级 InMemorySaver | NT-L3-02b | — | — | — | ✅ L1 |
 
 **测试用例编号说明（`tests/test_macro_regime.py`）：**
 - `NT-L1-01`：`TestMacroRegimeOutput::test_evaluate_market_condition_structure` — 结构化输出验证
@@ -280,6 +284,34 @@
 - LLM 接入需求（LLM-R1~R3）待阶段四补充测试
 - 收益回填与绩效驱动（OB-R2/OB-R3）待阶段五补充测试
 - 财务维度行业聚合（L2-R2 可选维度）暂未实现，待数据覆盖率提升后补充
+
+**测试用例编号说明（`tests/test_checkpoint_recovery.py`，阶段三）：**
+- `NT-L3-01a`：`TestCheckpointRecovery::test_checkpoint_saves_state_between_invocations` — 状态持久化
+- `NT-L3-01b`：`TestCheckpointRecovery::test_checkpoint_recovery_after_node_failure` — 断点恢复（核心验收，mock 节点失败重试）
+- `NT-L3-01c`：`TestCheckpointStorageLocation::test_default_checkpoint_path_in_cache` — 存储位置
+- `NT-L3-02a`：`TestCheckpointerFactory::test_make_checkpointer_sqlite_available` — SqliteSaver 创建
+- `NT-L3-02b`：`TestCheckpointerFactory::test_make_checkpointer_fallback_on_import_error` — 降级 InMemorySaver（AC15）
+- `NT-L3-02c`：`TestCheckpointerFactory::test_make_checkpointer_none_returns_none` — None 不启用
+- `NT-L3-03a`：`TestBuildWorkflowBackwardCompat::test_build_workflow_no_args` — 无参向后兼容（AC14）
+- `NT-L3-03b`：`TestBuildWorkflowBackwardCompat::test_build_workflow_checkpointer_none` — 显式 None（AC14）
+- `NT-L3-03c`：`TestBuildWorkflowBackwardCompat::test_build_workflow_with_checkpointer` — 注入 checkpointer
+- `NT-L3-REC`：集成验证（NT-L3-01b 含真实扫描，约 50s）
+
+**测试用例编号说明（`tests/test_decision_log_enhanced.py`，阶段三）：**
+- `NT-L3-04a`：`TestIndustryScoresDetail::test_industry_scores_from_decision_context` — industry_scores 明细（OB-R1）
+- `NT-L3-04b`：`TestIndustryScoresDetail::test_industry_scores_fallback_empty` — 空数据容错
+- `NT-L3-05a`：`TestScanResultsSummary::test_scan_summary_by_industry_and_strategy` — by_industry/by_strategy 分组（OB-R1）
+- `NT-L3-05b`：`TestScanResultsSummary::test_scan_summary_empty_signals` — 空信号容错
+- `NT-L3-05c`：`TestScanResultsSummary::test_scan_summary_industry_join` — 行业 join 验证
+- `NT-L3-06a`：`TestNodeAudit::test_audit_helper_structure` — 审计快照结构（OB-R5）
+- `NT-L3-06b`：`TestNodeAudit::test_audit_multiple_nodes` — 多节点累积
+- `NT-L3-06c`：`TestNodeAudit::test_audit_persisted_in_decision_log` — 审计落盘
+- `NT-L3-INT`：`TestDecisionLogFullIntegration::test_decision_log_schema_complete` — 完整 schema 集成验证
+
+**阶段三关键实现说明：**
+- checkpoint 持久化用 msgpack，pandas 产出的 numpy.float64 不可序列化，用 `_to_native()` 在状态入 state 前递归转换
+- by_strategy 统计通过 reason 文本匹配策略名（粗粒度，因信号已跨策略合并）
+- by_industry 统计通过信号 code join industry_sw 获得行业名分组
 
 
 ---
@@ -327,10 +359,13 @@
 | ✅ GAP-40 | L1-R3 | decision_context 数据契约 | L1 | ✅ 已补充（NT-L1-03a，结构验证） |
 | ✅ GAP-41 | L1-R4 | 条件边路由逻辑 | L1 | ✅ 已补充（NT-L1-02c，route_after_macro） |
 | ✅ GAP-42 | L3-R1 | select_strategies 按 risk_mode 选择 | L1 | ✅ 已补充（NT-L1-02a/b，defensive/aggressive） |
-| ✅ GAP-43 | OB-R1 | 决策日志结构化输出 | L1 | ✅ 已补充（NT-L1-04a，decision_log 结构） |
+| ✅ GAP-43 | OB-R1 | 决策日志结构化输出（阶段三补全 industry_scores/分组/审计） | L1+L3 | ✅ 已补充（NT-L1-04a + NT-L3-04a/05a/INT） |
 | ✅ GAP-44 | AC10 | WorkflowState 向后兼容 | L1 | ✅ 已补充（NT-L1-03b，total=False 验证） |
 | ✅ GAP-45 | L2-R1~R4 | 行业轮动层需求（资金流+行业分类对齐+行业池+扫描前置） | L1+L2 | ✅ 已补充（NT-L2-01~08，`tests/test_industry_rotation.py`） |
 | ✅ GAP-46 | AC13 | run_scan 的 industry_filter 参数（默认 None 向后兼容） | L1+L2 | ✅ 已补充（NT-L2-06/08，scanner+strategy_tools 验证） |
+| ✅ GAP-49 | OB-R4 | Checkpoint 断点续跑（SqliteSaver/降级/恢复） | L1+L2 | ✅ 已补充（NT-L3-01~03，`tests/test_checkpoint_recovery.py`） |
+| ✅ GAP-50 | OB-R5 | 每层节点输入输出审计快照（node_audit） | L1 | ✅ 已补充（NT-L3-06a~c） |
+| ✅ GAP-51 | AC14/AC15 | checkpointer 参数可选 + 依赖缺失降级 | L1 | ✅ 已补充（NT-L3-03a~c/NT-L3-02b） |
 | ⏳ GAP-47 | LLM-R1~R3 | LLM 接入约束（grounding/降级/禁入核心路径） | L1+L3 | ⏳ 待阶段四补充 |
 | ⏳ GAP-48 | OB-R2/R3 | 收益回填与绩效驱动策略选择 | L2 | ⏳ 待阶段五补充 |
 

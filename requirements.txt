@@ -32,6 +32,10 @@ click>=8.1.0             # CLI 命令行界面
 rich>=13.0.0             # 美化终端输出
 loguru>=0.7.0            # 日志增强
 
+# ---- Agent 层（阶段一~三）----
+langgraph>=1.2.4         # 工作流编排
+langgraph-checkpoint-sqlite>=3.1.0  # Checkpoint 持久化（阶段三）
+
 # ---- 开发/测试 ----
 pytest>=7.4.0
 pytest-cov>=4.1.0

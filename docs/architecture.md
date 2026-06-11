@@ -98,6 +98,19 @@ Agent 层实现三层决策架构（L1 宏观 → L2 行业 → L3 个股），�
 - 确保批量数据导入原子性，防止中断后数据损坏
 - 支持任务断点续传，避免重复作业和资源浪费
 
+**Agent 工作流断点续跑（2026-06-11 阶段三新增）：**
+
+分层决策链路变长（L1→L2→L3→风控→订单），全市场扫描耗时长，中断后整轮重来代价大。
+工作流层基于 LangGraph Checkpoint 实现断点续跑（对应 requirements.md OB-R4）：
+
+- `build_workflow(checkpointer=...)` 编译时注入 checkpointer，LangGraph 在每个节点后
+  自动落盘状态快照
+- 持久化优先 SQLite（`data/cache/checkpoints/workflow.sqlite`），依赖缺失时降级
+  内存 checkpoint（保证逻辑可用，仅不跨进程）
+- 一次运行以 `thread_id=<date>` 标识，崩溃后相同 thread_id 重跑从最后成功节点恢复，
+  已完成节点（含已完成的扫描）不重复执行
+- 与数据层「断点续传」是两个层次：数据层保证单域下载原子性，工作流层保证多节点决策链路可恢复
+
 ### 3.2 多源交叉验证
 
 - 关键行情与财务数据至少双源采集

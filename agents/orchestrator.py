@@ -2,21 +2,208 @@
 agents/orchestrator.py — LangGraph 工作流编排
 
 多 Agent 协作工作流（规则编排，LLM 待接入）：
-  check_data → (update_data?) → macro_regime → run_scan → risk_filter
-  → await_approval → generate_orders → notify → log_result
+  check_data → (update_data?) → macro_regime → industry_rotation → run_scan
+  → risk_filter → await_approval → generate_orders → notify → log_result
 
-阶段一（分层决策骨架）：
-  - 新增 macro_regime 节点（L1 宏观场景层），输出 regime/risk_mode，构建 decision_context
-  - route_after_macro 条件边按 risk_mode 路由（阶段二扩展为不同行业筛选路径）
-  - log_result 增加结构化决策日志 decision_log_<date>.json
+阶段一：L1 宏观场景层（macro_regime）
+阶段二：L2 行业轮动层（industry_rotation，约束穿透引擎层）
+阶段三：Checkpoint 断点续跑 + 决策日志增强（OB-R1）+ 节点审计（OB-R5）
 """
 import logging
 from datetime import datetime
+from pathlib import Path
 from typing import TypedDict, Optional
 
 from langgraph.graph import StateGraph, END
 
 logger = logging.getLogger(__name__)
+
+# ── 阶段三：Checkpoint 工厂（OB-R4/AC15） ───────────────────
+
+try:
+    from langgraph.checkpoint.sqlite import SqliteSaver
+except ImportError:
+    SqliteSaver = None  # type: ignore
+
+_DEFAULT_CHECKPOINT_PATH = str(
+    Path(__file__).parent.parent / "data" / "cache" / "checkpoints" / "workflow.sqlite"
+)
+
+
+def make_checkpointer(db_path: str | None = _DEFAULT_CHECKPOINT_PATH):
+    """
+    创建 LangGraph checkpointer（OB-R4）。
+
+    优先 SqliteSaver（持久化跨进程恢复）；依赖缺失时降级 InMemorySaver（AC15）。
+    db_path=None 返回 None（不启用 checkpoint，向后兼容 AC14）。
+    """
+    if db_path is None:
+        return None
+
+    if SqliteSaver is not None:
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        conn = __import__("sqlite3").connect(db_path, check_same_thread=False)
+        return SqliteSaver(conn)
+    else:
+        # 降级：InMemorySaver（仅进程内，不跨进程恢复）
+        logger.warning(
+            "langgraph-checkpoint-sqlite 未安装，降级为 InMemorySaver（无法跨进程恢复）。"
+            "安装：pip install langgraph-checkpoint-sqlite"
+        )
+        from langgraph.checkpoint.memory import InMemorySaver
+        return InMemorySaver()
+
+
+# ── 阶段三：节点审计 helper（OB-R5） ────────────────────────
+
+def _to_native(obj):
+    """
+    递归将 numpy 类型转为 Python 原生类型（OB-R4）。
+
+    checkpoint 持久化用 msgpack 序列化，numpy.float64/int64 不可序列化，
+    L2 行业评分、宏观指标等来自 pandas 的数值需转换，否则 checkpoint 报错。
+    """
+    if isinstance(obj, dict):
+        return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_to_native(v) for v in obj]
+    # numpy 标量有 .item() 方法
+    if hasattr(obj, "item") and not isinstance(obj, (str, bytes)):
+        try:
+            return obj.item()
+        except (ValueError, AttributeError):
+            return obj
+    return obj
+
+
+def _audit(state: "WorkflowState", node: str,
+           input_summary: dict, output_summary: dict) -> None:
+    """向 state['node_audit'] 追加节点输入/输出摘要快照（OB-R5）。"""
+    if "node_audit" not in state:
+        state["node_audit"] = []
+    state["node_audit"].append({
+        "node": node,
+        "timestamp": datetime.now().isoformat(),
+        "input_summary": _to_native(input_summary),
+        "output_summary": _to_native(output_summary),
+    })
+
+
+# ── 阶段三：日志辅助函数（OB-R1） ───────────────────────────
+
+# 申万行业代码 → 行业名缓存（惰性加载）
+_SW_CODE_TO_NAME: dict | None = None
+
+
+def _get_sw_code_to_name() -> dict:
+    """从 industry_sw 获取行业代码→名称映射（惰性加载）。"""
+    global _SW_CODE_TO_NAME
+    if _SW_CODE_TO_NAME is None:
+        try:
+            from data import store_meta
+            ind_df = store_meta.load("industry_sw")
+            if ind_df is not None and not ind_df.empty:
+                _SW_CODE_TO_NAME = (
+                    ind_df[["industry_code", "industry_name"]]
+                    .drop_duplicates("industry_code")
+                    .set_index("industry_code")["industry_name"]
+                    .astype(str)
+                    .to_dict()
+                )
+            else:
+                _SW_CODE_TO_NAME = {}
+        except Exception:
+            _SW_CODE_TO_NAME = {}
+    return _SW_CODE_TO_NAME
+
+
+_SW_CODE_TO_STOCK: dict | None = None  # code → industry_name
+
+
+def _get_stock_to_industry() -> dict:
+    """返回 stock_code → industry_name 映射（惰性加载）。"""
+    global _SW_CODE_TO_STOCK
+    if _SW_CODE_TO_STOCK is None:
+        try:
+            from data import store_meta
+            ind_df = store_meta.load("industry_sw")
+            if ind_df is not None and not ind_df.empty:
+                _SW_CODE_TO_STOCK = (
+                    ind_df[["stock_code", "industry_name"]]
+                    .drop_duplicates("stock_code")
+                    .set_index("stock_code")["industry_name"]
+                    .astype(str)
+                    .to_dict()
+                )
+            else:
+                _SW_CODE_TO_STOCK = {}
+        except Exception:
+            _SW_CODE_TO_STOCK = {}
+    return _SW_CODE_TO_STOCK
+
+
+def _extract_industry_scores(decision_context: dict) -> list:
+    """
+    从 decision_context 提取 L2 行业评分明细列表（OB-R1 industry_scores）。
+
+    decision_context["industry_weights"] 是 {code: score}，
+    用 industry_sw 查行业名，返回按 score 降序的列表。
+    """
+    weights = decision_context.get("industry_weights") or {}
+    if not weights:
+        return []
+    code_to_name = _get_sw_code_to_name()
+    scores = [
+        {
+            "industry_code": code,
+            "industry_name": code_to_name.get(str(code), str(code)),
+            "score": round(float(score), 1),
+        }
+        for code, score in weights.items()
+    ]
+    scores.sort(key=lambda x: x["score"], reverse=True)
+    return scores
+
+
+# 内置策略 name → key 映射（用于 by_strategy 统计）
+_STRATEGY_NAMES = {
+    "均线金叉": "ma_cross",
+    "MACD+RSI共振": "macd_rsi",
+    "量价突破": "vol_price_breakout",
+    "ETF动量轮动": "etf_momentum",
+    "基本面价值": "fundamental_value",
+    "资金流信号": "money_flow",
+}
+
+
+def _build_scan_summary(scan_results: dict) -> dict:
+    """
+    构建扫描摘要（OB-R1 scan_results_summary），含 by_industry/by_strategy 分组统计。
+
+    by_industry：信号 code join industry_sw 后按行业名计数。
+    by_strategy：信号 reason 文本匹配策略 name 后计数（粗粒度，一条信号可多策略）。
+    """
+    signals = scan_results.get("signals") or []
+
+    by_strategy: dict[str, int] = {}
+    for name in _STRATEGY_NAMES:
+        cnt = sum(1 for s in signals if name in s.get("reason", ""))
+        if cnt:
+            by_strategy[name] = cnt
+
+    stock_to_industry = _get_stock_to_industry()
+    by_industry: dict[str, int] = {}
+    for s in signals:
+        ind = stock_to_industry.get(str(s.get("code", "")), "")
+        if ind:
+            by_industry[ind] = by_industry.get(ind, 0) + 1
+
+    return {
+        "total_signals": scan_results.get("count", len(signals)),
+        "elapsed": scan_results.get("elapsed", 0),
+        "by_industry": by_industry,
+        "by_strategy": by_strategy,
+    }
 
 
 class WorkflowState(TypedDict, total=False):
@@ -33,6 +220,8 @@ class WorkflowState(TypedDict, total=False):
     # 阶段一新增字段（AC10: total=False 确保向后兼容）
     macro_regime: dict          # L1 宏观层输出
     decision_context: dict      # 逐层收窄的约束上下文
+    # 阶段三新增字段（OB-R5）
+    node_audit: list[dict]      # 每层节点 input/output 审计快照
 
 
 # ── 节点实现 ────────────────────────────────────────────────
@@ -50,10 +239,10 @@ def macro_regime_node(state: WorkflowState) -> WorkflowState:
     try:
         # 评估宏观环境
         env = evaluate_market_condition()
-        state["macro_regime"] = env
+        state["macro_regime"] = _to_native(env)
         
         # 构建决策上下文
-        decision_context = build_decision_context(env)
+        decision_context = _to_native(build_decision_context(env))
         state["decision_context"] = decision_context
         
         # 根据 decision_context 更新策略选择（覆盖传入的 strategy_keys）
@@ -64,11 +253,24 @@ def macro_regime_node(state: WorkflowState) -> WorkflowState:
             f"confidence={env['confidence']:.2f} strategies={len(decision_context['strategy_keys'])}"
         )
         logger.info(f"Macro regime: {env['regime']}, risk_mode: {env['risk_mode']}, reason: {env['trigger_reason']}")
-        
+
+        # 阶段三：节点审计（OB-R5）
+        _audit(
+            state, "macro_regime",
+            input_summary={"date": state.get("date")},
+            output_summary={
+                "regime": env.get("regime"),
+                "risk_mode": env.get("risk_mode"),
+                "confidence": env.get("confidence"),
+                "trigger_reason": env.get("trigger_reason"),
+                "strategy_keys": decision_context.get("strategy_keys"),
+            },
+        )
+
     except Exception as e:
         logger.error(f"Macro regime evaluation failed: {e}")
         state["error"] = f"宏观评估失败: {str(e)}"
-    
+
     return state
 
 
@@ -90,11 +292,11 @@ def industry_rotation_node(state: WorkflowState) -> WorkflowState:
         result = evaluate_industry_rotation(risk_mode=risk_mode, date=state.get("date"))
 
         allowed = result.get("allowed_industries", [])
-        # 回填 decision_context
+        # 回填 decision_context（阶段三：sanitize numpy 类型，OB-R4）
         ctx["allowed_industries"] = allowed
-        ctx["industry_weights"] = {
+        ctx["industry_weights"] = _to_native({
             s["industry_code"]: s["score"] for s in result.get("industry_scores", [])
-        }
+        })
         state["decision_context"] = ctx
 
         if result.get("fallback"):
@@ -108,6 +310,20 @@ def industry_rotation_node(state: WorkflowState) -> WorkflowState:
             )
         logger.info(f"L2 industry pool: {len(allowed)} industries (risk_mode={risk_mode})")
 
+        # 阶段三：节点审计（OB-R5）
+        _audit(
+            state, "industry_rotation",
+            input_summary={"risk_mode": risk_mode, "date": state.get("date")},
+            output_summary={
+                "allowed_industries_count": len(allowed),
+                "allowed_industries": allowed,
+                "fallback": result.get("fallback", False),
+                "top_industries": [
+                    s["industry_name"] for s in result.get("industry_scores", [])
+                ][:5],
+            },
+        )
+
     except Exception as e:
         logger.error(f"Industry rotation failed: {e}")
         # 容错：失败时不阻断流程，退化为全市场
@@ -115,6 +331,11 @@ def industry_rotation_node(state: WorkflowState) -> WorkflowState:
         ctx["allowed_industries"] = []
         state["decision_context"] = ctx
         state["log"].append(f"[industry_rotation] 异常，退化为全市场: {e}")
+        _audit(
+            state, "industry_rotation",
+            input_summary={"risk_mode": state.get("decision_context", {}).get("risk_mode")},
+            output_summary={"error": str(e), "fallback": True},
+        )
 
     return state
 
@@ -128,6 +349,17 @@ def check_data_node(state: WorkflowState) -> WorkflowState:
     state["log"].append(f"[check_data] domains={len(result['domains'])} stale={result['stale']}")
     if not result["success"]:
         state["error"] = result.get("error", "数据检查失败")
+
+    # 阶段三：节点审计（OB-R5）
+    _audit(
+        state, "check_data",
+        input_summary={"date": state.get("date")},
+        output_summary={
+            "domains_count": len(result.get("domains", {})),
+            "stale": result.get("stale", []),
+            "success": result.get("success", False),
+        },
+    )
     return state
 
 
@@ -151,10 +383,25 @@ def scan_node(state: WorkflowState) -> WorkflowState:
         strategies=state.get("strategy_keys"),
         industry_filter=allowed_industries,
     )
-    state["scan_results"] = result
+    # 阶段三：sanitize numpy 类型（OB-R4）
+    state["scan_results"] = _to_native(result)
     state["log"].append(f"[scan] {result.get('count', 0)} signals in {result.get('elapsed', 0)}s")
     if not result["success"]:
         state["error"] = result.get("error", "扫描失败")
+
+    # 阶段三：节点审计（OB-R5）
+    _audit(
+        state, "run_scan",
+        input_summary={
+            "strategy_keys": state.get("strategy_keys"),
+            "industry_filter_count": len(allowed_industries) if allowed_industries else 0,
+        },
+        output_summary={
+            "count": result.get("count", 0),
+            "elapsed": result.get("elapsed", 0),
+            "success": result.get("success", False),
+        },
+    )
     return state
 
 
@@ -163,9 +410,19 @@ def risk_filter_node(state: WorkflowState) -> WorkflowState:
     from agent_tools import filter_signals_by_risk
     signals = state.get("scan_results", {}).get("signals", [])
     result = filter_signals_by_risk(signals)
-    state["filtered_signals"] = result.get("passed", [])
+    state["filtered_signals"] = _to_native(result.get("passed", []))
     state["log"].append(
         f"[risk_filter] passed={len(result.get('passed', []))} blocked={result.get('blocked_count', 0)}"
+    )
+
+    # 阶段三：节点审计（OB-R5）
+    _audit(
+        state, "risk_filter",
+        input_summary={"input_signals": len(signals)},
+        output_summary={
+            "passed": len(result.get("passed", [])),
+            "blocked_count": result.get("blocked_count", 0),
+        },
     )
     return state
 
@@ -203,7 +460,12 @@ def notify_node(state: WorkflowState) -> WorkflowState:
 
 
 def log_result_node(state: WorkflowState) -> WorkflowState:
-    """持久化运行日志（阶段一：增加 macro_regime / decision_context 结构化记录）"""
+    """
+    持久化运行日志。
+
+    阶段一：增加 macro_regime / decision_context 结构化记录
+    阶段三：补全 OB-R1 schema（industry_scores 明细、scan_summary 分组、node_audit）
+    """
     import json
     from pathlib import Path
     log_dir = Path(__file__).parent.parent / "data" / "processed"
@@ -221,16 +483,19 @@ def log_result_node(state: WorkflowState) -> WorkflowState:
             "error": state.get("error"),
         }, f, ensure_ascii=False, indent=2)
 
-    # 阶段一新增：结构化决策日志 decision_log_<date>.json（符合 OB-R1）
+    # 阶段三：完整结构化决策日志 decision_log_<date>.json（OB-R1）
     scan_results = state.get("scan_results", {})
+    decision_context = state.get("decision_context", {})
     decision_log = {
         "date": date_str,
         "macro_regime": state.get("macro_regime", {}),
-        "decision_context": state.get("decision_context", {}),
-        "scan_results_summary": {
-            "total_signals": scan_results.get("count", 0),
-            "elapsed": scan_results.get("elapsed", 0),
-        },
+        "decision_context": decision_context,
+        # 阶段三补全：L2 行业评分明细
+        "industry_scores": _extract_industry_scores(decision_context),
+        # 阶段三补全：扫描摘要含 by_industry/by_strategy 分组
+        "scan_results_summary": _build_scan_summary(scan_results),
+        # 阶段三新增：每层节点审计快照（OB-R5）
+        "node_audit": state.get("node_audit", []),
         "filtered_signals_count": len(state.get("filtered_signals", [])),
         "orders_count": len(state.get("orders", [])),
         "logs": state.get("log", []),
@@ -245,8 +510,13 @@ def log_result_node(state: WorkflowState) -> WorkflowState:
 
 # ── 构建图 ──────────────────────────────────────────────────
 
-def build_workflow() -> StateGraph:
-    """构建 Orchestrator 工作流，返回编译后的 graph"""
+def build_workflow(checkpointer=None) -> StateGraph:
+    """
+    构建 Orchestrator 工作流，返回编译后的 graph。
+
+    :param checkpointer: 可选 LangGraph checkpointer（阶段三 OB-R4）。
+                         None 时不启用 checkpoint（向后兼容 AC14）。
+    """
     graph = StateGraph(WorkflowState)
 
     # 阶段一：增加 macro_regime 节点；阶段二：增加 industry_rotation 节点
@@ -317,15 +587,20 @@ def build_workflow() -> StateGraph:
     graph.add_edge("notify", "log_result")
     graph.add_edge("log_result", END)
 
-    return graph.compile()
+    # 阶段三：编译时注入 checkpointer（OB-R4）
+    return graph.compile(checkpointer=checkpointer)
 
 
 def run_daily_workflow(date: str = None, asset_types: list = None,
-                       strategy_keys: list = None) -> dict:
+                       strategy_keys: list = None,
+                       enable_checkpoint: bool = False) -> dict:
     """
     一键执行每日完整流程。
 
     阶段一升级：返回包含 regime / risk_mode 信息。
+    阶段三升级：可选 checkpoint 断点续跑（OB-R4）。
+
+    :param enable_checkpoint: 启用 checkpoint 后，崩溃可用相同 thread_id（=date）重跑恢复。
 
     Returns:
         {
@@ -338,15 +613,23 @@ def run_daily_workflow(date: str = None, asset_types: list = None,
             "risk_mode": str,        # 阶段一新增
         }
     """
-    wf = build_workflow()
+    run_date = date or datetime.now().strftime("%Y-%m-%d")
+
+    # 阶段三：按需启用 checkpoint
+    checkpointer = make_checkpointer() if enable_checkpoint else None
+    wf = build_workflow(checkpointer=checkpointer)
+    invoke_config = (
+        {"configurable": {"thread_id": run_date}} if enable_checkpoint else None
+    )
+
     state: WorkflowState = {
-        "date": date or datetime.now().strftime("%Y-%m-%d"),
+        "date": run_date,
         "asset_types": asset_types or ["stock"],
         "strategy_keys": strategy_keys,  # 会被 macro_regime_node 覆盖
         "log": [],
     }
     try:
-        final = wf.invoke(state)
+        final = wf.invoke(state, config=invoke_config) if invoke_config else wf.invoke(state)
         macro = final.get("macro_regime", {})
         return {
             "success": not final.get("error"),

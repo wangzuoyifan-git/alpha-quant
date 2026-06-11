@@ -52,6 +52,8 @@
 | `tests/test_agent_tools.py` | agent_tools 18 个单元测试（data/strategy/trade） | 已有，全通过 |
 | **`tests/test_macro_regime.py`** | **L1 宏观层分层决策测试（阶段一新增）** | **✅ 12 passed, 1 skipped** |
 | **`tests/test_industry_rotation.py`** | **L2 行业轮动层 + scanner 行业约束穿透（阶段二新增）** | **✅ 8 passed** |
+| **`tests/test_checkpoint_recovery.py`** | **L3 阶段三 Checkpoint 断点续跑（OB-R4/AC14/AC15）** | **✅ 9 passed** |
+| **`tests/test_decision_log_enhanced.py`** | **L3 阶段三决策日志增强 + 节点审计（OB-R1/OB-R5）** | **✅ 9 passed** |
 
 ### 2.1 分层决策测试覆盖（2026-06-11 新增）
 
@@ -89,6 +91,42 @@
 | `TestRunScanIndustryFilter` | `test_run_scan_accepts_industry_filter` | L2-R4 Tool 层透传 | ✅ 通过 |
 
 **关键验证（真实数据）**：扫描标的池从 4951 只收窄到 1704 只（defensive 7 个行业，34.4%），证明约束在 `scanner._get_filtered_stock_list` 标的池构建阶段就生效，而非扫描后过滤。
+
+### 2.3 阶段三：可靠性与可观测加固测试覆盖（2026-06-11 新增）
+
+`tests/test_checkpoint_recovery.py` 对应 `docs/requirements.md` 8.8b 节（NT-L3-01~03）：
+
+| 测试类 | 测试用例 | 覆盖需求 | 状态 |
+|---|---|---|---|
+| `TestCheckpointerFactory` | `test_make_checkpointer_sqlite_available` | OB-R4 SqliteSaver 创建 | ✅ 通过 |
+| | `test_make_checkpointer_fallback_on_import_error` | AC15 降级 InMemorySaver | ✅ 通过 |
+| | `test_make_checkpointer_none_returns_none` | OB-R4 None 不启用 | ✅ 通过 |
+| `TestBuildWorkflowBackwardCompat` | `test_build_workflow_no_args` | AC14 无参向后兼容 | ✅ 通过 |
+| | `test_build_workflow_checkpointer_none` | AC14 显式 None | ✅ 通过 |
+| | `test_build_workflow_with_checkpointer` | OB-R4 注入 checkpointer | ✅ 通过 |
+| `TestCheckpointRecovery` | `test_checkpoint_saves_state_between_invocations` | OB-R4 状态持久化 | ✅ 通过 |
+| | `test_checkpoint_recovery_after_node_failure` | OB-R4 断点恢复（核心验收，mock 节点失败重试） | ✅ 通过 |
+| `TestCheckpointStorageLocation` | `test_default_checkpoint_path_in_cache` | OB-R4 存储位置 | ✅ 通过 |
+
+`tests/test_decision_log_enhanced.py` 对应 `docs/requirements.md` 8.8b 节（NT-L3-04~06）：
+
+| 测试类 | 测试用例 | 覆盖需求 | 状态 |
+|---|---|---|---|
+| `TestIndustryScoresDetail` | `test_industry_scores_from_decision_context` | OB-R1 industry_scores 明细 | ✅ 通过 |
+| | `test_industry_scores_fallback_empty` | OB-R1 空数据容错 | ✅ 通过 |
+| `TestScanResultsSummary` | `test_scan_summary_by_industry_and_strategy` | OB-R1 by_industry/by_strategy | ✅ 通过 |
+| | `test_scan_summary_empty_signals` | OB-R1 空信号容错 | ✅ 通过 |
+| | `test_scan_summary_industry_join` | OB-R1 行业 join | ✅ 通过 |
+| `TestNodeAudit` | `test_audit_helper_structure` | OB-R5 审计快照结构 | ✅ 通过 |
+| | `test_audit_multiple_nodes` | OB-R5 多节点累积 | ✅ 通过 |
+| | `test_audit_persisted_in_decision_log` | OB-R5 审计落盘 | ✅ 通过 |
+| `TestDecisionLogFullIntegration` | `test_decision_log_schema_complete` | OB-R1 完整 schema | ✅ 通过 |
+
+**关键设计说明**：
+- checkpoint 持久化用 msgpack，pandas 产生的 numpy.float64 不可序列化，
+  实现中用 `_to_native()` 在状态入 state 前递归转换（L2 行业权重、扫描结果、宏观指标）
+- `test_checkpoint_recovery_after_node_failure` 用 monkeypatch 让 check_data_node
+  首次抛异常、第二次成功，验证相同 thread_id 重跑能恢复（该用例会跑一次真实扫描，约 50s）
 
 ---
 

@@ -433,27 +433,38 @@ LLM = {
 
 ---
 
-### 阶段三（P1）：可靠性与可观测加固
+### 阶段三（P1）：可靠性与可观测加固 ✅ 已完成
 
 **目标**：分层链路变长，需要断点续跑和决策留痕。
 
 **关键交付：**
 
-1. **LangGraph Checkpoint**（借鉴 TradingAgents）
-   - 给 `build_workflow()` 加 `checkpointer`（SQLite）
-   - 崩溃后从最后成功节点恢复
+1. **LangGraph Checkpoint**（借鉴 TradingAgents）✅
+   - `build_workflow(checkpointer=...)` 接受可选 checkpointer（默认 None，向后兼容 AC14）
+   - `make_checkpointer()` 工厂：优先 `SqliteSaver`（落盘 `data/cache/checkpoints/workflow.sqlite`），
+     依赖缺失时降级 `InMemorySaver`（AC15）
+   - `run_daily_workflow(enable_checkpoint=True)` 用 `thread_id=<date>` 标识运行
+   - 崩溃后用相同 thread_id 重跑从最后成功节点恢复
 
-2. **决策日志结构化**
-   - 扩展 `log_result_node`（orchestrator.py:112），按 requirements.md OB-R1 输出结构化日志
-   - 每层决策（regime/行业池/信号）按 schema 落盘
+2. **决策日志结构化** ✅
+   - `log_result_node` 按 OB-R1 完整 schema 输出
+   - `industry_scores`：从 decision_context 回写 L2 评分明细
+   - `scan_results_summary.by_industry / by_strategy`：对扫描信号按行业/策略分组计数
 
-3. **每层输入输出审计**
-   - 每个节点的决策理由持久化
+3. **每层输入输出审计** ✅
+   - 新增 `_audit(state, node, input_summary, output_summary)` helper
+   - 每个决策节点向 `state["node_audit"]` 追加 input/output 摘要快照（OB-R5）
+   - node_audit 随 decision_log 落盘
+
+**实现位置：**
+- `agents/orchestrator.py`：`make_checkpointer()` / `_audit()` / 各节点审计埋点 / `log_result_node` 增强
+- `tests/test_checkpoint_recovery.py`：NT-L3-01/02/03
+- `tests/test_decision_log_enhanced.py`：NT-L3-04/05/06
 
 **验收标准：**
 - ✅ 人为中断后重跑能从断点恢复
 - ✅ 决策日志可追溯每层的判断依据
-- ✅ `data/processed/decision_log_YYYYMMDD.json` 结构完整
+- ✅ `data/processed/decision_log_YYYYMMDD.json` 结构完整（含 industry_scores/by_industry/by_strategy/node_audit）
 
 ---
 
