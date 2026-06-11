@@ -54,6 +54,8 @@ class TestMacroRegimeOutput:
             return None
 
         monkeypatch.setattr("data.store_macro.load", mock_load_macro)
+        # 隔离 market 指数读取（避免依赖本地数据）
+        monkeypatch.setattr("data.store.load", lambda *a, **k: None)
 
         result = evaluate_market_condition()
 
@@ -80,12 +82,82 @@ class TestMacroRegimeOutput:
             return None
 
         monkeypatch.setattr("data.store_macro.load", mock_load_macro)
+        monkeypatch.setattr("data.store.load", lambda *a, **k: None)
 
         result = evaluate_market_condition()
 
         if "regime" in result:
             assert result["risk_mode"] == "aggressive", \
                 f"VIX=15, PMI=53 应触发 aggressive，实际: {result['risk_mode']}"
+
+    def test_regime_volatile_by_vix_std(self, monkeypatch):
+        """测试 volatile 触发：VIX 20日标准差 > 5（L1-R2 修正后逻辑）"""
+        import pandas as pd
+        import numpy as np
+        from agents.strategy_agent import evaluate_market_condition
+
+        # 构造 20 条 VIX 数据，标准差 > 5（在 18~32 大幅波动）
+        vix_values = [18, 30, 19, 31, 20, 32, 18, 30, 19, 31,
+                      20, 32, 18, 30, 19, 31, 20, 32, 18, 25]
+        vix_df = pd.DataFrame({"close": vix_values})
+
+        def mock_load_macro(key):
+            if key == "vix":
+                return vix_df
+            elif key == "pmi":
+                return pd.DataFrame([{"制造业PMI": 50.0}])  # 中性 PMI，不触发其他 regime
+            elif key == "bond_yield":
+                return pd.DataFrame([{"cn_10y": 2.5}])
+            elif key == "m2":
+                return pd.DataFrame([{"M2同比": 8.5}])
+            return None
+
+        monkeypatch.setattr("data.store_macro.load", mock_load_macro)
+        monkeypatch.setattr("data.store.load", lambda *a, **k: None)
+
+        result = evaluate_market_condition()
+
+        # 最新 VIX=25（不触发 crisis/risk_off），但 20日标准差 > 5 应触发 volatile
+        assert result["indicators"].get("vix_std_20") is not None, "应计算 vix_std_20"
+        assert result["indicators"]["vix_std_20"] > 5, "标准差应 > 5"
+        assert result["regime"] == "volatile", \
+            f"VIX标准差>5 应触发 volatile，实际: {result['regime']}"
+        assert result["risk_mode"] == "defensive"
+
+    def test_regime_crisis_by_index_drop(self, monkeypatch):
+        """测试 crisis 触发：A股指数单日跌幅 > 5%（L1-R2 修正后逻辑）"""
+        import pandas as pd
+        from agents.strategy_agent import evaluate_market_condition
+
+        def mock_load_macro(key):
+            if key == "vix":
+                return pd.DataFrame([{"close": 22.0}])  # VIX 不到 crisis 阈值
+            elif key == "pmi":
+                return pd.DataFrame([{"制造业PMI": 50.0}])
+            elif key == "bond_yield":
+                return pd.DataFrame([{"cn_10y": 2.5}])
+            elif key == "m2":
+                return pd.DataFrame([{"M2同比": 8.5}])
+            return None
+
+        # Mock 沪深300 单日跌幅 -6%（close=3760, preclose=4000）
+        def mock_load_market(code, *a, **k):
+            if code == "000300":
+                return pd.DataFrame([{"close": 3760.0, "preclose": 4000.0}])
+            return None
+
+        monkeypatch.setattr("data.store_macro.load", mock_load_macro)
+        monkeypatch.setattr("data.store.load", mock_load_market)
+
+        result = evaluate_market_condition()
+
+        # VIX=22 本身不触发 crisis，但 A股跌幅 -6% 应触发 crisis
+        assert result["indicators"].get("index_drop_pct") is not None, "应计算 index_drop_pct"
+        assert result["indicators"]["index_drop_pct"] < -5, "跌幅应 < -5%"
+        assert result["regime"] == "crisis", \
+            f"A股跌幅>5% 应触发 crisis，实际: {result['regime']}"
+        assert result["risk_mode"] == "defensive"
+        assert result["confidence"] == 0.9
 
 
 class TestStrategySelection:

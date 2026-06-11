@@ -783,6 +783,14 @@ decision_context = {
 }
 ```
 
+**max_position 按 risk_mode 取值（实现于 `strategy_agent._MAX_POSITION_BY_MODE`）：**
+
+| risk_mode | max_position | 说明 |
+|---|---|---|
+| defensive | 0.3 | 防御模式，总仓位上限 30% |
+| balanced | 0.7 | 均衡模式，总仓位上限 70% |
+| aggressive | 1.0 | 进攻模式，可满仓 |
+
 **L1-R4 — 条件边路由需求**
 
 仿照现有 `route_after_check`（orchestrator.py:148），新增 `route_after_macro`：

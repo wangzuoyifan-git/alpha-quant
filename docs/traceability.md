@@ -226,7 +226,7 @@
 |---|---|---|---|---|---|---|
 | **L1 宏观场景层** |
 | L1-R1 | evaluate_market_condition 结构化输出（regime/risk_mode/confidence/trigger_reason） | NT-L1-01 | — | — | — | ✅ L1 |
-| L1-R2 | Regime 到 risk_mode 映射规则（5 种 regime 正确映射） | NT-L1-01b/NT-L1-01c | — | — | — | ✅ L1 |
+| L1-R2 | Regime 到 risk_mode 映射规则（5 种 regime 正确映射） | NT-L1-01b/c/d/e | — | — | — | ✅ L1 |
 | L1-R3 | decision_context 结构定义（7 个必须字段） | NT-L1-03a | — | — | — | ✅ L1 |
 | L1-R4 | 条件边路由 route_after_macro 逻辑 | NT-L1-02c | — | — | — | ✅ L1 |
 | L1-R5 | 阶段演进约束（规则→LLM 辅助→HMM 融合） | — | — | — | — | ❌ 无覆盖（设计约束，非功能性需求） |
@@ -247,6 +247,8 @@
 - `NT-L1-01`：`TestMacroRegimeOutput::test_evaluate_market_condition_structure` — 结构化输出验证
 - `NT-L1-01b`：`TestMacroRegimeOutput::test_regime_defensive_scenario` — 防御模式映射（VIX=35, PMI=47）
 - `NT-L1-01c`：`TestMacroRegimeOutput::test_regime_aggressive_scenario` — 进攻模式映射（VIX=15, PMI=53）
+- `NT-L1-01d`：`TestMacroRegimeOutput::test_regime_volatile_by_vix_std` — volatile（VIX 20日标准差>5）
+- `NT-L1-01e`：`TestMacroRegimeOutput::test_regime_crisis_by_index_drop` — crisis（A股单日跌幅>5%）
 - `NT-L1-02a`：`TestStrategySelection::test_select_strategies_defensive` — 防御策略组合
 - `NT-L1-02b`：`TestStrategySelection::test_select_strategies_aggressive` — 进攻策略组合
 - `NT-L1-02c`：`TestStrategySelection::test_route_after_macro_logic` — 路由逻辑验证

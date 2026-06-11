@@ -50,7 +50,7 @@
 | `tests/test_signals.py` | save_signals/load_signals 往返一致性 | 已有 |
 | `tests/test_downloader.py` | `_is_trading_day`、日期格式、DEFAULT_START | 已有，仅覆盖工具函数 |
 | `tests/test_agent_tools.py` | agent_tools 18 个单元测试（data/strategy/trade） | 已有，全通过 |
-| **`tests/test_macro_regime.py`** | **L1 宏观层分层决策测试（阶段一新增）** | **✅ 10 passed, 1 skipped** |
+| **`tests/test_macro_regime.py`** | **L1 宏观层分层决策测试（阶段一新增）** | **✅ 12 passed, 1 skipped** |
 
 ### 2.1 分层决策测试覆盖（2026-06-11 新增）
 
@@ -61,6 +61,8 @@
 | `TestMacroRegimeOutput` | `test_evaluate_market_condition_structure` | L1-R1 结构化输出 | ✅ 通过 |
 | | `test_regime_defensive_scenario` | L1-R2 防御模式映射 | ✅ 通过 |
 | | `test_regime_aggressive_scenario` | L1-R2 进攻模式映射 | ✅ 通过 |
+| | `test_regime_volatile_by_vix_std` | L1-R2 volatile（VIX 20日标准差>5） | ✅ 通过 |
+| | `test_regime_crisis_by_index_drop` | L1-R2 crisis（A股单日跌幅>5%） | ✅ 通过 |
 | `TestStrategySelection` | `test_select_strategies_defensive` | L3-R1 策略选择 | ✅ 通过 |
 | | `test_select_strategies_aggressive` | L3-R1 策略选择 | ✅ 通过 |
 | | `test_route_after_macro_logic` | L1-R4 条件边路由 | ✅ 通过 |

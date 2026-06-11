@@ -51,8 +51,31 @@ def evaluate_market_condition() -> dict:
 
     # VIX
     vix = load_macro("vix")
+    vix_std_20 = None
     if vix is not None and not vix.empty and "close" in vix.columns:
         indicators["vix"] = round(float(vix.iloc[-1]["close"]), 1)
+        # L1-R2: VIX 20 日标准差（用于 volatile 判定）
+        if len(vix) >= 20:
+            vix_std_20 = round(float(vix["close"].tail(20).std()), 2)
+            indicators["vix_std_20"] = vix_std_20
+
+    # A 股指数单日跌幅（沪深300，用于 crisis 判定）
+    index_drop = None
+    try:
+        from data.store import load as load_market
+        idx = load_market("000300", asset_type="index")
+        if idx is not None and not idx.empty and "close" in idx.columns:
+            last = idx.iloc[-1]
+            if "preclose" in idx.columns and last["preclose"] and last["preclose"] > 0:
+                index_drop = round((float(last["close"]) / float(last["preclose"]) - 1) * 100, 2)
+            elif len(idx) >= 2:
+                prev_close = float(idx.iloc[-2]["close"])
+                if prev_close > 0:
+                    index_drop = round((float(last["close"]) / prev_close - 1) * 100, 2)
+            if index_drop is not None:
+                indicators["index_drop_pct"] = index_drop
+    except Exception as e:
+        logger.debug(f"读取 A 股指数失败，crisis 仅用 VIX 判定: {e}")
 
     # ── 阶段一：结构化 regime 判定（规则版） ──
 
@@ -66,32 +89,39 @@ def evaluate_market_condition() -> dict:
     trigger_reason = "默认震荡市"
 
     # 按 requirements.md L1-R2 映射规则
-    if vix_val is not None and vix_val > 40:
+    # crisis: VIX > 40 或 A股单日跌幅 > 5%
+    if (vix_val is not None and vix_val > 40) or (index_drop is not None and index_drop < -5):
         regime = "crisis"
         risk_mode = "defensive"
         confidence = 0.9
-        trigger_reason = f"VIX={vix_val} > 40，金融危机级别"
+        if index_drop is not None and index_drop < -5:
+            trigger_reason = f"沪深300单日跌幅={index_drop}% < -5%，金融危机级别"
+        else:
+            trigger_reason = f"VIX={vix_val} > 40，金融危机级别"
+    # risk_off: VIX > 30
     elif vix_val is not None and vix_val > 30:
         regime = "risk_off"
         risk_mode = "defensive"
         confidence = 0.8
         trigger_reason = f"VIX={vix_val} > 30，风险收缩"
+    # risk_off: PMI < 48
     elif pmi_val is not None and pmi_val < 48:
         regime = "risk_off"
         risk_mode = "defensive"
         confidence = 0.7
         trigger_reason = f"PMI={pmi_val} < 48，经济收缩"
+    # risk_on: PMI > 52 且 VIX < 20
     elif pmi_val is not None and pmi_val > 52 and (vix_val is None or vix_val < 20):
         regime = "risk_on"
         risk_mode = "aggressive"
         confidence = 0.75
         trigger_reason = f"PMI={pmi_val} > 52 且 VIX={vix_val} < 20，风险扩张"
-    elif vix_val is not None and 20 <= vix_val <= 30:
-        # 检查 VIX 波动率（简化：此处暂不计算历史标准差，后续可扩展）
+    # volatile: VIX 20 日标准差 > 5
+    elif vix_std_20 is not None and vix_std_20 > 5:
         regime = "volatile"
         risk_mode = "defensive"
         confidence = 0.6
-        trigger_reason = f"VIX={vix_val} 在 20~30 区间，高波动"
+        trigger_reason = f"VIX 20日标准差={vix_std_20} > 5，高波动"
     else:
         regime = "balanced"
         risk_mode = "balanced"
