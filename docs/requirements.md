@@ -808,28 +808,43 @@ decision_context = {
 **L2-R1 — 行业筛选数据源需求**
 
 必须使用以下数据：
-- Tushare `moneyflow_ind`（行业资金流，已有 `data/tushare/moneyflow_ind.parquet`）
-- 季频财务数据聚合到行业（`data/fundamental/` 已有，需增加行业聚合逻辑）
-- 申万行业分类（`data/meta/industry_sw.parquet` 已有）
+- Tushare `moneyflow_ind`（行业资金流，按日期分片 `data/tushare/moneyflow_ind/{date}.parquet`，已有 583 个交易日，2024-01~2026-06）
+- 申万行业分类（`data/meta/industry_sw.parquet` 已有，31 个申万一级行业，stock_code→industry_code 映射）
+- 季频财务数据（`data/fundamental/` 已有，按 code 分片，阶段二可选接入）
+
+**L2-R1a — 行业分类体系对齐（关键约束）**
+
+实测发现两套行业分类体系不一致，必须处理对齐：
+- `moneyflow_ind`：东财板块体系（1012 个板块，代码如 `BK1036.DC`，含细分和一级板块），字段 `name` 为板块名、`net_amount` 为净流入额（元）
+- `industry_sw`：申万一级体系（31 个行业，代码如 `801010`，名称如"农林牧渔"）
+
+**对齐方案**：用**行业名称精确匹配**——东财板块名包含申万一级同名板块（如"电子""有色金属""通信""银行"等 31 个申万一级行业名均能在东财数据中精确匹配）。L2 取这些同名一级板块的 `net_amount` 做资金流评分，并通过 `industry_sw` 反查申万行业代码输出。
 
 **L2-R2 — 行业评分维度**
 
-| 维度 | 权重（defensive） | 权重（aggressive） | 数据来源 |
-|---|---|---|---|
-| 行业资金流趋势 | 30% | 50% | Tushare moneyflow_ind 近 20 日累计 |
-| 行业收入增速 | 40% | 30% | 财务数据按行业聚合 |
-| 行业利润率 | 30% | 20% | 财务数据按行业聚合 |
+阶段二第一版以资金流为主（数据完备、对齐已验证），财务维度作为可选增强：
+
+| 维度 | 权重（defensive） | 权重（aggressive） | 数据来源 | 阶段二状态 |
+|---|---|---|---|---|
+| 行业资金流趋势 | 60% | 80% | moneyflow_ind 近 N 日累计 net_amount | ✅ 必做 |
+| 行业收入增速 | 25% | 12% | 财务数据按行业聚合 | ⏳ 可选（数据覆盖率不足时跳过） |
+| 行业利润率 | 15% | 8% | 财务数据按行业聚合 | ⏳ 可选 |
+
+> 权重从配置读取，不硬编码（遵循 AC2）。财务维度缺失时，资金流维度权重归一化为 100%。
 
 **L2-R3 — 行业池输出约束**
-- 必须输出 `allowed_industries: list[str]`（申万一级行业代码）
+- 必须输出 `allowed_industries: list[str]`（申万一级行业代码，如 `["801080", "801770"]`）
 - defensive 模式：取评分 Top 5~7 行业
 - aggressive 模式：取评分 Top 8~12 行业
 - balanced 模式：取评分 Top 6~10 行业
+- 数据缺失（moneyflow_ind 无当日数据）时：返回空 `allowed_industries`，L3 退化为全市场扫描（容错，不中断）
 
-**L2-R4 — 扫描范围前置收窄需求（关键）**
-- `run_scan()` 必须新增 `industry_filter: list[str]` 参数
-- 进入扫描前，从全市场标的池筛出仅属于 `allowed_industries` 的标的
-- **禁止全市场扫描后再过滤**，否则失去分层意义
+**L2-R4 — 扫描范围前置收窄需求（关键，必须穿透到引擎层）**
+- `agent_tools/strategy_tools.run_scan()` 新增 `industry_filter: list[str]` 参数
+- `engine/scanner.ScanEngine.scan()` 新增 `industry_filter` 参数
+- `scanner._get_filtered_stock_list()` 在构建标的池时，**join industry_sw 筛出仅属于 allowed_industries 的标的**
+- **约束必须在标的进入并发扫描前生效**，禁止全市场扫描后再过滤（否则失去分层意义，性能也无改善）
+- `industry_filter=None` 时为全市场扫描（向后兼容，遵循 AC13）
 
 ### 8.5 L3 个股选择层需求（阶段一/二）
 

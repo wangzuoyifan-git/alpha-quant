@@ -51,6 +51,7 @@
 | `tests/test_downloader.py` | `_is_trading_day`、日期格式、DEFAULT_START | 已有，仅覆盖工具函数 |
 | `tests/test_agent_tools.py` | agent_tools 18 个单元测试（data/strategy/trade） | 已有，全通过 |
 | **`tests/test_macro_regime.py`** | **L1 宏观层分层决策测试（阶段一新增）** | **✅ 12 passed, 1 skipped** |
+| **`tests/test_industry_rotation.py`** | **L2 行业轮动层 + scanner 行业约束穿透（阶段二新增）** | **✅ 8 passed** |
 
 ### 2.1 分层决策测试覆盖（2026-06-11 新增）
 
@@ -71,6 +72,23 @@
 | `TestDecisionLogPersistence` | `test_log_result_structure` | OB-R1 日志结构 | ✅ 通过 |
 | | `test_log_file_naming_convention` | 日志命名规范 | ✅ 通过 |
 | `TestWorkflowIntegration` | `test_full_workflow_with_macro_regime` | L1-L3 贯通 | ⏭️ Skipped（需真实数据） |
+
+### 2.2 L2 行业轮动测试覆盖（2026-06-11 阶段二新增）
+
+`tests/test_industry_rotation.py` 对应 `docs/requirements.md` L2-R1~R4：
+
+| 测试类 | 测试用例 | 覆盖需求 | 状态 |
+|---|---|---|---|
+| `TestIndustryRotationOutput` | `test_evaluate_industry_rotation_structure` | L2-R3 输出结构（申万代码） | ✅ 通过 |
+| | `test_defensive_fewer_industries_than_aggressive` | L2-R3 行业池宽度随 risk_mode | ✅ 通过 |
+| | `test_high_inflow_industries_ranked_first` | L2-R2 资金流评分排名 | ✅ 通过 |
+| | `test_empty_data_returns_empty_pool` | L2-R3 数据缺失容错（退化全市场） | ✅ 通过 |
+| `TestScannerIndustryFilter` | `test_get_filtered_stock_list_with_industry` | L2-R4 引擎层约束前置 | ✅ 通过 |
+| | `test_industry_filter_none_keeps_all` | AC13 向后兼容（None=全市场） | ✅ 通过 |
+| | `test_scan_passes_industry_filter` | L2-R4 scan 透传 industry_filter | ✅ 通过 |
+| `TestRunScanIndustryFilter` | `test_run_scan_accepts_industry_filter` | L2-R4 Tool 层透传 | ✅ 通过 |
+
+**关键验证（真实数据）**：扫描标的池从 4951 只收窄到 1704 只（defensive 7 个行业，34.4%），证明约束在 `scanner._get_filtered_stock_list` 标的池构建阶段就生效，而非扫描后过滤。
 
 ---
 

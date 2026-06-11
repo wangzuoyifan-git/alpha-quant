@@ -401,26 +401,35 @@ LLM = {
 
 ### 阶段二（P0）：L2 行业轮动层 — 扫描范围前置收窄
 
-**目标**：插入行业层，用资金流+基本面筛出行业池，**真正收窄 L3 扫描范围**。
+**目标**：插入行业层，用资金流筛出行业池，约束**穿透到引擎层**真正收窄 L3 扫描范围。
 
-**关键交付：**
+**改动层次（按依赖顺序从下往上）：**
 
-1. **新增 `agents/industry_agent.py`**
-   - 资金流维度：用 Tushare `moneyflow_ind` 看行业主力净流入趋势
-   - 基本面维度：用季频财务数据看行业收入/利润趋势
-   - 结合 `decision_context.risk_mode` 调整偏好（防御选稳定，进攻选高景气）
-   - 输出 `allowed_industries` + `industry_weights`，写入 `decision_context`
+1. **引擎层 `engine/scanner.py`**（必须改，约束前置的关键）
+   - `ScanEngine.scan()` 新增 `industry_filter: list[str] = None` 参数
+   - `_get_filtered_stock_list()` 新增 `industry_filter` 参数，join `industry_sw` 在构建标的池时就收窄
 
-2. **`run_scan` 增加 `industry_filter` 参数**（`agent_tools/strategy_tools.py`）
-   - 进入扫描前就只扫行业池内标的（**约束前置**）
-   - 禁止全市场扫描后再过滤
+2. **Tool 层 `agent_tools/strategy_tools.py`**
+   - `run_scan()` 新增 `industry_filter` 参数，透传给 `ScanEngine.scan()`
 
-3. **Orchestrator 串入 L2 节点**（L1 → L2 → L3）
+3. **新增 Agent `agents/industry_agent.py`**（L2 行业轮动层）
+   - 资金流维度：`moneyflow_ind` 近 N 日累计净流入，按申万行业名称精确匹配东财板块排名
+   - 结合 `risk_mode` 调整行业池宽窄（defensive 取 Top 5~7，aggressive 取 Top 8~12）
+   - 输出 `allowed_industries`（申万行业代码列表）+ `industry_scores`，写入 `decision_context`
+
+4. **Agent 层 `agents/orchestrator.py`**
+   - 串入 `industry_rotation_node`，L1 → L2 → L3（condition_context 逐层填充）
+   - scan_node 从 `decision_context["allowed_industries"]` 读取，传给 `run_scan`
+
+**数据对齐方案**（已验证）：
+- 东财 `moneyflow_ind.name`（1012 板块）与申万一级行业名精确匹配（31/31 可匹配）
+- 通过名称匹配取对应申万 `industry_code`，输出标准申万代码供 scanner 使用
 
 **验收标准：**
-- ✅ 扫描标的数明显少于全市场（从 5207 减至行业池内标的数）
+- ✅ 扫描标的数从 ~4900 只降到行业池内标的数（减少 50%+ ）
 - ✅ 切换 risk_mode 时行业池随之变化
-- ✅ 日志能追溯到 L2 的行业评分明细
+- ✅ 日志追溯 L2 行业评分明细
+- ✅ `industry_filter=None` 时退化为全市场扫描（向后兼容）
 
 ---
 

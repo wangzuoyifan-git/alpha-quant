@@ -85,7 +85,7 @@
 │  └────────────────┬────────────────────────────┘       │
 │                   │                                     │
 │  ┌────────────────▼───────────────────────────┐        │
-│  │ L2 行业轮动层（Industry Rotation）⏳ 阶段二  │       │
+│  │ L2 行业轮动层（Industry Rotation）✅ 阶段二  │       │
 │  │   资金流+基本面 → 行业池筛选                 │        │
 │  │   输出：allowed_industries / industry_weights │     │
 │  └────────────────┬────────────────────────────┘       │
@@ -99,7 +99,7 @@
 │  独立 Agent 模块：                                       │
 │  ├── Data Agent      数据更新、质量检查      ✅ 规则版    │
 │  ├── Strategy Agent  L1宏观评估、L3策略选择  ✅ 规则版    │
-│  ├── Industry Agent  L2行业轮动              ⏳ 阶段二   │
+│  ├── Industry Agent  L2行业轮动              ✅ 规则版    │
 │  └── Risk/Trade Agent 风控过滤、指令单生成   ✅ 规则版    │
 │                                                         │
 │  Tool Layer（agent_tools/）✅ 已完成                     │
@@ -234,7 +234,8 @@ alpha量化/
 ├── agents/                      # Agent 实现（已建设，规则版）
 │   ├── orchestrator.py          # Orchestrator（LangGraph）
 │   ├── data_agent.py
-│   ├── strategy_agent.py
+│   ├── strategy_agent.py        # L1 宏观层 + L3 策略选择
+│   ├── industry_agent.py        # L2 行业轮动层
 │   └── trade_agent.py
 │
 ├── notifier/push.py

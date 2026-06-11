@@ -59,11 +59,15 @@ class ScanEngine:
             self.register_strategy(key, cls(params.get(key, {})))
 
     def scan(self, date: str = None,
-             asset_types: List[str] = None) -> List[Signal]:
+             asset_types: List[str] = None,
+             industry_filter: List[str] = None) -> List[Signal]:
         """
         执行全市场扫描
         :param date: 扫描日期，默认今日
         :param asset_types: 资产类型列表，默认 ["stock"]；可传 ["etf"] 或 ["stock","etf"]
+        :param industry_filter: L2 行业池约束（申万行业代码列表）。
+                                非 None 时，仅扫描属于这些行业的股票（约束前置）。
+                                None 时为全市场扫描（向后兼容 AC13）。
         :return: 所有策略触发的信号列表（按评分降序）
         """
         if not self.strategies:
@@ -78,6 +82,8 @@ class ScanEngine:
 
         t0 = time.time()
         logger.info(f"开始扫描，资产类型: {asset_types}，日期范围: {start} ~ {end}")
+        if industry_filter:
+            logger.info(f"L2 行业约束: {len(industry_filter)} 个行业 {industry_filter}")
 
         # DR3：数据新鲜度检查
         stale = self._check_data_freshness(end, asset_types)
@@ -95,7 +101,7 @@ class ScanEngine:
 
         if "stock" in asset_types:
             print(f"\n[1/3] 获取股票列表...", flush=True)
-            stock_list = self._get_filtered_stock_list()
+            stock_list = self._get_filtered_stock_list(industry_filter=industry_filter)
             for _, row in stock_list.iterrows():
                 scan_targets.append((row["code"], row["name"], "stock"))
             print(f"  股票: {len(stock_list)} 只", flush=True)
@@ -201,8 +207,12 @@ class ScanEngine:
                 logger.debug(f"策略 {strategy.name} 处理 {code} 出错: {e}")
         return signals
 
-    def _get_filtered_stock_list(self) -> pd.DataFrame:
-        """从本地库获取股票列表并过滤，不走网络"""
+    def _get_filtered_stock_list(self, industry_filter: List[str] = None) -> pd.DataFrame:
+        """从本地库获取股票列表并过滤，不走网络。
+
+        :param industry_filter: L2 行业池约束（申万行业代码列表）。
+                                非 None 时，仅保留属于这些行业的股票（约束前置）。
+        """
         ipo_dates = store.load_ipo_dates()
 
         codes = store.list_codes("stock", market="cn")
@@ -217,6 +227,22 @@ class ScanEngine:
             rows.append({"code": code, "name": name})
         stock_list = pd.DataFrame(rows)
         print(f"  本地股票数: {len(stock_list)} 只", flush=True)
+
+        # L2 行业池约束（约束前置：在并发扫描前就收窄标的池）
+        if industry_filter:
+            before = len(stock_list)
+            ind_df = store_meta.load("industry_sw")
+            if ind_df is not None and not ind_df.empty:
+                allowed_codes = set(
+                    ind_df[ind_df["industry_code"].astype(str).isin(
+                        [str(c) for c in industry_filter]
+                    )]["stock_code"].astype(str)
+                )
+                stock_list = stock_list[stock_list["code"].isin(allowed_codes)]
+                print(f"  L2行业池过滤: -{before - len(stock_list)} 只 "
+                      f"(保留 {len(industry_filter)} 个行业的 {len(stock_list)} 只)", flush=True)
+            else:
+                logger.warning("industry_sw 数据缺失，跳过 L2 行业过滤")
 
         # 排除 ST
         if self.cfg.get("exclude_st", True):

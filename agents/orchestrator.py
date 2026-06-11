@@ -72,6 +72,53 @@ def macro_regime_node(state: WorkflowState) -> WorkflowState:
     return state
 
 
+def industry_rotation_node(state: WorkflowState) -> WorkflowState:
+    """
+    阶段二新增：L2 行业轮动层。
+
+    基于 L1 的 risk_mode，用行业资金流筛出行业池，
+    写入 decision_context["allowed_industries"]，收窄 L3 扫描范围。
+    """
+    from agents.industry_agent import evaluate_industry_rotation
+
+    state["log"] = state.get("log", [])
+
+    try:
+        ctx = state.get("decision_context", {})
+        risk_mode = ctx.get("risk_mode", "balanced")
+
+        result = evaluate_industry_rotation(risk_mode=risk_mode, date=state.get("date"))
+
+        allowed = result.get("allowed_industries", [])
+        # 回填 decision_context
+        ctx["allowed_industries"] = allowed
+        ctx["industry_weights"] = {
+            s["industry_code"]: s["score"] for s in result.get("industry_scores", [])
+        }
+        state["decision_context"] = ctx
+
+        if result.get("fallback"):
+            state["log"].append(
+                "[industry_rotation] 行业数据缺失，退化为全市场扫描（fallback）"
+            )
+        else:
+            names = [s["industry_name"] for s in result.get("industry_scores", [])][:5]
+            state["log"].append(
+                f"[industry_rotation] risk_mode={risk_mode} 选出 {len(allowed)} 个行业: {names}"
+            )
+        logger.info(f"L2 industry pool: {len(allowed)} industries (risk_mode={risk_mode})")
+
+    except Exception as e:
+        logger.error(f"Industry rotation failed: {e}")
+        # 容错：失败时不阻断流程，退化为全市场
+        ctx = state.get("decision_context", {})
+        ctx["allowed_industries"] = []
+        state["decision_context"] = ctx
+        state["log"].append(f"[industry_rotation] 异常，退化为全市场: {e}")
+
+    return state
+
+
 def check_data_node(state: WorkflowState) -> WorkflowState:
     """检查数据新鲜度"""
     from agent_tools import check_data_freshness
@@ -95,11 +142,14 @@ def update_data_node(state: WorkflowState) -> WorkflowState:
 
 
 def scan_node(state: WorkflowState) -> WorkflowState:
-    """执行全市场扫描"""
+    """执行扫描（阶段二：受 L2 行业池约束前置收窄）"""
     from agent_tools import run_scan
+    ctx = state.get("decision_context", {})
+    allowed_industries = ctx.get("allowed_industries") or None  # 空列表→None（全市场）
     result = run_scan(
         date=state.get("date"),
         strategies=state.get("strategy_keys"),
+        industry_filter=allowed_industries,
     )
     state["scan_results"] = result
     state["log"].append(f"[scan] {result.get('count', 0)} signals in {result.get('elapsed', 0)}s")
@@ -199,9 +249,10 @@ def build_workflow() -> StateGraph:
     """构建 Orchestrator 工作流，返回编译后的 graph"""
     graph = StateGraph(WorkflowState)
 
-    # 阶段一：增加 macro_regime 节点
+    # 阶段一：增加 macro_regime 节点；阶段二：增加 industry_rotation 节点
     graph.add_node("check_data", check_data_node)
     graph.add_node("macro_regime", macro_regime_node)
+    graph.add_node("industry_rotation", industry_rotation_node)
     graph.add_node("update_data", update_data_node)
     graph.add_node("run_scan", scan_node)
     graph.add_node("risk_filter", risk_filter_node)
@@ -225,27 +276,32 @@ def build_workflow() -> StateGraph:
     })
     graph.add_edge("update_data", "macro_regime")
 
-    # 阶段一：macro_regime → 条件边路由（按 risk_mode 切换策略配置）
+    # 阶段一/二：macro_regime → 条件边路由（按 risk_mode 切换下层路径）
     def route_after_macro(state: WorkflowState) -> str:
         """
-        根据 risk_mode 路由到不同策略配置（阶段一简化版）。
-        
-        阶段一：所有路径都走 run_scan，但 state["strategy_keys"] 已按 risk_mode 调整。
-        阶段二：可扩展为不同路径走不同的行业筛选逻辑。
+        根据 risk_mode 路由（阶段二：统一经 industry_rotation 收窄行业池）。
+
+        阶段一：直接到 run_scan（strategy_keys 已按 risk_mode 调整）。
+        阶段二：先经 L2 行业轮动层 industry_rotation，再到 L3 run_scan。
+        不同 risk_mode 在 industry_rotation 内部决定行业池宽窄。
         """
         macro = state.get("macro_regime", {})
         risk_mode = macro.get("risk_mode", "balanced")
-        
+
         # AC11: 必须有 default 分支
         logger.debug(f"Routing after macro: risk_mode={risk_mode}")
-        
-        # 阶段一简化：所有模式都走同一路径，只是 strategy_keys 不同
-        # 阶段二可扩展为：defensive_path → industry_rotation → run_scan
-        return "run_scan"
+
+        # 阶段二：统一走 L2 行业轮动层（行业池宽窄由 risk_mode 在 L2 内决定）
+        return "industry_rotation"
 
     graph.add_conditional_edges("macro_regime", route_after_macro, {
+        "industry_rotation": "industry_rotation",
+        # default 兜底：极端情况下直接扫描（保留向后兼容路径）
         "run_scan": "run_scan",
     })
+
+    # L2 → L3：industry_rotation → run_scan
+    graph.add_edge("industry_rotation", "run_scan")
 
     # run_scan → risk_filter
     graph.add_edge("run_scan", "risk_filter")

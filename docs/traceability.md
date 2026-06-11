@@ -230,9 +230,16 @@
 | L1-R3 | decision_context 结构定义（7 个必须字段） | NT-L1-03a | — | — | — | ✅ L1 |
 | L1-R4 | 条件边路由 route_after_macro 逻辑 | NT-L1-02c | — | — | — | ✅ L1 |
 | L1-R5 | 阶段演进约束（规则→LLM 辅助→HMM 融合） | — | — | — | — | ❌ 无覆盖（设计约束，非功能性需求） |
-| **L3 个股选择层（L2 待阶段二）** |
+| **L2 行业轮动层（阶段二，tests/test_industry_rotation.py）** |
+| L2-R1/R1a | 行业资金流数据源 + 东财/申万名称对齐 | NT-L2-01 | — | — | — | ✅ L1 |
+| L2-R2 | 行业资金流评分维度 | NT-L2-03 | — | — | — | ✅ L1 |
+| L2-R3 | 行业池输出（申万代码，宽度随 risk_mode） | NT-L2-01/02 | — | — | — | ✅ L1 |
+| L2-R3-容错 | 数据缺失返回空池，L3 退化全市场 | NT-L2-04 | — | — | — | ✅ L1 |
+| L2-R4 | 扫描约束前置穿透引擎层（scanner 标的池收窄） | NT-L2-05/07 | NT-L2-INT | — | — | ✅ L1+L2 |
+| L2-R4-透传 | run_scan→scan→_get_filtered_stock_list 透传 | NT-L2-06/08 | — | — | — | ✅ L1 |
+| **L3 个股选择层** |
 | L3-R1 | select_strategies 按 risk_mode 返回策略组合 | NT-L1-02a/NT-L1-02b | — | — | — | ✅ L1 |
-| L3-R2 | scan_node 从 decision_context 读取 strategy_keys | NT-L1-03b | — | — | — | ✅ L1（mock 验证） |
+| L3-R2 | scan_node 从 decision_context 读取 strategy_keys/allowed_industries | NT-L1-03b | NT-L2-INT | — | — | ✅ L1+L2 |
 | **决策可观测与回流（阶段三/五）** |
 | OB-R1 | 决策日志结构化输出（含 macro_regime/decision_context） | NT-L1-04a | — | — | — | ✅ L1 |
 | OB-R2 | 收益回填机制（阶段五） | — | — | — | — | ❌ 无覆盖（Phase 2 待开发） |
@@ -240,8 +247,8 @@
 | **架构兼容性约束（新增）** |
 | AC10 | WorkflowState 新字段 total=False（向后兼容） | NT-L1-03b | — | — | — | ✅ L1 |
 | AC11 | 条件边路由函数必须有 default 分支 | NT-L1-02c | — | — | — | ✅ L1（代码检查） |
-| AC12 | L2 行业筛选独立封装为 industry_agent.py | — | — | — | — | ⏳ 阶段二交付 |
-| AC13 | run_scan 的 industry_filter 参数可选（默认 None） | — | — | — | — | ⏳ 阶段二交付 |
+| AC12 | L2 行业筛选独立封装为 industry_agent.py | NT-L2-01 | — | — | — | ✅ L1（已交付 agents/industry_agent.py） |
+| AC13 | run_scan 的 industry_filter 参数可选（默认 None） | NT-L2-06/08 | — | — | — | ✅ L1（已交付，向后兼容验证） |
 
 **测试用例编号说明（`tests/test_macro_regime.py`）：**
 - `NT-L1-01`：`TestMacroRegimeOutput::test_evaluate_market_condition_structure` — 结构化输出验证
@@ -258,10 +265,21 @@
 - `NT-L1-04b`：`TestDecisionLogPersistence::test_log_file_naming_convention` — 日志命名规范
 - `NT-L1-INT`：`TestWorkflowIntegration::test_full_workflow_with_macro_regime` — 完整 workflow 集成测试（⏭️ Skipped）
 
-**阶段一覆盖缺口：**
-- L2 行业轮动层需求（L2-R1~R4）待阶段二补充测试
+**测试用例编号说明（`tests/test_industry_rotation.py`，阶段二）：**
+- `NT-L2-01`：`TestIndustryRotationOutput::test_evaluate_industry_rotation_structure` — 输出结构（申万代码）
+- `NT-L2-02`：`TestIndustryRotationOutput::test_defensive_fewer_industries_than_aggressive` — 行业池宽度随 risk_mode
+- `NT-L2-03`：`TestIndustryRotationOutput::test_high_inflow_industries_ranked_first` — 资金流评分排名
+- `NT-L2-04`：`TestIndustryRotationOutput::test_empty_data_returns_empty_pool` — 数据缺失容错
+- `NT-L2-05`：`TestScannerIndustryFilter::test_get_filtered_stock_list_with_industry` — 引擎层标的池收窄
+- `NT-L2-06`：`TestScannerIndustryFilter::test_industry_filter_none_keeps_all` — None=全市场（向后兼容）
+- `NT-L2-07`：`TestScannerIndustryFilter::test_scan_passes_industry_filter` — scan 透传 industry_filter
+- `NT-L2-08`：`TestRunScanIndustryFilter::test_run_scan_accepts_industry_filter` — Tool 层透传
+- `NT-L2-INT`：L1→L2→L3 mock 集成验证（扫描标的 4951→1704，真实数据手动验证）
+
+**阶段二覆盖缺口：**
 - LLM 接入需求（LLM-R1~R3）待阶段四补充测试
 - 收益回填与绩效驱动（OB-R2/OB-R3）待阶段五补充测试
+- 财务维度行业聚合（L2-R2 可选维度）暂未实现，待数据覆盖率提升后补充
 
 
 ---
@@ -311,8 +329,8 @@
 | ✅ GAP-42 | L3-R1 | select_strategies 按 risk_mode 选择 | L1 | ✅ 已补充（NT-L1-02a/b，defensive/aggressive） |
 | ✅ GAP-43 | OB-R1 | 决策日志结构化输出 | L1 | ✅ 已补充（NT-L1-04a，decision_log 结构） |
 | ✅ GAP-44 | AC10 | WorkflowState 向后兼容 | L1 | ✅ 已补充（NT-L1-03b，total=False 验证） |
-| ⏳ GAP-45 | L2-R1~R4 | 行业轮动层需求（资金流+基本面筛选） | L1+L2 | ⏳ 待阶段二补充 |
-| ⏳ GAP-46 | AC13 | run_scan 的 industry_filter 参数 | L1+L2 | ⏳ 待阶段二补充 |
+| ✅ GAP-45 | L2-R1~R4 | 行业轮动层需求（资金流+行业分类对齐+行业池+扫描前置） | L1+L2 | ✅ 已补充（NT-L2-01~08，`tests/test_industry_rotation.py`） |
+| ✅ GAP-46 | AC13 | run_scan 的 industry_filter 参数（默认 None 向后兼容） | L1+L2 | ✅ 已补充（NT-L2-06/08，scanner+strategy_tools 验证） |
 | ⏳ GAP-47 | LLM-R1~R3 | LLM 接入约束（grounding/降级/禁入核心路径） | L1+L3 | ⏳ 待阶段四补充 |
 | ⏳ GAP-48 | OB-R2/R3 | 收益回填与绩效驱动策略选择 | L2 | ⏳ 待阶段五补充 |
 
