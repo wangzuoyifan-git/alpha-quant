@@ -139,38 +139,57 @@ def evaluate_market_condition() -> dict:
     }
 
 
-def select_strategies(market_condition: str = None, risk_mode: str = None) -> list[str]:
+def select_strategies(decision_context=None, market_condition: str = None,
+                      risk_mode: str = None) -> list[str]:
     """
-    根据市场环境选择适用的策略组合（AC5 market_condition 驱动）。
+    根据 decision_context 画像匹配选择策略组合（阶段四升级，L3-R1）。
 
-    阶段一升级：优先使用 risk_mode（defensive/balanced/aggressive），
-               向后兼容旧的 market_condition 参数。
+    签名兼容三种调用方式：
+      select_strategies(decision_context)       # 新（画像匹配）
+      select_strategies(risk_mode="defensive")  # 旧关键字，向后兼容
+      select_strategies(market_condition="bull") # 更旧，向后兼容
 
     Args:
-        market_condition: 旧参数，向后兼容（bull/bear/range/volatile）
-        risk_mode: 新参数，优先级高于 market_condition
+        decision_context: dict，含 regime / risk_mode（优先）
+        market_condition: @deprecated
+        risk_mode: 旧关键字参数，向后兼容
 
     Returns:
         策略 key 列表
-
-    Phase 2 会扩展为基于历史回测绩效动态选择。
     """
     from strategies.builtin import BUILTIN_STRATEGIES
 
-    # 优先使用 risk_mode
-    if risk_mode is not None:
-        # 按 requirements.md L3-R1 映射
-        if risk_mode == "defensive":
-            # 防御策略：基本面价值 + ETF 动量（偏红利）
-            return ["fundamental_value", "etf_momentum"]
-        elif risk_mode == "aggressive":
-            # 进攻策略：动量 + 突破 + 资金流
-            return ["ma_cross", "vol_price_breakout", "money_flow"]
-        else:  # balanced
-            # 均衡模式：全部策略
-            return list(BUILTIN_STRATEGIES.keys())
+    # ── 新路径：画像匹配 ──
+    if isinstance(decision_context, dict):
+        regime = decision_context.get("regime")
+        allowed_styles = decision_context.get("allowed_styles", [])
+        allowed_horizons = decision_context.get("allowed_time_horizons", ["short"])
+        result = []
+        for key, cls in BUILTIN_STRATEGIES.items():
+            prof = cls().profile()
+            # 主筛：regime 命中
+            if regime and regime not in prof["applicable_regimes"]:
+                continue
+            # 可选收窄：allowed_styles（L2 传下来，为空则不筛）
+            if allowed_styles and prof["style"] not in allowed_styles:
+                continue
+            # 可选收窄：allowed_time_horizons
+            if prof["time_horizon"] not in allowed_horizons:
+                continue
+            result.append(key)
+        return result if result else list(BUILTIN_STRATEGIES.keys())
 
-    # 向后兼容：使用旧的 market_condition
+    # ── 旧路径：向后兼容 ──
+    effective_risk_mode = risk_mode
+    if effective_risk_mode is not None:
+        if effective_risk_mode == "defensive":
+            regime = "risk_off"
+        elif effective_risk_mode == "aggressive":
+            regime = "risk_on"
+        else:
+            regime = "balanced"
+        return select_strategies({"regime": regime, "risk_mode": effective_risk_mode})
+
     if market_condition is not None:
         selected = []
         for key, cls in BUILTIN_STRATEGIES.items():
@@ -179,8 +198,62 @@ def select_strategies(market_condition: str = None, risk_mode: str = None) -> li
                 selected.append(key)
         return selected if selected else list(BUILTIN_STRATEGIES.keys())
 
-    # 都没提供，返回全部
     return list(BUILTIN_STRATEGIES.keys())
+
+
+def llm_review_regime(env: dict, **kwargs) -> dict:
+    """
+    LLM 对规则 regime 研判做二次评估（LLM-R5/AC17）。
+
+    - 只调整 confidence（±confidence_adjust_max，默认 0.2）
+    - regime / risk_mode / strategy_keys 永不被 LLM 改变
+    - LLM 不可用时静默返回 {"llm_available": False}（LLM-R3）
+
+    Args:
+        env: evaluate_market_condition() 返回的结果
+
+    Returns:
+        咨询性 dict，字段：llm_available / agree / confidence_adjust /
+        reasoning / provider（LLM 不可用时仅含 llm_available=False）
+    """
+    import json
+    try:
+        from llm_clients import get_client
+        from llm_clients.prompts import REGIME_REVIEW_SYSTEM, regime_review_user
+        from config.settings import LLM as cfg
+    except Exception:
+        return {"llm_available": False}
+
+    client = get_client()
+    # 不检查 is_available，直接 chat；不可用时返回 available=False（LLM-R3）
+    messages = [
+        {"role": "system", "content": REGIME_REVIEW_SYSTEM},
+        {"role": "user", "content": regime_review_user(env)},
+    ]
+    result = client.chat(messages)
+    if not result.get("available"):
+        return {"llm_available": False}
+
+    # 解析 LLM 输出（LLM-R7 结构化推理）
+    try:
+        parsed = json.loads(result["content"])
+    except (json.JSONDecodeError, TypeError):
+        logger.warning("LLM regime 研判输出解析失败，降级")
+        return {"llm_available": False}
+
+    # clamp confidence_adjust（LLM-R5）
+    max_adj = float(cfg.get("confidence_adjust_max", 0.2))
+    raw_adj = float(parsed.get("confidence_adjust", 0.0))
+    clamped = max(-max_adj, min(max_adj, raw_adj))
+
+    # AC17：只返回咨询字段，不含 regime/risk_mode
+    return {
+        "llm_available": True,
+        "agree": bool(parsed.get("agree", True)),
+        "confidence_adjust": clamped,
+        "reasoning": str(parsed.get("reasoning", "")),
+        "provider": result.get("provider", ""),
+    }
 
 
 def recommend_daily_plan() -> dict:

@@ -18,7 +18,13 @@ class VolPriceBreakoutStrategy(BaseStrategy):
     name = "量价突破"
     description = "价格突破近N日高点，配合明显放量确认突破有效性"
     version = "1.0.0"
-    market_condition = "bull"  # 强势突破，适合牛市趋势
+    applicable_regimes = ["risk_on"]
+    style = "breakout"
+    applicable_scenario = "强势突破，牛市趋势确立期效果最佳；熊市假突破多"
+    risk_profile = "aggressive"
+    time_horizon = "short"
+    data_dependency = ["technical"]
+    market_condition = "bull"  # @deprecated
 
     def requires_bars(self) -> int:
         return self.params.get("lookback", 20) + 10

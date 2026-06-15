@@ -155,20 +155,29 @@ SCHEDULE = {
 }
 
 # ============================================================
-# LLM 配置（Phase 2 Agent 体系建设）
+# LLM 配置（阶段四，autonomy_level 总闸门 + 洋葱架构）
 # ============================================================
 LLM = {
+    # 执行权总闸门（LLM-R8）：OFF / ADVISORY / ASSIST / COPILOT / AUTO
+    # 默认 OFF：LLM 不参与任何决策，workflow 行为与纯规则版完全一致
+    "autonomy_level": os.getenv("LLM_AUTONOMY_LEVEL", "OFF"),
+
+    # LLM 研判最大 confidence 调整幅度（±，LLM-R5）
+    "confidence_adjust_max": 0.2,
+
     "primary": {
         "provider": "deepseek",
+        "api_style": "openai",           # openai 兼容协议
         "model": "deepseek-chat",
         "api_key_env": "DEEPSEEK_API_KEY",
         "base_url": "https://api.deepseek.com/v1",
     },
     "fallback": {
-        "provider": "openai",
-        "model": "gpt-4o-mini",
-        "api_key_env": "OPENAI_API_KEY",
-        "base_url_env": "OPENAI_BASE_URL",
+        "provider": "yunwu",
+        "api_style": "openai",           # 聚合平台走 openai 分支（LLM-R4）
+        "model": "claude-3-5-sonnet-20241022",
+        "api_key_env": "YUNWU_API_KEY",
+        "base_url_env": "YUNWU_BASE_URL",
     },
     "temperature": 0.1,
     "timeout": 30,

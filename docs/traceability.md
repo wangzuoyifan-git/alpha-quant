@@ -316,6 +316,50 @@
 
 ---
 
+### 3.13 LLM 接入地基（阶段四，2026-06-12 新增）
+
+> 对应 `docs/requirements.md` 第八章 8.7/8.10，测试文件 `tests/test_llm_clients.py` + `tests/test_strategy_schema.py`
+
+| 需求编号 | 需求描述 | 测试用例 | 覆盖状态 |
+|---|---|---|---|
+| LLM-R1 | 严格禁入核心路径（只研判/点评，不生成信号/风控/回测） | NT-L4-06（regime/risk_mode 不被改）+ AC17 | ✅ L1 |
+| LLM-R2 | Grounding 强制（数值来自 store，prompt 禁止 LLM 生成数字） | 代码审查（prompts.py grounding 约束）+ NT-L4-05 | ✅ L1（约束写入 prompt 模板） |
+| LLM-R3 | 可降级（超时/限流/key 缺失自动回退规则版） | NT-L4-01/03/04 | ✅ L1 |
+| LLM-R4 | llm_clients 洋葱架构（L0 core / L1 client / L2 __init__） | NT-L4-02/03/11 | ✅ L1 |
+| LLM-R5 | L1 regime LLM 研判约束（只调 confidence，regime 永不变） | NT-L4-04/05/06/10 | ✅ L1 |
+| LLM-R6 | L3 候选 LLM 点评约束（Top N，不改字段，落盘） | — | ⏳ 台阶二（候选链路落盘后补） |
+| LLM-R7 | 结构化推理强制（推理链非自由文本） | NT-L4-05 | ✅ L1 |
+| LLM-R8 | autonomy_level 可配机制（默认 OFF，可回退） | NT-L4-01/04（OFF 行为等价验证） | ✅ L1 |
+| AC16 | LLM 调用集中管控（禁止 agents 直接 import openai/anthropic） | 代码审查 + NT-L4-01 | ✅ L1 |
+| AC17 | LLM 输出隔离（只写 llm_review，不进约束字段） | NT-L4-06/10 | ✅ L1 |
+| D-4 | 策略 6 维能力画像 schema | NT-L4-07 | ✅ L1 |
+| D-5 | Signal 仓位归属字段（position_type/time_horizon） | NT-L4-08 | ✅ L1 |
+| L3-R1↑ | select_strategies 画像匹配升级 | NT-L4-09 | ✅ L1 |
+
+**测试用例编号说明（`tests/test_llm_clients.py`，阶段四）：**
+- `NT-L4-01`：`TestLLMClientNoKey::test_get_client_no_key_silent` — 无 key 静默降级（LLM-R3/R8/AC16）
+- `NT-L4-02`：`TestProvider::test_openai_compat_provider_chat` — OpenAICompatProvider 协议（LLM-R4）
+- `NT-L4-03`：`TestLLMClient::test_three_level_fallback` — 三级降级链（LLM-R3/R4）
+- `NT-L4-04`：`TestRegimeReview::test_llm_review_regime_no_key_equals_off` — 无 key 行为等价 OFF（LLM-R3/R5）
+- `NT-L4-05`：`TestRegimeReview::test_llm_review_regime_normal` — 正常研判结构 + clamp（LLM-R5/R7）
+- `NT-L4-06`：`TestRegimeReview::test_llm_never_changes_regime` — regime/risk_mode 不被改（LLM-R5/AC17）
+- `NT-L4-10`：`TestMacroNodeLLM::test_macro_node_stores_llm_review` — llm_review 存入 state（LLM-R5/AC17）
+- `NT-L4-11`：`TestProvider::test_anthropic_provider_chat` — AnthropicProvider 协议（LLM-R4）
+
+**测试用例编号说明（`tests/test_strategy_schema.py`，阶段四）：**
+- `NT-L4-07`：`TestStrategyProfile::test_all_builtin_strategies_have_profile` — 6 维画像完整（D-4）
+- `NT-L4-08`：`TestSignalPositionFields::test_signal_default_position_fields` — Signal 仓位字段默认值（D-5）
+- `NT-L4-09`：`TestSelectStrategiesProfileMatch::test_select_by_regime` — 画像匹配筛选（L3-R1 升级）
+
+**阶段四关键实现说明：**
+- llm_clients 洋葱架构：L0（core.py）零项目依赖，Provider 通过构造参数注入；L2（__init__.py）是唯一读 config.settings.LLM 的地方
+- `api_style` 解耦协议与模型：openai 分支覆盖 DeepSeek/Qwen/GLM 直连 + yunwu.ai 等聚合平台（含访问 Claude）；anthropic 分支仅 Anthropic 官方原生
+- 无 key / autonomy_level=OFF 时，整个 workflow 行为与阶段三完全一致（LLM 仅写咨询字段）
+- select_strategies 兼容双签名：旧 `risk_mode=`/`market_condition=` 与新 `decision_context` dict
+
+
+---
+
 ## 四、覆盖缺口汇总
 
 ### 4.1 必须补充的测试用例（Phase 1 验收前）
@@ -366,7 +410,7 @@
 | ✅ GAP-49 | OB-R4 | Checkpoint 断点续跑（SqliteSaver/降级/恢复） | L1+L2 | ✅ 已补充（NT-L3-01~03，`tests/test_checkpoint_recovery.py`） |
 | ✅ GAP-50 | OB-R5 | 每层节点输入输出审计快照（node_audit） | L1 | ✅ 已补充（NT-L3-06a~c） |
 | ✅ GAP-51 | AC14/AC15 | checkpointer 参数可选 + 依赖缺失降级 | L1 | ✅ 已补充（NT-L3-03a~c/NT-L3-02b） |
-| ⏳ GAP-47 | LLM-R1~R3 | LLM 接入约束（grounding/降级/禁入核心路径） | L1+L3 | ⏳ 待阶段四补充 |
+| ✅ GAP-47 | LLM-R1~R8/AC16/17 | LLM 接入约束（洋葱架构/降级/禁入核心路径/regime研判/画像匹配） | L1 | ✅ 阶段四补充（NT-L4-01~11，`tests/test_llm_clients.py` + `tests/test_strategy_schema.py`） |
 | ⏳ GAP-48 | OB-R2/R3 | 收益回填与绩效驱动策略选择 | L2 | ⏳ 待阶段五补充 |
 
 ### 4.2 建议补充的测试用例（质量提升）

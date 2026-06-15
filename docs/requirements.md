@@ -1081,3 +1081,54 @@ decision_context = {
 | AC13 | `run_scan` 的 `industry_filter` 参数必须可选（默认 None=全市场） | 保证现有调用方不受影响 |
 | AC14 | `build_workflow` 的 `checkpointer` 参数必须可选（默认 None=无 checkpoint） | 保证现有调用方与测试不受影响，checkpoint 为增强而非强制 |
 | AC15 | checkpoint 持久化依赖缺失时必须可降级到 InMemorySaver，不得让 workflow 报错 | 依赖（langgraph-checkpoint-sqlite）可能未装，可靠性加固不能引入新的硬失败 |
+| AC16 | 所有 LLM 调用必须经 `llm_clients`，禁止 agents 层直接 import `openai` / `anthropic` | LLM 调用集中管控，便于统一降级、监控和切换 |
+| AC17 | LLM 输出只写咨询性字段（`llm_review` / `llm_candidate_reviews`），不进约束字段 | regime/risk_mode/strategy_keys 等核心约束字段由规则产出，LLM 不得覆盖 |
+
+### 8.10 测试需求（阶段四验收）
+
+**NT-L4-01 — llm_clients 无 key 时完全静默（LLM-R3/AC16）**
+- 环境：不设置任何 LLM API key（DEEPSEEK_API_KEY / YUNWU_API_KEY / ANTHROPIC_API_KEY 均为空）
+- 期望：`get_client()` 返回不可用 client；调用 `chat()` 不抛异常，返回降级标识
+
+**NT-L4-02 — OpenAICompatProvider 协议测试（LLM-R4）**
+- mock httpx/openai，构造 `OpenAICompatProvider(api_key="k", base_url="u", model="m")`
+- 期望：`chat(messages)` 返回 `{"content": str, "model": str, "provider": str}`
+
+**NT-L4-03 — LLMClient 三级降级链（LLM-R3/LLM-R4）**
+- 构造 primary 失败 + fallback 失败的场景（mock raise）
+- 期望：最终降级返回 `{"available": False}`，不抛异常，记录降级日志
+
+**NT-L4-04 — llm_review_regime 无 key 时行为与 OFF 一致（LLM-R3/LLM-R5）**
+- mock `get_client()` 返回不可用 client
+- 调用 `llm_review_regime(env)`
+- 期望：`{"llm_available": False}`，confidence 不变，workflow 无感知
+
+**NT-L4-05 — llm_review_regime 正常调用结构（LLM-R5/LLM-R7）**
+- mock LLM 返回合法 JSON（agree=True, confidence_adjust=0.1, reasoning="xxx"）
+- 期望：输出含 `llm_available/agree/confidence_adjust/reasoning/provider`
+- 验证：confidence_adjust 被 clamp 在 `±confidence_adjust_max`（默认 0.2）范围内
+
+**NT-L4-06 — llm_review_regime LLM 不改变 regime/risk_mode（LLM-R5）**
+- mock LLM 返回包含试图修改 regime 字段的输出
+- 期望：strategy_agent 忽略，regime / risk_mode 保持规则原值
+
+**NT-L4-07 — strategy schema 6 维字段完整（D-4）**
+- 对每个内置策略实例化后调用 `.profile()`
+- 期望：含 `applicable_regimes/style/applicable_scenario/risk_profile/time_horizon/data_dependency` 6 个字段，且均非空
+
+**NT-L4-08 — Signal 仓位归属字段（D-5）**
+- 构造 `Signal(code="000001", name="x", signal="BUY", price=10.0, reason="r")`
+- 期望：`position_type="trading"`, `time_horizon="short"`（默认值）
+
+**NT-L4-09 — select_strategies 画像匹配（L3-R1 升级）**
+- 输入：`decision_context = {"regime": "risk_on", "risk_mode": "aggressive"}`
+- 期望：只返回 `applicable_regimes` 包含 `"risk_on"` 的策略 key
+
+**NT-L4-10 — macro_regime_node llm_review 存入 state（LLM-R5/AC17）**
+- mock `llm_review_regime` 返回 `{"llm_available": True, "agree": True, "confidence_adjust": 0.1}`
+- 运行 `macro_regime_node`
+- 期望：`state["macro_regime"]["llm_review"]` 存在；`state["macro_regime"]["regime"]` 保持规则值
+
+**NT-L4-11 — api_style=anthropic 走 AnthropicProvider（LLM-R4）**
+- 构造 `AnthropicProvider(api_key="k", model="claude-3-haiku-20240307")`，mock anthropic SDK
+- 期望：`chat()` 走 anthropic client，不走 openai

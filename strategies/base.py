@@ -9,7 +9,7 @@ from typing import List, Dict, Any
 import pandas as pd
 
 
-# AC5：市场环境枚举（Phase 2 Strategy Agent 使用）
+# AC5：市场环境枚举（@deprecated，用 applicable_regimes 替代）
 MARKET_CONDITIONS = ("bull", "bear", "range", "volatile")
 
 
@@ -23,7 +23,11 @@ class Signal:
     reason: str          # 触发原因描述
     score: float = 0.0   # 信号强度评分 0~100
     extra: Dict[str, Any] = field(default_factory=dict)
-    market_condition: str = ""  # AC5：适用市场环境（bull/bear/range/volatile）
+    # 多周期配置字段（阶段四台阶一，D-5）
+    position_type: str = "trading"   # "trading"（交易仓）/ "config"（配置仓候选）
+    time_horizon: str = "short"      # "short"(日~周) / "medium"(半年+) / "long"(1年+)
+    # @deprecated: 用 applicable_regimes 替代
+    market_condition: str = ""
 
     def __str__(self):
         mc = f" [{self.market_condition}]" if self.market_condition else ""
@@ -37,10 +41,40 @@ class BaseStrategy(ABC):
     name: str = "未命名策略"
     description: str = ""
     version: str = "1.0.0"
-    market_condition: str = "range"  # AC5：策略适用市场环境，默认 range（横盘）
+
+    # ══════ 6 维能力画像（阶段四 D-4）══════
+
+    # ① 适用 regime（主筛）
+    applicable_regimes: List[str] = ["balanced"]
+    # ② 策略风格
+    style: str = ""
+    # ③ 适用场景（自然语言，供 LLM 推理）
+    applicable_scenario: str = ""
+    # ④ 风险风格（声明+一致性校验，不独立筛选）
+    risk_profile: str = "balanced"
+    # ⑤ 时间周期（占位，台阶一全填 short）
+    time_horizon: str = "short"
+    # ⑥ 数据依赖（占位）
+    data_dependency: List[str] = ["technical"]
+
+    # @deprecated: 用 applicable_regimes 替代
+    market_condition: str = "range"
 
     def __init__(self, params: dict = None):
         self.params = params or {}
+
+    def profile(self) -> dict:
+        """返回策略 6 维能力画像，供 select_strategies / LLM 消费。"""
+        return {
+            "name": self.name,
+            "style": self.style,
+            "applicable_regimes": self.applicable_regimes,
+            "risk_profile": self.risk_profile,
+            "time_horizon": self.time_horizon,
+            "data_dependency": self.data_dependency,
+            "applicable_scenario": self.applicable_scenario,
+            "description": self.description,
+        }
 
     @abstractmethod
     def generate_signals(self, df: pd.DataFrame, code: str, name: str) -> List[Signal]:

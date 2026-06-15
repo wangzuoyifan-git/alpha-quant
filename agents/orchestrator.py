@@ -229,30 +229,47 @@ class WorkflowState(TypedDict, total=False):
 def macro_regime_node(state: WorkflowState) -> WorkflowState:
     """
     阶段一新增：L1 宏观场景感知层。
-    
+    阶段四升级：规则评估后接入 LLM 二次研判（LLM-R5，autonomy_level 总闸门控制）。
+
     评估宏观环境，输出 regime/risk_mode，构建 decision_context。
+    LLM 研判结果存入 macro_regime["llm_review"]（只写咨询字段，AC17）。
     """
-    from agents.strategy_agent import evaluate_market_condition, build_decision_context
-    
+    from agents.strategy_agent import evaluate_market_condition, build_decision_context, llm_review_regime
+
     state["log"] = state.get("log", [])
-    
+
     try:
-        # 评估宏观环境
+        # 规则评估（核心路径，永远先跑，不受 LLM 影响）
         env = evaluate_market_condition()
-        state["macro_regime"] = _to_native(env)
-        
-        # 构建决策上下文
+        macro = _to_native(env)
+
+        # LLM 二次研判（静默降级，失败不影响 workflow，LLM-R3）
+        try:
+            llm_review = llm_review_regime(env)
+        except Exception as llm_exc:
+            logger.warning("LLM regime 研判异常，静默降级: %s", llm_exc)
+            llm_review = {"llm_available": False}
+        macro["llm_review"] = llm_review
+
+        state["macro_regime"] = macro
+
+        # 构建决策上下文（用规则 env，LLM 不进 decision_context）
         decision_context = _to_native(build_decision_context(env))
         state["decision_context"] = decision_context
-        
+
         # 根据 decision_context 更新策略选择（覆盖传入的 strategy_keys）
         state["strategy_keys"] = decision_context["strategy_keys"]
-        
+
         state["log"].append(
             f"[macro_regime] regime={env['regime']} risk_mode={env['risk_mode']} "
-            f"confidence={env['confidence']:.2f} strategies={len(decision_context['strategy_keys'])}"
+            f"confidence={env['confidence']:.2f} strategies={len(decision_context['strategy_keys'])} "
+            f"llm={llm_review.get('llm_available', False)}"
         )
-        logger.info(f"Macro regime: {env['regime']}, risk_mode: {env['risk_mode']}, reason: {env['trigger_reason']}")
+        logger.info(
+            "Macro regime: %s, risk_mode: %s, reason: %s, llm_available: %s",
+            env['regime'], env['risk_mode'], env['trigger_reason'],
+            llm_review.get('llm_available', False),
+        )
 
         # 阶段三：节点审计（OB-R5）
         _audit(
@@ -264,6 +281,7 @@ def macro_regime_node(state: WorkflowState) -> WorkflowState:
                 "confidence": env.get("confidence"),
                 "trigger_reason": env.get("trigger_reason"),
                 "strategy_keys": decision_context.get("strategy_keys"),
+                "llm_available": llm_review.get("llm_available", False),
             },
         )
 

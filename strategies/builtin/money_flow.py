@@ -23,7 +23,13 @@ class MoneyFlowStrategy(BaseStrategy):
     name = "资金流信号"
     description = "基于主力净流入/北向资金识别机构动向"
     version = "1.0.0"
-    market_condition = "bull"
+    applicable_regimes = ["risk_on", "balanced"]
+    style = "moneyflow"
+    applicable_scenario = "主力资金持续净流入，机构建仓迹象明显时有效"
+    risk_profile = "aggressive"
+    time_horizon = "short"
+    data_dependency = ["technical", "moneyflow"]
+    market_condition = "bull"  # @deprecated
 
     def requires_bars(self) -> int:
         return 10

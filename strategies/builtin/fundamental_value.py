@@ -25,7 +25,13 @@ class FundamentalValueStrategy(BaseStrategy):
     name = "基本面价值"
     description = "基于ROE/盈利增长/负债率筛选财务健康的低估标的"
     version = "1.0.0"
-    market_condition = "range"
+    applicable_regimes = ["risk_off", "balanced", "crisis"]
+    style = "value"
+    applicable_scenario = "熊市防御或震荡市寻找低估优质标的，危机中逆向布局"
+    risk_profile = "defensive"
+    time_horizon = "short"  # 台阶二升级为 medium/long
+    data_dependency = ["technical", "fundamental"]
+    market_condition = "range"  # @deprecated
 
     def requires_bars(self) -> int:
         return 5  # 只需要读取基本面数据，不需大量K线
