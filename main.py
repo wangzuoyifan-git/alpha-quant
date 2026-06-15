@@ -173,6 +173,119 @@ def cmd_orders():
     console.print("[dim]取消: python main.py cancel <order_id>[/dim]")
 
 
+def cmd_workflow(date: str | None = None,
+                 industries: list | None = None,
+                 asset_types: list | None = None):
+    """运行分层决策 workflow（L1宏观 → L2行业 → L3个股），分层可视化输出。
+
+    :param date: 决策日期（默认今日）
+    :param industries: 手动指定申万行业代码列表（如 801080 801770），
+                       跳过 L2 自动产出的全部行业，只扫描指定行业（快速验证）。
+    :param asset_types: 资产类型（默认 stock）
+    """
+    from rich.console import Console
+    from rich.table import Table
+    from rich.panel import Panel
+    from agents.orchestrator import run_daily_workflow
+
+    console = Console()
+    console.print(Panel.fit(
+        "[bold cyan]Alpha量化 — 分层决策 Workflow[/bold cyan]\n"
+        "L1 宏观场景 → L2 行业轮动 → L3 个股选择 → 风控 → 指令单",
+        border_style="cyan"))
+
+    if industries:
+        console.print(f"[yellow]行业范围限定（override）:[/yellow] {industries}")
+    console.print("[dim]运行中（L3 扫描可能需要一些时间）...[/dim]\n")
+
+    result = run_daily_workflow(
+        date=date,
+        asset_types=asset_types or ["stock"],
+        industry_override=industries,
+    )
+
+    if not result["success"]:
+        console.print(f"[red]Workflow 失败: {result.get('error')}[/red]")
+        return
+
+    # ── L1 宏观层 ──
+    conf_color = "green" if result["confidence"] >= 0.7 else "yellow"
+    l1 = Table(title="L1 宏观场景层", show_header=False, border_style="blue")
+    l1.add_column("项", style="bold cyan")
+    l1.add_column("值")
+    l1.add_row("regime（市场状态）", result["regime"])
+    l1.add_row("risk_mode（风险模式）", result["risk_mode"])
+    l1.add_row("confidence（置信度）", f"[{conf_color}]{result['confidence']:.2f}[/{conf_color}]")
+    ctx = result.get("decision_context", {})
+    l1.add_row("max_position（总仓位上限）", str(ctx.get("max_position", "-")))
+    l1.add_row("allocation（配置/交易仓）", str(ctx.get("allocation", "-")))
+    l1.add_row("l2_weight（景气/估值/资金流）", str(ctx.get("l2_weight_config", "-")))
+    llm = result.get("llm_review", {})
+    l1.add_row("LLM 研判", "可用" if llm.get("llm_available") else "[dim]OFF/未启用[/dim]")
+    console.print(l1)
+
+    # ── L2 行业层 ──
+    allowed = result.get("allowed_industries", [])
+    detail = result.get("industry_detail", {})
+    l2 = Table(title=f"L2 行业轮动层（选出 {len(allowed)} 个行业）", border_style="magenta")
+    l2.add_column("申万代码", style="cyan")
+    l2.add_column("行业名称")
+    l2.add_column("评分", justify="right")
+    l2.add_column("time_horizon")
+    for code in allowed:
+        d = detail.get(code, {})
+        l2.add_row(str(code), d.get("industry_name", "-"),
+                   f"{d.get('score', 0):.1f}", d.get("time_horizon", "-"))
+    if allowed:
+        console.print(l2)
+    else:
+        console.print("[yellow]L2 行业池为空（数据缺失或 fallback），L3 退化为全市场[/yellow]")
+
+    # ── L3 策略与信号 ──
+    console.print(f"\n[bold]L3 选用策略:[/bold] {result.get('strategy_keys', [])}")
+
+    signals = result.get("filtered_signals", [])
+    if signals:
+        l3 = Table(title=f"L3 交易仓信号（风控通过 {len(signals)} 个）", border_style="green")
+        l3.add_column("代码", style="cyan")
+        l3.add_column("信号", style="bold")
+        l3.add_column("评分", justify="right")
+        l3.add_column("原因")
+        for s in signals[:20]:
+            l3.add_row(str(s.get("code")), str(s.get("signal")),
+                       f"{s.get('score', 0):.0f}", str(s.get("reason", ""))[:40])
+        console.print(l3)
+    else:
+        console.print("[yellow]无交易仓信号（BUY 通过风控）[/yellow]")
+
+    # ── L3-B 配置仓候选（WATCH）──
+    watch = result.get("watch_pool", [])
+    if watch:
+        wt = Table(title=f"L3-B 配置仓候选 WATCH（{len(watch)} 个，待人工确认）",
+                   border_style="yellow")
+        wt.add_column("代码", style="cyan")
+        wt.add_column("评分", justify="right")
+        wt.add_column("原因")
+        for s in watch[:20]:
+            wt.add_row(str(s.get("code")), f"{s.get('score', 0):.0f}",
+                       str(s.get("reason", ""))[:40])
+        console.print(wt)
+
+    # ── 汇总 ──
+    console.print(Panel.fit(
+        f"扫描信号 {result.get('scan_results', {}).get('count', 0)} | "
+        f"风控通过 {result['signals']} | "
+        f"配置仓候选 {len(watch)} | "
+        f"指令单 {result['orders']}\n"
+        f"[dim]决策日志: {result.get('decision_log_path')}[/dim]",
+        title="执行汇总", border_style="cyan"))
+
+    # ── 执行链路日志 ──
+    console.print("\n[bold]分层执行链路:[/bold]")
+    for line in result["log"]:
+        console.print(f"  [dim]{line}[/dim]")
+
+
 def cmd_web():
     """启动 Web 看板"""
     try:
@@ -594,6 +707,16 @@ if __name__ == "__main__":
                         choices=["stock", "etf"],
                         help="扫描资产类型（默认 stock；可传 etf 或 stock etf）")
 
+    # workflow（分层决策：L1→L2→L3）
+    p_wf = sub.add_parser("workflow", help="运行分层决策 workflow（L1宏观→L2行业→L3个股，可视化）")
+    p_wf.add_argument("--date", help="决策日期 YYYY-MM-DD（默认今日）")
+    p_wf.add_argument("--industries", nargs="*",
+                      help="手动指定申万行业代码（如 801080 801770），限定扫描范围加速验证")
+    p_wf.add_argument("--types", nargs="*",
+                      default=["stock"],
+                      choices=["stock", "etf"],
+                      help="资产类型（默认 stock）")
+
     # backtest
     p_bt = sub.add_parser("backtest", help="策略回测")
     p_bt.add_argument("--strategy", default="macd_rsi",
@@ -605,7 +728,6 @@ if __name__ == "__main__":
 
     # orders
     sub.add_parser("orders", help="查看待确认指令单")
-
     # confirm / cancel
     p_confirm = sub.add_parser("confirm", help="确认指令单")
     p_confirm.add_argument("order_id")
@@ -668,6 +790,9 @@ if __name__ == "__main__":
         cmd_dbstats()
     elif args.command == "scan":
         cmd_scan(date=args.date, asset_types=args.types)
+    elif args.command == "workflow":
+        cmd_workflow(date=args.date, industries=args.industries,
+                     asset_types=args.types)
     elif args.command == "backtest":
         cmd_backtest(
             strategy_key=args.strategy,

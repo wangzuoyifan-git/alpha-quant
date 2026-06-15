@@ -222,6 +222,9 @@ class WorkflowState(TypedDict, total=False):
     decision_context: dict      # 逐层收窄的约束上下文
     # 阶段三新增字段（OB-R5）
     node_audit: list[dict]      # 每层节点 input/output 审计快照
+    # 台阶一新增字段
+    watch_pool: list            # L3-B 配置仓候选（WATCH 信号）
+    industry_override: list[str]  # 手动指定行业范围（验证用，跳过 L2 自动评分）
 
 
 # ── 节点实现 ────────────────────────────────────────────────
@@ -308,6 +311,21 @@ def industry_rotation_node(state: WorkflowState) -> WorkflowState:
         risk_mode = ctx.get("risk_mode", "balanced")
 
         result = evaluate_industry_rotation(risk_mode=risk_mode, date=state.get("date"))
+
+        # 验证用：industry_override 手动指定行业范围（跳过 L2 自动产出的全部行业，
+        # 收窄扫描规模，便于快速验证完整 workflow）
+        override = state.get("industry_override")
+        if override:
+            full_detail = result.get("industry_detail", {})
+            full_horizon = result.get("industry_horizon_map", {})
+            result["allowed_industries"] = [c for c in override]
+            result["industry_detail"] = {c: full_detail[c] for c in override if c in full_detail}
+            result["industry_horizon_map"] = {c: full_horizon.get(c, "short") for c in override}
+            result["industry_scores"] = [
+                s for s in result.get("industry_scores", [])
+                if s["industry_code"] in override
+            ]
+            state["log"].append(f"[industry_rotation] 手动指定行业范围（override）: {override}")
 
         allowed = result.get("allowed_industries", [])
         # 回填 decision_context（阶段三：sanitize numpy 类型，OB-R4）
@@ -632,25 +650,22 @@ def build_workflow(checkpointer=None) -> StateGraph:
 
 def run_daily_workflow(date: str = None, asset_types: list = None,
                        strategy_keys: list = None,
-                       enable_checkpoint: bool = False) -> dict:
+                       enable_checkpoint: bool = False,
+                       industry_override: list = None) -> dict:
     """
     一键执行每日完整流程。
 
     阶段一升级：返回包含 regime / risk_mode 信息。
     阶段三升级：可选 checkpoint 断点续跑（OB-R4）。
+    台阶一升级：industry_override 手动指定行业范围（验证用，收窄扫描规模）。
 
     :param enable_checkpoint: 启用 checkpoint 后，崩溃可用相同 thread_id（=date）重跑恢复。
+    :param industry_override: 手动指定申万行业代码列表（如 ["801080","801770"]），
+                              跳过 L2 自动产出的全部行业，只扫描指定行业（快速验证）。
 
     Returns:
-        {
-            "success": bool,
-            "signals": int,
-            "orders": int,
-            "log": list,
-            "error": str,
-            "regime": str,           # 阶段一新增
-            "risk_mode": str,        # 阶段一新增
-        }
+        含 success/signals/orders/log/regime/risk_mode/allowed_industries/
+        watch_pool/decision_log_path 等字段的 dict
     """
     run_date = date or datetime.now().strftime("%Y-%m-%d")
 
@@ -667,9 +682,12 @@ def run_daily_workflow(date: str = None, asset_types: list = None,
         "strategy_keys": strategy_keys,  # 会被 macro_regime_node 覆盖
         "log": [],
     }
+    if industry_override:
+        state["industry_override"] = industry_override
     try:
         final = wf.invoke(state, config=invoke_config) if invoke_config else wf.invoke(state)
         macro = final.get("macro_regime", {})
+        ctx = final.get("decision_context", {})
         return {
             "success": not final.get("error"),
             "signals": len(final.get("filtered_signals", [])),
@@ -680,6 +698,19 @@ def run_daily_workflow(date: str = None, asset_types: list = None,
             "regime": macro.get("regime", "unknown"),
             "risk_mode": macro.get("risk_mode", "balanced"),
             "confidence": macro.get("confidence", 0.5),
+            # 台阶一新增：可视化所需的分层明细
+            "decision_context": ctx,
+            "allowed_industries": ctx.get("allowed_industries", []),
+            "industry_detail": ctx.get("industry_detail", {}),
+            "strategy_keys": ctx.get("strategy_keys", []),
+            "llm_review": macro.get("llm_review", {"llm_available": False}),
+            "scan_results": final.get("scan_results", {}),
+            "filtered_signals": final.get("filtered_signals", []),
+            "watch_pool": final.get("watch_pool", []),
+            "decision_log_path": str(
+                Path(__file__).parent.parent / "data" / "processed"
+                / f"decision_log_{run_date.replace('-', '')}.json"
+            ),
         }
     except Exception as e:
         logger.error(f"Workflow failed: {e}")

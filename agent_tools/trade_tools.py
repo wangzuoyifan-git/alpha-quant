@@ -30,8 +30,10 @@ def filter_signals_by_risk(signals: list, current_equity: float = None,
         )
         return {
             "success": True,
-            "passed": [{"code": s.code, "signal": s.signal, "score": s.score,
-                         "reason": s.reason} for s in filtered],
+            "passed": [{"code": s.code, "name": s.name, "signal": s.signal,
+                         "price": s.price, "score": s.score, "reason": s.reason,
+                         "position_type": s.position_type,
+                         "time_horizon": s.time_horizon} for s in filtered],
             "blocked_count": len(signals) - len(filtered),
         }
     except Exception as e:

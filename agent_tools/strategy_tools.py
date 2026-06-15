@@ -44,7 +44,8 @@ def run_scan(date: str = None, strategies: list = None,
             "success": True,
             "signals": [
                 {"code": s.code, "name": s.name, "signal": s.signal,
-                 "price": s.price, "score": s.score, "reason": s.reason}
+                 "price": s.price, "score": s.score, "reason": s.reason,
+                 "position_type": s.position_type, "time_horizon": s.time_horizon}
                 for s in signals
             ],
             "count": len(signals),
