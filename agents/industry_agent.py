@@ -10,6 +10,7 @@ agents/industry_agent.py — L2 行业轮动层
 """
 import logging
 from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
 
@@ -121,14 +122,90 @@ def _score_industries(risk_mode: str, date: str = None) -> pd.DataFrame:
     return agg[["industry_code", "industry_name", "score", "net_amount_sum"]]
 
 
+def _score_industries_by_aggregation(level: str = "L2",
+                                     date: str = None) -> pd.DataFrame:
+    """
+    L2-R5b：个股资金流按申万成分股自底向上聚合到指定层级评分。
+
+    用 tushare moneyflow（net_mf_amount，个股级）按 industry_member 的
+    对应层级代码 groupby 求和，归一化为 0~100 评分。代码匹配，无名称匹配。
+
+    返回 DataFrame，列: industry_code, industry_name, score, net_amount_sum
+    """
+    import glob
+    import data.store_meta as sm
+
+    member = sm.load("industry_member")
+    if member is None or member.empty:
+        return pd.DataFrame()
+
+    code_col = {"L1": "l1_code", "L2": "l2_code", "L3": "l3_code"}.get(level)
+    name_col = {"L1": "l1_name", "L2": "l2_name", "L3": "l3_name"}.get(level)
+    if code_col is None or code_col not in member.columns:
+        return pd.DataFrame()
+
+    # ts_code（000001.SZ）→ 6位 code 映射到行业
+    member = member.copy()
+    member["code6"] = member["ts_code"].astype(str).str.split(".").str[0]
+    code_to_ind = dict(zip(member["code6"], member[code_col]))
+    ind_to_name = dict(zip(member[code_col].astype(str), member[name_col].astype(str)))
+
+    # 读全市场个股资金流的目标日截面（net_mf_amount）
+    base = Path(__file__).parent.parent / "data" / "tushare" / "moneyflow"
+    files = glob.glob(str(base / "*.parquet"))
+    if not files:
+        return pd.DataFrame()
+
+    rows = []
+    target_ts = pd.Timestamp(date) if date else None
+    for f in files:
+        try:
+            df = pd.read_parquet(f, columns=["net_mf_amount"])
+            if df.empty:
+                continue
+            if target_ts is not None and isinstance(df.index, pd.DatetimeIndex):
+                df = df[df.index <= target_ts]
+                if df.empty:
+                    continue
+            code6 = Path(f).stem.split(".")[0]
+            ind = code_to_ind.get(code6)
+            if ind is None:
+                continue
+            rows.append({"industry_code": ind,
+                         "net_mf_amount": float(df.iloc[-1]["net_mf_amount"])})
+        except Exception:
+            continue
+
+    if not rows:
+        return pd.DataFrame()
+
+    flow = pd.DataFrame(rows)
+    agg = flow.groupby("industry_code")["net_mf_amount"].sum().reset_index()
+    agg.columns = ["industry_code", "net_amount_sum"]
+
+    min_v, max_v = agg["net_amount_sum"].min(), agg["net_amount_sum"].max()
+    if max_v > min_v:
+        agg["score"] = ((agg["net_amount_sum"] - min_v) / (max_v - min_v) * 100).round(1)
+    else:
+        agg["score"] = 50.0
+
+    agg["industry_name"] = agg["industry_code"].astype(str).map(ind_to_name)
+    agg = agg.dropna(subset=["industry_name"])
+    agg = agg.sort_values("score", ascending=False).reset_index(drop=True)
+    return agg[["industry_code", "industry_name", "score", "net_amount_sum"]]
+
+
 def evaluate_industry_rotation(risk_mode: str = "balanced",
-                                date: str = None) -> dict:
+                                date: str = None,
+                                level: str = "L1") -> dict:
     """
     L2 行业轮动层：评估行业资金流，输出行业池。
 
     Args:
         risk_mode: L1 宏观层传入的 risk_mode（defensive/balanced/aggressive）
         date: 评估日期，默认最新
+        level: 申万行业层级 L1/L2/L3（2026-06 新增，L2-R5）
+               L1 用东财板块名匹配（原逻辑，快）；L2/L3 用个股资金流聚合（代码匹配）
 
     Returns:
         {
@@ -140,7 +217,10 @@ def evaluate_industry_rotation(risk_mode: str = "balanced",
         }
     """
     try:
-        scored = _score_industries(risk_mode=risk_mode, date=date)
+        if level == "L1":
+            scored = _score_industries(risk_mode=risk_mode, date=date)
+        else:
+            scored = _score_industries_by_aggregation(level=level, date=date)
 
         if scored.empty:
             logger.warning("L2 行业评分数据缺失，返回空池，L3 将退化为全市场扫描")
@@ -189,6 +269,7 @@ def evaluate_industry_rotation(risk_mode: str = "balanced",
             "allowed_styles": [],        # 台阶一直通，台阶二由行业特性收窄
             "fallback": False,
             "risk_mode": risk_mode,
+            "level": level,
         }
 
     except Exception as e:

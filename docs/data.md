@@ -115,6 +115,16 @@ store_meta.last_date(data_type) -> Optional[str]
 ```
 
 `data_type` 取值：`industry_csrc` / `industry_sw` / `sw_index` / `calendar`
+              / `industry_classify`（申万三级分类树）/ `industry_member`（股票→三级行业映射）
+
+**申万三级行业分类（2026-06 新增，Tushare SW2021 体系，代码匹配）：**
+
+- `industry_classify`：申万分类层级树（单文件），列 `index_code`（如 801016.SI）/ `industry_name` / `level`（L1/L2/L3）/ `industry_code` / `parent_code`。L1=31、L2=134、L3=346。
+- `industry_member`：股票→三级行业映射（单文件，来自 Tushare `index_member_all`），列 `l1_code/l1_name/l2_code/l2_name/l3_code/l3_name/ts_code/name/in_date/out_date/is_new`，一只股票一行直接含三级归属。
+
+> **设计要点**：放弃 AKShare 名称匹配方案，全部用 Tushare 申万代码体系（`index_classify`/`index_member_all`），层级关系靠 `parent_code`，行业归属靠 `l1/l2/l3_code`，无名称匹配的脆弱性。
+> 原 `industry_sw`（AKShare 一级映射）保留不删，向后兼容；scanner 行业过滤优先用 `industry_member`，回退 `industry_sw`。
+
 
 ### 2.3 fundamental 域（data/store_fundamental.py）
 

@@ -237,6 +237,7 @@
 | L2-R3-容错 | 数据缺失返回空池，L3 退化全市场 | NT-L2-04 | — | — | — | ✅ L1 |
 | L2-R4 | 扫描约束前置穿透引擎层（scanner 标的池收窄） | NT-L2-05/07 | NT-L2-INT | — | — | ✅ L1+L2 |
 | L2-R4-透传 | run_scan→scan→_get_filtered_stock_list 透传 | NT-L2-06/08 | — | — | — | ✅ L1 |
+| L2-R5 | 申万二/三级行业支持（Tushare 代码匹配 + 个股资金流聚合 + scanner L2/L3 过滤） | NT-L5-01~05 | — | — | — | ✅ L1（`tests/test_sw_classify.py`） |
 | **L3 个股选择层** |
 | L3-R1 | select_strategies 按 risk_mode 返回策略组合 | NT-L1-02a/NT-L1-02b | — | — | — | ✅ L1 |
 | L3-R2 | scan_node 从 decision_context 读取 strategy_keys/allowed_industries | NT-L1-03b | NT-L2-INT | — | — | ✅ L1+L2 |

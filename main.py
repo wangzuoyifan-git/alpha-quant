@@ -175,13 +175,15 @@ def cmd_orders():
 
 def cmd_workflow(date: str | None = None,
                  industries: list | None = None,
-                 asset_types: list | None = None):
+                 asset_types: list | None = None,
+                 industry_level: str = "L1"):
     """运行分层决策 workflow（L1宏观 → L2行业 → L3个股），分层可视化输出。
 
     :param date: 决策日期（默认今日）
     :param industries: 手动指定申万行业代码列表（如 801080 801770），
                        跳过 L2 自动产出的全部行业，只扫描指定行业（快速验证）。
     :param asset_types: 资产类型（默认 stock）
+    :param industry_level: 申万行业层级 L1/L2/L3（默认 L1）
     """
     from rich.console import Console
     from rich.table import Table
@@ -195,13 +197,16 @@ def cmd_workflow(date: str | None = None,
         border_style="cyan"))
 
     if industries:
-        console.print(f"[yellow]行业范围限定（override）:[/yellow] {industries}")
+        console.print(f"[yellow]行业范围限定（override，{industry_level}）:[/yellow] {industries}")
+    elif industry_level != "L1":
+        console.print(f"[yellow]行业层级:[/yellow] {industry_level}（个股资金流聚合评分）")
     console.print("[dim]运行中（L3 扫描可能需要一些时间）...[/dim]\n")
 
     result = run_daily_workflow(
         date=date,
         asset_types=asset_types or ["stock"],
         industry_override=industries,
+        industry_level=industry_level,
     )
 
     if not result["success"]:
@@ -498,6 +503,13 @@ def cmd_init_meta(start: str = "2024-01-02"):
     dl.init_db(start=start)
 
 
+def cmd_init_sw_classify():
+    """单独下载申万三级行业分类（Tushare SW2021，代码匹配）"""
+    from data.downloader_meta import MetaDownloader
+    dl = MetaDownloader()
+    dl.download_sw_classify()
+
+
 def cmd_init_fundamental(start_year: int = 2024, force: bool = False):
     """初始化 fundamental 域（季频财务数据）"""
     from data.downloader_fundamental import FundamentalDownloader
@@ -712,6 +724,8 @@ if __name__ == "__main__":
     p_wf.add_argument("--date", help="决策日期 YYYY-MM-DD（默认今日）")
     p_wf.add_argument("--industries", nargs="*",
                       help="手动指定申万行业代码（如 801080 801770），限定扫描范围加速验证")
+    p_wf.add_argument("--industry-level", default="L1", choices=["L1", "L2", "L3"],
+                      help="申万行业层级（默认 L1；L2/L3 用个股资金流聚合评分）")
     p_wf.add_argument("--types", nargs="*",
                       default=["stock"],
                       choices=["stock", "etf"],
@@ -738,6 +752,9 @@ if __name__ == "__main__":
     # init-meta
     p_init_meta = sub.add_parser("init-meta", help="初始化 meta 域（行业分类+申万指数+交易日历）")
     p_init_meta.add_argument("--start", default="2024-01-02", help="起始日期（默认2024-01-02）")
+
+    # init-sw-classify（申万三级分类，Tushare）
+    sub.add_parser("init-sw-classify", help="单独下载申万三级行业分类（Tushare SW2021）")
 
     # init-fundamental
     p_init_fund = sub.add_parser("init-fundamental", help="初始化 fundamental 域（季频财务数据）")
@@ -792,7 +809,7 @@ if __name__ == "__main__":
         cmd_scan(date=args.date, asset_types=args.types)
     elif args.command == "workflow":
         cmd_workflow(date=args.date, industries=args.industries,
-                     asset_types=args.types)
+                     asset_types=args.types, industry_level=args.industry_level)
     elif args.command == "backtest":
         cmd_backtest(
             strategy_key=args.strategy,
@@ -812,6 +829,8 @@ if __name__ == "__main__":
         cmd_schedule()
     elif args.command == "init-meta":
         cmd_init_meta(start=args.start)
+    elif args.command == "init-sw-classify":
+        cmd_init_sw_classify()
     elif args.command == "init-fundamental":
         cmd_init_fundamental(start_year=args.start_year, force=args.force)
     elif args.command == "init-factor":

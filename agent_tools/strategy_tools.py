@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 def run_scan(date: str = None, strategies: list = None,
-             industry_filter: list = None) -> dict:
+             industry_filter: list = None, industry_level: str = "L1") -> dict:
     """
     执行全市场扫描，返回结构化结果。
 
@@ -22,6 +22,7 @@ def run_scan(date: str = None, strategies: list = None,
     :param strategies: 策略 key 列表，默认全部内置策略
     :param industry_filter: L2 行业池约束（申万行业代码列表），透传到引擎层做约束前置过滤。
                             None 时为全市场扫描（向后兼容）。
+    :param industry_level: 行业代码层级 L1/L2/L3（2026-06 新增）。
 
     返回 {"success": bool, "signals": list, "count": int, "elapsed": float}
     """
@@ -37,7 +38,8 @@ def run_scan(date: str = None, strategies: list = None,
 
         import time
         t0 = time.time()
-        signals = engine.scan(date=date, industry_filter=industry_filter)
+        signals = engine.scan(date=date, industry_filter=industry_filter,
+                              industry_level=industry_level)
         elapsed = time.time() - t0
 
         return {

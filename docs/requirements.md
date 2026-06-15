@@ -890,6 +890,16 @@ decision_context = {
 - **约束必须在标的进入并发扫描前生效**，禁止全市场扫描后再过滤（否则失去分层意义，性能也无改善）
 - `industry_filter=None` 时为全市场扫描（向后兼容，遵循 AC13）
 
+**L2-R5 — 申万二/三级行业支持（2026-06 新增）**
+
+需求背景：一级行业（31个）粒度太粗，需支持二级（134个）/三级（346个）做更精细的行业轮动和扫描范围限定。
+
+- **L2-R5a 数据源**：用 Tushare `index_classify(src=SW2021)` 取三级分类树 + `index_member_all()` 取股票三级归属（代码匹配，非名称匹配）
+- **L2-R5b 聚合评分**：放弃东财板块名匹配，改为**个股资金流（tushare moneyflow.net_mf_amount）按申万成分股自底向上聚合到目标层级**。`evaluate_industry_rotation(level="L1"/"L2"/"L3")` 按指定层级聚合评分
+- **L2-R5c 扫描过滤**：`scanner._get_filtered_stock_list` 支持传入任意层级的行业代码，自动按 `industry_member` 的对应层级 join 过滤
+- **L2-R5d 向后兼容**：`level` 默认 "L1"，行为与现有一致；`industry_member` 缺失时回退原 `industry_sw`（仅一级）
+- **L2-R5e workflow 入口**：`run_daily_workflow(industry_level=...)` 和 CLI `--industry-level {L1,L2,L3}` 支持指定级别，`--industries` 传对应级别代码
+
 ### 8.5 L3 个股选择层需求（阶段一/二）
 
 **L3-R1 — 策略选择需求**

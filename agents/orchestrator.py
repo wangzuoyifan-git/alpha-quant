@@ -225,6 +225,7 @@ class WorkflowState(TypedDict, total=False):
     # 台阶一新增字段
     watch_pool: list            # L3-B 配置仓候选（WATCH 信号）
     industry_override: list[str]  # 手动指定行业范围（验证用，跳过 L2 自动评分）
+    industry_level: str         # 申万行业层级 L1/L2/L3（L2-R5）
 
 
 # ── 节点实现 ────────────────────────────────────────────────
@@ -309,8 +310,10 @@ def industry_rotation_node(state: WorkflowState) -> WorkflowState:
     try:
         ctx = state.get("decision_context", {})
         risk_mode = ctx.get("risk_mode", "balanced")
+        level = state.get("industry_level", "L1")
 
-        result = evaluate_industry_rotation(risk_mode=risk_mode, date=state.get("date"))
+        result = evaluate_industry_rotation(risk_mode=risk_mode, date=state.get("date"),
+                                            level=level)
 
         # 验证用：industry_override 手动指定行业范围（跳过 L2 自动产出的全部行业，
         # 收窄扫描规模，便于快速验证完整 workflow）
@@ -430,6 +433,7 @@ def scan_node(state: WorkflowState) -> WorkflowState:
         date=state.get("date"),
         strategies=state.get("strategy_keys"),
         industry_filter=allowed_industries,
+        industry_level=state.get("industry_level", "L1"),
     )
     # 阶段三：sanitize numpy 类型（OB-R4）
     state["scan_results"] = _to_native(result)
@@ -651,7 +655,8 @@ def build_workflow(checkpointer=None) -> StateGraph:
 def run_daily_workflow(date: str = None, asset_types: list = None,
                        strategy_keys: list = None,
                        enable_checkpoint: bool = False,
-                       industry_override: list = None) -> dict:
+                       industry_override: list = None,
+                       industry_level: str = "L1") -> dict:
     """
     一键执行每日完整流程。
 
@@ -684,6 +689,8 @@ def run_daily_workflow(date: str = None, asset_types: list = None,
     }
     if industry_override:
         state["industry_override"] = industry_override
+    if industry_level and industry_level != "L1":
+        state["industry_level"] = industry_level
     try:
         final = wf.invoke(state, config=invoke_config) if invoke_config else wf.invoke(state)
         macro = final.get("macro_regime", {})

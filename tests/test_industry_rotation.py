@@ -193,8 +193,9 @@ class TestScannerIndustryFilter:
         engine = ScanEngine(DataFetcher({}), {})
         engine.register_strategy("dummy", DummyStrategy())
 
-        def mock_get_list(industry_filter=None):
+        def mock_get_list(industry_filter=None, industry_level="L1"):
             received["industry_filter"] = industry_filter
+            received["industry_level"] = industry_level
             return pd.DataFrame(columns=["code", "name"])
 
         monkeypatch.setattr(engine, "_get_filtered_stock_list", mock_get_list)

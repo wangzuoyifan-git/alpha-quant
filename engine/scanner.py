@@ -60,7 +60,8 @@ class ScanEngine:
 
     def scan(self, date: str = None,
              asset_types: List[str] = None,
-             industry_filter: List[str] = None) -> List[Signal]:
+             industry_filter: List[str] = None,
+             industry_level: str = "L1") -> List[Signal]:
         """
         执行全市场扫描
         :param date: 扫描日期，默认今日
@@ -101,7 +102,8 @@ class ScanEngine:
 
         if "stock" in asset_types:
             print(f"\n[1/3] 获取股票列表...", flush=True)
-            stock_list = self._get_filtered_stock_list(industry_filter=industry_filter)
+            stock_list = self._get_filtered_stock_list(
+                industry_filter=industry_filter, industry_level=industry_level)
             for _, row in stock_list.iterrows():
                 scan_targets.append((row["code"], row["name"], "stock"))
             print(f"  股票: {len(stock_list)} 只", flush=True)
@@ -207,11 +209,42 @@ class ScanEngine:
                 logger.debug(f"策略 {strategy.name} 处理 {code} 出错: {e}")
         return signals
 
-    def _get_filtered_stock_list(self, industry_filter: List[str] = None) -> pd.DataFrame:
+    def _resolve_industry_members(self, industry_filter: List[str],
+                                  industry_level: str = "L1") -> set:
+        """
+        把行业代码列表解析为股票代码集合（6位，无后缀）。
+
+        优先用 industry_member（Tushare 三级映射，支持 L1/L2/L3）；
+        L1 且新表缺失时回退 industry_sw（AKShare 一级，向后兼容）。
+        """
+        # 优先新表
+        try:
+            members = store_meta.get_member_stocks(industry_filter, level=industry_level)
+            if members:
+                return set(members)
+        except Exception as e:
+            logger.debug(f"industry_member 解析失败: {e}")
+
+        # 回退：仅 L1 支持旧表
+        if industry_level == "L1":
+            ind_df = store_meta.load("industry_sw")
+            if ind_df is not None and not ind_df.empty:
+                return set(
+                    ind_df[ind_df["industry_code"].astype(str).isin(
+                        [str(c).split(".")[0] for c in industry_filter]
+                    )]["stock_code"].astype(str)
+                )
+        return set()
+
+    def _get_filtered_stock_list(self, industry_filter: List[str] = None,
+                                 industry_level: str = "L1") -> pd.DataFrame:
         """从本地库获取股票列表并过滤，不走网络。
 
         :param industry_filter: L2 行业池约束（申万行业代码列表）。
                                 非 None 时，仅保留属于这些行业的股票（约束前置）。
+        :param industry_level: 行业代码层级 L1/L2/L3（2026-06 新增）。
+                               L1 默认走原 industry_sw（向后兼容）；
+                               L2/L3 走 industry_member（Tushare 三级映射）。
         """
         ipo_dates = store.load_ipo_dates()
 
@@ -231,18 +264,14 @@ class ScanEngine:
         # L2 行业池约束（约束前置：在并发扫描前就收窄标的池）
         if industry_filter:
             before = len(stock_list)
-            ind_df = store_meta.load("industry_sw")
-            if ind_df is not None and not ind_df.empty:
-                allowed_codes = set(
-                    ind_df[ind_df["industry_code"].astype(str).isin(
-                        [str(c) for c in industry_filter]
-                    )]["stock_code"].astype(str)
-                )
+            allowed_codes = self._resolve_industry_members(
+                industry_filter, industry_level)
+            if allowed_codes:
                 stock_list = stock_list[stock_list["code"].isin(allowed_codes)]
-                print(f"  L2行业池过滤: -{before - len(stock_list)} 只 "
+                print(f"  行业池过滤({industry_level}): -{before - len(stock_list)} 只 "
                       f"(保留 {len(industry_filter)} 个行业的 {len(stock_list)} 只)", flush=True)
             else:
-                logger.warning("industry_sw 数据缺失，跳过 L2 行业过滤")
+                logger.warning(f"行业映射数据缺失（level={industry_level}），跳过行业过滤")
 
         # 排除 ST
         if self.cfg.get("exclude_st", True):

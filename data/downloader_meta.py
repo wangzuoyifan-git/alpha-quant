@@ -61,6 +61,13 @@ class MetaDownloader:
         _log("[2/4] 下载申万行业分类（AKShare）...")
         self._download_sw_industry()
 
+        # 申万三级分类（Tushare SW2021，代码匹配）
+        _log("[2b/4] 下载申万三级分类（Tushare）...")
+        try:
+            self.download_sw_classify()
+        except Exception as e:
+            _log(f"  申万三级分类下载失败（不阻断）: {e}")
+
         _log("[3/4] 下载申万行业指数日线（AKShare）...")
         self._download_sw_index(start=start)
 
@@ -80,6 +87,13 @@ class MetaDownloader:
 
         _log("[2/4] 更新申万行业分类...")
         self._download_sw_industry()
+
+        # 申万三级分类（Tushare SW2021）
+        _log("[2b/4] 更新申万三级分类（Tushare）...")
+        try:
+            self.download_sw_classify()
+        except Exception as e:
+            _log(f"  申万三级分类更新失败（不阻断）: {e}")
 
         _log("[3/4] 更新申万行业指数日线...")
         # 从最新日期续传
@@ -255,6 +269,78 @@ class MetaDownloader:
                 time.sleep(1)
 
         _log(f"  申万行业指数：新增={ok} 跳过={skip} 失败={fail}")
+
+    # ------------------------------------------------------------------
+    # 申万三级行业分类（Tushare SW2021，2026-06 新增，L2-R5）
+    # ------------------------------------------------------------------
+
+    def download_sw_classify(self) -> None:
+        """
+        下载申万三级行业分类树 + 股票三级归属映射（Tushare）。
+
+        - industry_classify：L1/L2/L3 分类树（含 parent_code）
+        - industry_member：股票→三级行业映射（index_member_all 一次返回全部）
+
+        用代码匹配（非名称匹配），需 TUSHARE_TOKEN。
+        """
+        import os
+        token = os.getenv("TUSHARE_TOKEN", "")
+        if not token:
+            _log("  TUSHARE_TOKEN 未配置，跳过申万三级分类下载")
+            return
+        try:
+            import tushare as ts
+            ts.set_token(token)
+            pro = ts.pro_api()
+        except ImportError:
+            _log("  tushare 未安装，跳过")
+            return
+
+        # 1. 三级分类树
+        _log("  下载申万分类树（index_classify L1/L2/L3）...")
+        frames = []
+        for lv in ("L1", "L2", "L3"):
+            def _get(level=lv):
+                return pro.index_classify(level=level, src="SW2021")
+            df = _retry(_get)
+            if df is not None and not df.empty:
+                frames.append(df)
+                _log(f"    {lv}: {len(df)} 个行业")
+            time.sleep(0.5)
+
+        if frames:
+            classify = pd.concat(frames, ignore_index=True)
+            store.save("industry_classify", classify)
+            _log(f"  申万分类树：{len(classify)} 个行业（L1+L2+L3）")
+        else:
+            _log("  申万分类树：无数据，跳过")
+            return
+
+        # 2. 股票三级归属映射（index_member_all 分页拉全，单次上限约 3000~5000）
+        _log("  下载股票三级归属（index_member_all，分页）...")
+        all_members = []
+        offset = 0
+        page_size = 3000
+        while True:
+            def _get_members(off=offset):
+                return pro.index_member_all(is_new="Y", limit=page_size, offset=off)
+            page = _retry(_get_members)
+            if page is None or page.empty:
+                break
+            all_members.append(page)
+            if len(page) < page_size:
+                break
+            offset += page_size
+            time.sleep(0.5)
+
+        if all_members:
+            members = pd.concat(all_members, ignore_index=True)
+            members = members.drop_duplicates(subset=["ts_code", "l3_code"])
+            store.save("industry_member", members)
+            _log(f"  申万成分股映射：{len(members)} 条，"
+                 f"{members['ts_code'].nunique()} 只股票")
+        else:
+            _log("  申万成分股映射：无数据")
 
     # ------------------------------------------------------------------
     # 交易日历
