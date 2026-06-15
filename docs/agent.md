@@ -1,10 +1,11 @@
 # Alpha量化 — Agent 层文档
 
 > Agent 层架构设计、Tool Layer 规范、LLM 接入方案、阶段规划。
-> 最后更新：2026-05-29
+> 最后更新：2026-06-12（重大更新：多周期配置定位、LLM 融合模式、autonomy_level 框架）
 >
 > **项目基础信息见 `docs/project.md`**
-> **架构兼容性约束完整定义（AC1~AC9）见 `docs/requirements.md` 第七章**
+> **架构兼容性约束完整定义（AC1~AC9+AC14~17）见 `docs/requirements.md` 第七/八章**
+> **LLM 角色详细论证见 `docs/llm_role.md`**（将于下一次文档整理后并入本文档）
 
 ---
 
@@ -26,18 +27,17 @@
 │  职责：任务分解、Agent 调度、结果汇总、异常处理、状态管理  │
 └──────────┬──────────┬──────────┬────────────────────────┘
            │          │          │
-    ┌──────▼──┐  ┌────▼────┐  ┌──▼──────────┐
-    │  Data   │  │Strategy │  │ Risk/Trade  │
-    │  Agent  │  │  Agent  │  │   Agent     │
-    └────┬────┘  └────┬────┘  └──────┬──────┘
+     ┌──────▼──┐  ┌────▼────┐  ┌──▼──────┐  ┌──▼──────────┐
+     │  Data   │  │Strategy │  │Industry │  │ Risk/Trade  │
+     │  Agent  │  │  Agent  │  │  Agent  │  │   Agent     │
+     └────┬────┘  └────┬────┘  └──┬──────┘  └──────┬──────┘
          │            │              │
     ┌────▼────────────▼──────────────▼──────┐
-    │              Tool Layer               │
-    │           agent_tools/                │
-    │  data_tools.py  strategy_tools.py     │
-    │  trade_tools.py                       │
-    └───────────────────────────────────────┘
-         │            │              │
+     │                   Tool Layer                      │
+     │                agent_tools/                       │
+     │  data_tools.py  strategy_tools.py  trade_tools.py │
+     └───────────────────────────────────────────────────┘
+          │            │              │
     ┌────▼──┐   ┌─────▼──┐   ┌──────▼─────┐
     │data/  │   │engine/ │   │trader/     │
     │store* │   │scanner │   │assistant   │
@@ -149,10 +149,12 @@ def check_reduce_window(code: str, date: str = None) -> dict:
 
 ```python
 def run_scan(date: str = None,
-             strategies: list[str] = None) -> dict:
+             strategies: list[str] = None,
+             industry_filter: list[str] = None) -> dict:
     """
     执行全市场扫描，返回结构化信号列表。
     strategies: 策略 key 列表，默认全部内置策略。
+    :param industry_filter: L2 行业池约束，None=全市场扫描（AC13）
 
     Returns:
         {"success": bool, "signals": [{"code","name","signal",
@@ -361,6 +363,48 @@ LLM = {
 
 ---
 
+## 五（B）、LLM 角色与演进框架
+
+> 本节为核心设计纲领，统领阶段四~六。详细论证见 `docs/llm_role.md`。
+
+### 系统定位修正：多周期配置 + 择时
+
+**系统不是"纯短线择时"，而是"多周期配置 + 择时"。**
+
+各层按决策粒度划分，时间周期是正交属性：
+- **L1**（慢变，周/事件级）：模式基调 + 总仓位约束 + 配置/交易仓资金分配
+- **L2**（中变，月/季级）：**双重职责**——中长期配置仓决策者 + L3 约束提供者
+- **L3**（快变，日级）：短期交易仓择时（L3-A）+ 配置仓候选产出（L3-B，WATCH→人工确认）
+
+### LLM 核心定位：融合，非分工
+
+- 规则角色：证据/特征提取器（把数据加工成结构化"事实"）
+- LLM 角色：综合分析师（融合规则证据 + 非结构化信息，输出带推理链的方案）
+- 所有数值来自规则/store（grounding），LLM 禁止生成数字
+
+### autonomy_level：LLM 方案执行权的总闸门
+
+| 级别 | 名称 | LLM 方案的权力 | 规则的角色 |
+|---|---|---|---|
+| L0 | OFF | LLM 不参与 | 规则独立决策（= 阶段三现状，全局默认） |
+| L1 | ADVISORY | 只进日志/推送，不碰决策 | 规则照常驱动执行 |
+| L2 | ASSIST | 限定范围微调规则结果 | 规则主导，LLM 修饰 |
+| L3 | COPILOT | 提出不同方案，需规则校验/人工确认 | 规则校验 + 人工守门 |
+| L4 | AUTO | 方案直接驱动决策 | 规则退为风控兜底 |
+
+配置：`config.settings.LLM["autonomy_level"]`（全局）+ 分层可覆盖 + 永远可一键回退 OFF
+
+### 进化飞轮：规则-LLM 分工边界动态演进
+
+| 层次 | 对象 | 策略 |
+|---|---|---|
+| L-A 参数自优化 | 阈值/权重 | ✅ 自动化（阶段五） |
+| L-B 经验记忆库 | LLM 反思→结构化经验→反哺 prompt | ✅ 半自动（阶段五） |
+| L-C 规则候选 | LLM 提议新规则逻辑 | ✅ 人工守门 |
+| L-D 自动写代码 | LLM 自动生成规则代码 | ⚠️ 架构预留，当前不实现 |
+
+---
+
 ## 六、分层决策架构落地路径（2026-06-11 更新）
 
 > 基于 TradingAgents 多 Agent 辩论、Qlib Nested Decision 思想，设计"宏观→行业→个股"三层架构。
@@ -431,6 +475,8 @@ LLM = {
 - ✅ 日志追溯 L2 行业评分明细
 - ✅ `industry_filter=None` 时退化为全市场扫描（向后兼容）
 
+> **L2 重定位（2026-06-12）**：L2 不只是"筛行业池的中间人"，它是**中长期配置仓的决策者**。台阶一当前实现（资金流排名）是简化版，台阶二升级为三维评分（景气/估值/资金流，权重随 L1 regime 动态调整）。
+
 ---
 
 ### 阶段三（P1）：可靠性与可观测加固 ✅ 已完成
@@ -468,27 +514,35 @@ LLM = {
 
 ---
 
-### 阶段四（P1）：LLM 接入（仅外围，不碰核心信号）
+### 阶段四（P1）：LLM 接入地基 + 自主度框架
 
-**目标**：把 `config/settings.py` 已配置的 LLM 用起来，只在外围环节。
+**目标**：搭建 LLM 接入基础设施，建立 autonomy_level 可配机制，以 L1 regime 研判作为首个融合试点。
 
 **关键交付：**
 
-1. **L1 regime 辅助研判**（借鉴 TradingAgents Bull/Bear 辩论）
-   - LLM 对宏观指标做定性多空研判，作为规则 regime 的**校验/置信度调整**
-   - 务必 **grounding**：数值来自 store 层，LLM 只做定性解读
+1. **llm_clients/ 洋葱架构**（L0 核心层 + L1 能力层 + L2 集成层）
+   - L0：Provider 协议 + OpenAICompatProvider（支持 DeepSeek/Qwen/GLM/聚合平台如 yunwu.ai）+ AnthropicProvider（Claude 官方原生）
+   - `api_style` 字段解耦"协议"与"模型"：openai（兼容/聚合）/ anthropic（官方原生）
+   - L1：LLMClient 三级降级链（primary→fallback→degraded），依赖倒置
+   - L2：get_client() 是唯一读 config.settings.LLM 的函数（项目耦合收敛点）
 
-2. **L3 候选标的深度分析**
-   - 规则扫描筛出 Top N 候选后，仅对这少量标的用 LLM 做基本面/消息面分析
+2. **autonomy_level 全局/分层可配机制**（默认 OFF，见本章五（B）节）
 
-3. **建立 `llm_clients` 适配层**
-   - 封装 primary(DeepSeek)/fallback(OpenAI) 为统一 client
-   - 支持多 provider（Qwen/GLM/MiniMax）
+3. **L1 regime 首个融合试点（ADVISORY 级）**
+   - 规则评估 regime 后，LLM 做"双视角研判"（不做多轮辩论）
+   - LLM 只调整 confidence（±confidence_adjust_max，默认 0.2，可配）
+   - regime/risk_mode/strategy_keys 永不被 LLM 改变
+   - 每次 LLM 判断带证据引用+结构化推理落盘（为进化飞轮铺数据）
+
+4. **配置扩展**
+   - config.settings.LLM 扩展：api_style/enable_regime_review/autonomy_level 等
+   - .env.example 补充：DEEPSEEK_API_KEY/YUNWU_API_KEY/YUNWU_BASE_URL/ANTHROPIC_API_KEY
 
 **验收标准：**
-- ✅ LLM 调用全部可降级（失败回退规则）
-- ✅ 核心信号生成路径不含任何 LLM 调用，回测仍完全确定可复现
-- ✅ LLM 输出符合 grounding 要求（不生成数字）
+- ✅ key 未配置时（或 autonomy_level=OFF）与阶段三行为完全一致
+- ✅ LLM 调用全部经 llm_clients，禁止 agents 直接 import openai/anthropic（AC16）
+- ✅ LLM 输出只写咨询性字段（llm_review），不进 decision_context 约束字段（AC17）
+- ✅ 输出带结构化推理（证据引用/分析/结论），非自由文本
 
 ---
 

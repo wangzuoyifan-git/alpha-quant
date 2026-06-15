@@ -713,28 +713,48 @@
 - 复用现有 `run_scan` / `filter_signals_by_risk` 接口
 - 不引入 Qlib 等外部依赖
 
-### 8.2 三层决策架构定义
+### 8.2 三层决策架构定义（多周期配置+择时，2026-06-12 重定位）
+
+> **系统定位：多周期配置 + 择时**（非纯短线）。各层按决策粒度划分，时间周期是正交属性。
 
 ```
-L1 宏观场景层（Macro Regime Layer）
-  │ 职责：识别当前宏观环境（regime），输出 risk_mode 和总仓位约束
-  │ 输入：宏观指标（bond/PMI/M2/VIX/DXY）、事件日历
-  │ 输出：decision_context.regime / risk_mode / max_position
+L1 宏观场景层（Macro Regime Layer，慢变：周/事件级）
+  │ 职责：设定市场模式基调 + 总仓位约束 + 配置仓:交易仓资金分配
+  │ 输入：宏观指标（bond/PMI/M2/VIX/DXY）+ 重大事件（阶段六接入）
+  │ 输出：regime / risk_mode / max_position / allocation（配置仓:交易仓比例）
+  │       + 对 L2 的模式约束（l2_weight_config 各维度权重）
   ▼
 
-L2 行业轮动层（Industry Rotation Layer）
-  │ 职责：基于 risk_mode，用资金流+基本面筛出行业池和行业权重
-  │ 输入：decision_context.risk_mode、Tushare 行业资金流、季频财务
-  │ 输出：decision_context.allowed_industries / industry_weights
+L2 行业轮动层（Industry Rotation Layer，中变：月/季级）
+  │ 职责（双重）：
+  │   1. 中长期配置仓决策者：判断行业长/中/短期价值 → 驱动配置仓
+  │   2. L3 约束提供者：向 L3 传行业池 + 收窄后的策略风格约束
+  │ 输入：L1 约束 + 行业资金流（③）+ 行业估值（②）+ 景气度（①，台阶二）
+  │ 三维评分：①景气度 × w1 + ②估值 × w2 + ③资金流 × w3（权重随 regime 动态调整，可配置）
+  │ 输出：allowed_industries / industry_detail（含 time_horizon）/ allowed_styles /
+  │       industry_horizon_map / allocation（回传给执行层）
   ▼
 
-L3 个股选择层（Stock Selection Layer）
-  │ 职责：在行业池约束内执行规则扫描，产出具体信号
-  │ 输入：decision_context（行业池、策略组合）
-  │ 输出：scan_results（仅行业池内标的的信号）
+L3 个股选择层（Stock Selection Layer，快变：日级）
+  │ 职责：在 L1+L2 约束内，按 time_horizon 产出两类输出：
+  │   · 交易仓（L3-A 技术策略）：BUY/SELL 信号，position_type=trading，time_horizon=short
+  │   · 配置仓候选（L3-B 基本面策略）：WATCH 信号，position_type=config，time_horizon=medium/long
+  │     经 L2 行业池过滤后，供人工确认进配置仓
+  │ 输入：decision_context（行业池、allowed_styles、allowed_time_horizons）
+  │ 输出：scan_results（区分交易仓信号和配置仓候选）
   ▼
 
-风控+交易执行（现有流程）
+风控+交易执行（现有流程，仓位分层管理台阶一最小版）
+```
+
+**仓位分层模型**：
+```
+总仓位（L1 管总上限 + 配置仓:交易仓资金分配）
+├── 配置仓（长/中期持有）
+│   ├── L2 驱动：行业配置（行业 ETF 或行业内组合）
+│   └── L3-B 驱动：个股价值/质量投资（WATCH→人工确认→进配置仓）
+└── 交易仓（短期波段）
+    └── L3-A 驱动：个股技术择时（BUY 信号→按策略逻辑自动管理）
 ```
 
 ### 8.3 L1 宏观场景层需求（阶段一）
@@ -768,20 +788,44 @@ L3 个股选择层（Stock Selection Layer）
 | risk_on（风险扩张） | aggressive | PMI > 52 且 VIX < 20 |
 | volatile（高波动） | defensive | VIX 20日标准差 > 5 |
 
-**L1-R3 — Decision Context 结构定义**
+**L1-R3 — Decision Context 结构定义（2026-06-12 扩展多周期字段）**
 
 `decision_context` 作为全局约束对象，贯穿三层：
 ```python
 decision_context = {
-  "regime": str,                      # L1 输出
-  "risk_mode": str,                   # L1 输出
-  "max_position": float,              # L1 输出，总仓位上限（0.0~1.0）
-  "allowed_industries": list[str],    # L2 输出，通过的行业代码
-  "industry_weights": dict[str, float], # L2 输出，行业配置权重
-  "strategy_keys": list[str],         # L1/L2 联合决定的策略组合
+  # ── L1 输出 ──
+  "regime": str,                      # crisis/risk_off/balanced/risk_on/volatile
+  "risk_mode": str,                   # defensive/balanced/aggressive
+  "max_position": float,              # 总仓位上限（0.0~1.0）
+  "allocation": {                     # 配置仓/交易仓资金分配（L1 决定）
+    "position_pct": float,            # 配置仓占总仓位（如 0.6）
+    "trading_pct": float,             # 交易仓占总仓位（如 0.4）
+  },
+  "l2_weight_config": {               # L1 传给 L2 的三维权重（随 regime 动态）
+    "w1": float, "w2": float, "w3": float,  # 景气/估值/资金流
+  },
+
+  # ── L2 输出 ──
+  "allowed_industries": list[str],    # 通过的行业代码
+  "industry_weights": dict[str, float], # 行业评分（向后兼容保留）
+  "industry_detail": dict,            # 每个行业的详细评级（含 time_horizon/景气/估值）
+  "industry_horizon_map": dict,       # {行业代码: 推荐 time_horizon}
+
+  # ── 逐层收窄的策略空间约束 ──
+  "allowed_styles": list[str],        # 允许的策略风格（L2 按行业特性收窄）
+  "allowed_time_horizons": list[str], # 允许的配置周期
+
+  # ── 元数据 ──
+  "strategy_keys": list[str],         # L3 按画像匹配产出（见下方说明）
   "timestamp": str,                   # 决策时间戳
 }
 ```
+
+> **strategy_keys 归属修正（2026-06-12）**：早期实现中 `strategy_keys` 由 L1 直接决定（L1 跳过 L2 直连 L3 的层次错位）。
+> 重定位后，`select_strategies()` 改为**在 L1+L2 约束空间内按策略能力画像匹配**（见 `docs/strategy.md` profile() + select_strategies 重构）。
+> 台阶一先打通约束字段通道（allowed_styles/allowed_time_horizons），L2 的"行业→风格"映射先简单或直通，台阶二灌入智能。
+
+> **占位字段说明**：`industry_detail` 的景气度维度、`industry_horizon_map` 的真实判断台阶一用简单规则（高景气+低估值→long），台阶二用基本面聚合+LLM 升级。
 
 **max_position 按 risk_mode 取值（实现于 `strategy_agent._MAX_POSITION_BY_MODE`）：**
 
@@ -933,7 +977,9 @@ decision_context = {
 - `select_strategies()` 从"静态映射"升级为"查询历史决策日志，按 regime 分组统计策略胜率"
 - 优先选择当前 regime 下历史胜率 > 60% 的策略
 
-### 8.7 LLM 接入约束（阶段四/六）
+### 8.7 LLM 接入约束（阶段四/六，2026-06-12 扩展）
+
+> **详细设计见 `docs/agent.md` 第五（新）章 LLM 角色与演进设计**。本节只记录需求约束和验收标准。
 
 **LLM-R1 — 严格禁入核心路径**
 - LLM 只能用于：L1 regime 辅助研判、L3 候选标的深度分析、E3 事件解读
@@ -945,7 +991,42 @@ decision_context = {
 
 **LLM-R3 — 可降级要求**
 - 所有 LLM 调用必须有规则 fallback
-- LLM 失败（超时/限流/错误）时，自动回退规则版，记录降级日志
+- LLM 失败（超时/限流/错误/key 未配置）时，自动回退规则版，记录降级日志
+
+**LLM-R4 — llm_clients 统一适配层（洋葱架构）**
+- L0 核心层（`core.py`）：`Provider` 协议 + `OpenAICompatProvider`（DeepSeek/Qwen/GLM/聚合平台如 yunwu.ai）+ `AnthropicProvider`（Claude 官方原生）
+- L1 能力层（`client.py`）：`LLMClient` 三级降级链，依赖倒置（Provider 通过构造参数注入）
+- L2 集成层（`__init__.py`）：`get_client()` 是唯一读 `config.settings.LLM` 的函数（项目耦合收敛点）
+- `api_style` 字段解耦"协议"（openai/anthropic）与"模型"（claude-opus/deepseek-chat）
+  - `api_style=openai`：适用 DeepSeek/Qwen/GLM 直连 + yunwu.ai/OpenRouter 等聚合平台
+  - `api_style=anthropic`：仅 Anthropic 官方原生（聚合平台访问 Claude 走 openai 分支）
+
+**LLM-R5 — L1 regime LLM 研判约束**
+- LLM 只调整 `confidence`（`±confidence_adjust_max`，默认 0.2，可配）
+- `regime` / `risk_mode` / `strategy_keys` 永不被 LLM 改变
+- 降级时 confidence 用规则原值，workflow 行为与 OFF 状态完全一致
+
+**LLM-R6 — L3 候选 LLM 点评约束**
+- 只分析 Top N（`candidate_top_n`，默认 5），控制成本
+- 不修改 signal/score/position_type 等字段
+- 输出落盘 `decision_log.llm_candidate_reviews`（台阶一不进推送）
+
+**LLM-R7 — 结构化推理强制**
+- LLM 输出推理链（证据引用/分析要点/结论），非自由文本
+- 便于事后归因和绩效反馈（进化飞轮 L-B 经验记忆库的数据来源）
+
+**LLM-R8 — autonomy_level 可配机制**
+- `config.settings.LLM["autonomy_level"]` 全局默认（默认 OFF）
+- 支持分层覆盖（每层独立配置 autonomy_level）
+- 永远可一键回退 OFF（不管 LLM 多智能，纯规则必须可用）
+- 五级：OFF / ADVISORY / ASSIST / COPILOT / AUTO（详见 agent.md）
+
+**AC16 — LLM 调用集中管控**
+- 所有 LLM 调用必须经 `llm_clients`，禁止 agents 层直接 import `openai` / `anthropic`
+
+**AC17 — LLM 输出隔离**
+- LLM 输出只写咨询性字段（`llm_review` / `llm_candidate_reviews`）
+- 不进 decision_context 的约束字段（regime/risk_mode/allowed_industries/strategy_keys 等）
 
 ### 8.8 测试需求（阶段一验收）
 

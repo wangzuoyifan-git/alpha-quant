@@ -15,28 +15,29 @@
 - 各层责任明确，通过明确接口和数据契约解耦
 - 数据域严格物理隔离，支持单域独立更新、迁移和扩展
 
-**Agent 层内部分层决策结构（2026-06-11 新增）：**
+**Agent 层内部分层决策结构（2026-06-12 重定位）：**
 
-Agent 层实现三层决策架构（L1 宏观 → L2 行业 → L3 个股），遵循以下约束：
+Agent 层实现三层决策架构（L1 宏观 → L2 行业 → L3 个股），系统定位**多周期配置+择时**，遵循以下约束：
 
 1. **约束传递原则**：上层输出约束上下文（decision_context），下层在约束内决策
-   - L1 宏观层输出 regime / risk_mode / max_position
-   - L2 行业层输出 allowed_industries / industry_weights
-   - L3 个股层在行业池约束内扫描
+   - L1 宏观层输出 regime / risk_mode / max_position / **allocation（配置仓:交易仓资金分配）**
+   - L2 行业层输出 allowed_industries / industry_detail / **allowed_styles / industry_horizon_map**
+   - L3 个股层在约束内产出两类输出：交易仓信号（BUY）/ 配置仓候选（WATCH）
 
 2. **约束前置原则**：下层动作空间必须在进入前收窄，不能"扫完再过滤"
    - 错误模式：全市场扫描 → 过滤行业
    - 正确模式：行业筛选 → 只扫行业池内标的
 
 3. **决策可回流原则**：每层决策持久化，支持下次运行时绩效反馈
-   - decision_log 记录每层输入输出
-   - 阶段五实现"收益回填 → 策略调整"闭环
+   - decision_log 记录每层输入输出（含 node_audit，阶段三已实现）
+   - 阶段五实现"收益回填 → 参数自优化（L-A）→ 经验记忆（L-B）"闭环
 
-4. **混合架构原则**：规则负责广度，LLM 负责深度
-   - 核心信号生成路径不含 LLM（确保可回测）
-   - LLM 用于外围辅助（regime 研判、候选深度分析、事件解读）
+4. **融合架构原则**：规则负责广度（全市场扫描），LLM 负责深度（约束语义解读+候选深度分析）
+   - 规则角色：证据/特征提取器（把数据加工成结构化"事实"）
+   - LLM 角色：综合分析师（融合结构化证据+非结构化信息做加权推理）
+   - autonomy_level 总闸门控制 LLM 方案的执行权（详见 docs/agent.md）
 
-详细设计见 `docs/agent.md` 第六章、`docs/requirements.md` 第八章。
+详细设计见 `docs/agent.md` 第五（新）章、`docs/requirements.md` 第八章。
 
 ### 1.2 接口与封装规范
 
