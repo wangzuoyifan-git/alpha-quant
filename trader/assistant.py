@@ -222,11 +222,23 @@ class TradeAssistant:
             rc2_ok = self.check_position_count(len(positions))
             rc3_ok = self.check_industry_concentration(order, industry_pos, equity)
 
+            # RC7：减持窗口期过滤（BUY 信号在大股东减持窗口内拦截）
+            rc7_ok = True
+            if sig.signal == "BUY" and self.risk.get("reduce_window_block", True):
+                try:
+                    from data.store_events import has_reduce_window
+                    if has_reduce_window(sig.code):
+                        order.risk_flags.append("RC7")
+                        rc7_ok = False
+                        logger.info(f"RC7 拦截 {sig.code}：处于减持窗口期")
+                except Exception:
+                    pass  # 事件数据缺失时不阻断
+
             # RC2 标记（对单个信号不直接标记 RC2，在生成指令单时全局检查）
             if not rc2_ok:
                 order.risk_check_detail["RC2"] = False
 
-            all_ok = rc1_ok and rc2_ok and rc3_ok
+            all_ok = rc1_ok and rc2_ok and rc3_ok and rc7_ok
             if all_ok or not self.rc_enforce:
                 filtered.append(sig)
             else:

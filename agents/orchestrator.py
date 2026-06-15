@@ -315,7 +315,18 @@ def industry_rotation_node(state: WorkflowState) -> WorkflowState:
         ctx["industry_weights"] = _to_native({
             s["industry_code"]: s["score"] for s in result.get("industry_scores", [])
         })
+        # 台阶一新增：多周期约束字段回填
+        ctx["industry_detail"] = _to_native(result.get("industry_detail", {}))
+        ctx["industry_horizon_map"] = _to_native(result.get("industry_horizon_map", {}))
+        ctx["allowed_styles"] = result.get("allowed_styles", [])
+        # allowed_time_horizons：从 horizon_map 中汇总出现的 horizon 类型
+        horizons = set(result.get("industry_horizon_map", {}).values())
+        ctx["allowed_time_horizons"] = sorted(horizons) if horizons else ["short"]
+        # 重算 strategy_keys（现在 allowed_styles 已填充）
+        from agents.strategy_agent import select_strategies
+        ctx["strategy_keys"] = select_strategies(ctx)
         state["decision_context"] = ctx
+        state["strategy_keys"] = ctx["strategy_keys"]
 
         if result.get("fallback"):
             state["log"].append(
@@ -392,8 +403,9 @@ def update_data_node(state: WorkflowState) -> WorkflowState:
 
 
 def scan_node(state: WorkflowState) -> WorkflowState:
-    """执行扫描（阶段二：受 L2 行业池约束前置收窄）"""
+    """执行扫描（阶段二：受 L2 行业池约束前置收窄；台阶一：落盘 WATCH 配置仓候选）"""
     from agent_tools import run_scan
+    state["log"] = state.get("log", [])
     ctx = state.get("decision_context", {})
     allowed_industries = ctx.get("allowed_industries") or None  # 空列表→None（全市场）
     result = run_scan(
@@ -403,6 +415,14 @@ def scan_node(state: WorkflowState) -> WorkflowState:
     )
     # 阶段三：sanitize numpy 类型（OB-R4）
     state["scan_results"] = _to_native(result)
+
+    # 台阶一：分离 WATCH 配置仓候选落盘（D-7 L3-B 候选链路）
+    signals = result.get("signals", [])
+    watch_pool = [s for s in signals if s.get("signal") == "WATCH"]
+    if watch_pool:
+        state["watch_pool"] = watch_pool
+        state["log"].append(f"[scan] {len(watch_pool)} WATCH 配置仓候选（人工确认后进配置仓）")
+
     state["log"].append(f"[scan] {result.get('count', 0)} signals in {result.get('elapsed', 0)}s")
     if not result["success"]:
         state["error"] = result.get("error", "扫描失败")
@@ -416,6 +436,7 @@ def scan_node(state: WorkflowState) -> WorkflowState:
         },
         output_summary={
             "count": result.get("count", 0),
+            "watch_count": len(watch_pool),
             "elapsed": result.get("elapsed", 0),
             "success": result.get("success", False),
         },

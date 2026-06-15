@@ -368,13 +368,13 @@
 
 | 缺口编号 | 需求编号 | 需求描述 | 建议测试级别 | 建议测试方式 |
 |---|---|---|---|---|
-| GAP-01 | RC5 | 总账户回撤超限时暂停新开仓 | L1 | 构造持仓亏损场景，验证新信号被拦截 |
-| GAP-02 | S4-北交所过滤 | 北交所标的不参与扫描 | L1+L2 | 构造北交所代码（8开头），验证不出现在结果中 |
-| GAP-03 | S4-新股过滤 | 上市不足60日不参与扫描 | L1+L2 | 构造上市日期为近30日的标的，验证被过滤 |
-| GAP-04 | S4-成交额过滤 | 成交额低于阈值不参与扫描 | L1+L2 | 构造低成交额数据，验证被过滤 |
-| GAP-05 | F1-预期价记录 | 确认指令单后记录预期买入价 | L1 | 验证 confirmed_at 和 expected_price 字段 |
-| GAP-06 | F1-实际成交录入 | 支持手动录入实际成交价/数量 | L1+L2 | 验证录入接口和持久化 |
-| GAP-07 | F2-持仓盈亏更新 | 每日更新持仓盈亏 | L2 | 依赖本地行情数据，验证盈亏计算正确性 |
+| ✅ GAP-01 | RC5 | 总账户回撤超限时暂停新开仓 | L1 | ✅ 已补充（`tests/test_risk_control.py` TestRC5TotalDrawdown） |
+| ✅ GAP-02 | S4-北交所过滤 | 北交所标的不参与扫描 | L1+L2 | ✅ 已补充（`tests/test_scanner_filters.py` TestNorthExchangeFilter） |
+| ✅ GAP-03 | S4-新股过滤 | 上市不足60日不参与扫描 | L1+L2 | ✅ 已补充（`tests/test_scanner_filters.py` TestNewStockFilter） |
+| GAP-04 | S4-成交额过滤 | 成交额低于阈值不参与扫描 | L1+L2 | ⏳ scanner 当前按 min_volume 过滤，成交额（amount）过滤逻辑待实现 |
+| ✅ GAP-05 | F1-预期价记录 | 确认指令单后记录预期买入价 | L1 | ✅ 已补充（`tests/test_risk_control.py` TestF1ExpectedPrice） |
+| ✅ GAP-06 | F1-实际成交录入 | 支持手动录入实际成交价/数量 | L1+L2 | ✅ 已补充（`tests/test_risk_control.py` TestF1F2Execution） |
+| GAP-07 | F2-持仓盈亏更新 | 每日更新持仓盈亏 | L2 | ⏳ 依赖本地行情数据，待补充 |
 | GAP-08 | F2-平仓记录 | 平仓后记录完整交易记录 | L1+L2 | 验证交易记录字段完整性和持久化 |
 | GAP-09 | B3-结果持久化 | 回测结果持久化供胜率展示 | L1+L2 | 验证持久化文件格式和读取一致性 |
 | GAP-10 | AC3-接口可调用 | 指令单确认流程可被程序调用 | L1 | ✅ 已覆盖（UT-AT-09，confirm_order 返回结构化 dict + confirmed_at） |
@@ -390,8 +390,8 @@
 | GAP-32 | D8a-窗口查询 | get_active_event_windows 返回当日窗口期事件 | L1 | ✅ 已覆盖（UT-AT-01，`tests/test_agent_tools.py`） |
 | GAP-33 | D8b-内容 | E2 企业事件 CRUD 接口和字段完整性 | L1+L2 | store_events 企业事件接口往返一致性 |
 | GAP-34 | D8b-RC7联动 | has_reduce_window 正确识别减持窗口期 | L1 | ✅ 已覆盖（UT-AT-02，经 check_reduce_window 工具封装验证） |
-| GAP-35 | RC7-减持窗口期 | 减持窗口期内 BUY 信号指令单标注 RC7 违规 | L1+L2 | mock D8b 数据，验证 risk_flags 含 RC7 |
-| GAP-36 | RC8-突发事件熔断 | VIX 超阈值时 filter_signals_by_risk 拦截全部新开仓 | L1 | mock D5b VIX 数据，验证所有信号被拦截 |
+| ✅ GAP-35 | RC7-减持窗口期 | 减持窗口期内 BUY 信号指令单标注 RC7 违规 | L1+L2 | ✅ 已补充（`tests/test_risk_control.py` TestRC7ReduceWindow + trader/assistant.py RC7 实现） |
+| ✅ GAP-36 | RC8-突发事件熔断 | VIX 超阈值时 filter_signals_by_risk 拦截全部新开仓 | L1 | ✅ 已补充（`tests/test_risk_control.py` TestRC8CircuitBreaker） |
 | GAP-37 | D8c-结构 | E3 突发事件存储结构可读写，字段完整 | L1 | store_events 突发事件接口往返一致性 |
 
 **阶段一（2026-06-11）补充：**

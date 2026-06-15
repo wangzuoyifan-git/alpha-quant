@@ -160,6 +160,23 @@ def evaluate_industry_rotation(risk_mode: str = "balanced",
         allowed = selected["industry_code"].tolist()
         scores = selected.to_dict("records")
 
+        # 台阶一：industry_detail 和 industry_horizon_map（简单规则占位，台阶二升级）
+        # 规则：score >= 60 → short（交易仓动量操作），其余 → medium（配置仓候选）
+        industry_detail = {}
+        industry_horizon_map = {}
+        for row in scores:
+            code = row["industry_code"]
+            horizon = "short" if float(row.get("score", 0)) >= 60 else "medium"
+            industry_detail[code] = {
+                "industry_name": row["industry_name"],
+                "score": row["score"],
+                "moneyflow": row.get("net_amount_sum"),
+                "prosperity": "pending",   # 台阶二接入景气度
+                "valuation": "pending",    # 台阶二接入估值
+                "time_horizon": horizon,
+            }
+            industry_horizon_map[code] = horizon
+
         logger.info(f"L2 行业池: risk_mode={risk_mode}, 选出 {len(allowed)} 个行业: "
                     f"{selected['industry_name'].tolist()[:5]}...")
 
@@ -167,6 +184,9 @@ def evaluate_industry_rotation(risk_mode: str = "balanced",
             "success": True,
             "allowed_industries": allowed,
             "industry_scores": scores,
+            "industry_detail": industry_detail,
+            "industry_horizon_map": industry_horizon_map,
+            "allowed_styles": [],        # 台阶一直通，台阶二由行业特性收窄
             "fallback": False,
             "risk_mode": risk_mode,
         }

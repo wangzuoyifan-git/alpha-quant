@@ -291,6 +291,23 @@ _MAX_POSITION_BY_MODE = {
     "aggressive": 1.0,
 }
 
+# L1→L2 三维权重配置（随 regime，遵循 requirements.md L1-R3）
+# w1=景气度, w2=估值, w3=资金流（台阶一 w1 填 0，景气度数据不足）
+_L2_WEIGHT_BY_REGIME = {
+    "crisis":   {"w1": 0.0, "w2": 0.5, "w3": 0.5},
+    "risk_off": {"w1": 0.0, "w2": 0.5, "w3": 0.5},
+    "balanced": {"w1": 0.0, "w2": 0.3, "w3": 0.7},
+    "risk_on":  {"w1": 0.0, "w2": 0.2, "w3": 0.8},
+    "volatile": {"w1": 0.0, "w2": 0.4, "w3": 0.6},
+}
+
+# L1 配置仓/交易仓资金分配（按 risk_mode，台阶一只传递记录不真正约束）
+_ALLOCATION_BY_MODE = {
+    "defensive": {"position_pct": 0.7, "trading_pct": 0.3},
+    "balanced":  {"position_pct": 0.5, "trading_pct": 0.5},
+    "aggressive": {"position_pct": 0.3, "trading_pct": 0.7},
+}
+
 
 def build_decision_context(env: dict = None) -> dict:
     """
@@ -311,14 +328,32 @@ def build_decision_context(env: dict = None) -> dict:
         env = evaluate_market_condition()
 
     risk_mode = env["risk_mode"]
-    strategy_keys = select_strategies(risk_mode=risk_mode)
+    regime = env["regime"]
+    # 台阶一：strategy_keys 在 L1 阶段先用 regime 画像匹配产出初值，
+    # L2 回填 allowed_styles 后会在 industry_rotation_node 重算收窄。
+    strategy_keys = select_strategies({"regime": regime, "risk_mode": risk_mode})
 
     return {
-        "regime": env["regime"],
+        # ── L1 输出 ──
+        "regime": regime,
         "risk_mode": risk_mode,
         "max_position": _MAX_POSITION_BY_MODE.get(risk_mode, 0.7),
-        "allowed_industries": [],   # 阶段二 L2 填充
-        "industry_weights": {},     # 阶段二 L2 填充
+        "allocation": dict(_ALLOCATION_BY_MODE.get(
+            risk_mode, {"position_pct": 0.5, "trading_pct": 0.5})),
+        "l2_weight_config": dict(_L2_WEIGHT_BY_REGIME.get(
+            regime, {"w1": 0.0, "w2": 0.3, "w3": 0.7})),
+
+        # ── L2 输出（industry_rotation_node 回填）──
+        "allowed_industries": [],
+        "industry_weights": {},
+        "industry_detail": {},
+        "industry_horizon_map": {},
+
+        # ── 逐层收窄的策略空间约束（L2 回填，台阶一直通）──
+        "allowed_styles": [],            # 空=不收窄，L2 按行业特性填充
+        "allowed_time_horizons": ["short"],
+
+        # ── 元数据 ──
         "strategy_keys": strategy_keys,
         "timestamp": datetime.now().isoformat(),
     }
