@@ -311,9 +311,10 @@ def industry_rotation_node(state: WorkflowState) -> WorkflowState:
         ctx = state.get("decision_context", {})
         risk_mode = ctx.get("risk_mode", "balanced")
         level = state.get("industry_level", "L1")
+        l2_weights = ctx.get("l2_weight_config")
 
         result = evaluate_industry_rotation(risk_mode=risk_mode, date=state.get("date"),
-                                            level=level)
+                                            level=level, weights=l2_weights)
 
         # 验证用：industry_override 手动指定行业范围（跳过 L2 自动产出的全部行业，
         # 收窄扫描规模，便于快速验证完整 workflow）

@@ -13,47 +13,46 @@ import pandas as pd
 
 
 class TestIndustryRotationOutput:
-    """L2-R1/R2/R3: 行业轮动评估输出"""
+    """L2-R1/R2/R3: 行业轮动评估输出（台阶二三维评分）"""
 
-    def _mock_moneyflow(self):
-        """构造模拟行业资金流数据（东财格式）"""
-        return pd.DataFrame([
-            {"name": "电子", "net_amount": 5e9, "pct_change": 2.1, "content_type": "行业"},
-            {"name": "银行", "net_amount": 3e9, "pct_change": 0.5, "content_type": "行业"},
-            {"name": "医药生物", "net_amount": 2e9, "pct_change": 1.2, "content_type": "行业"},
-            {"name": "食品饮料", "net_amount": 1.5e9, "pct_change": 0.8, "content_type": "行业"},
-            {"name": "有色金属", "net_amount": 1e9, "pct_change": 1.5, "content_type": "行业"},
-            {"name": "计算机", "net_amount": 8e8, "pct_change": 2.5, "content_type": "行业"},
-            {"name": "通信", "net_amount": 5e8, "pct_change": 1.0, "content_type": "行业"},
-            {"name": "汽车", "net_amount": -2e8, "pct_change": -0.5, "content_type": "行业"},
-            {"name": "钢铁", "net_amount": -5e8, "pct_change": -1.0, "content_type": "行业"},
-            {"name": "房地产", "net_amount": -1e9, "pct_change": -2.0, "content_type": "行业"},
-            # 东财细分板块（非申万一级名，应被忽略）
-            {"name": "半导体", "net_amount": 4e9, "pct_change": 3.0, "content_type": "行业"},
-            {"name": "光学光电子", "net_amount": 2e9, "pct_change": 2.0, "content_type": "行业"},
-        ])
+    def _mock_member(self):
+        """mock _load_member_map: (name_map, code_to_ind)"""
+        name_map = {
+            "801080": "电子", "801780": "银行", "801150": "医药生物",
+            "801120": "食品饮料", "801050": "有色金属", "801180": "房地产",
+        }
+        code_to_ind = {
+            "002415": "801080", "000001": "801780", "600276": "801150",
+            "600519": "801120", "601899": "801050", "000002": "801180",
+        }
+        return name_map, code_to_ind
 
-    def _mock_industry_sw(self):
-        """构造模拟申万行业分类"""
-        return pd.DataFrame([
-            {"stock_code": "000001", "stock_name": "平安银行", "industry_code": "801780", "industry_name": "银行"},
-            {"stock_code": "600519", "stock_name": "贵州茅台", "industry_code": "801120", "industry_name": "食品饮料"},
-            {"stock_code": "002415", "stock_name": "海康威视", "industry_code": "801080", "industry_name": "电子"},
-            {"stock_code": "600276", "stock_name": "恒瑞医药", "industry_code": "801150", "industry_name": "医药生物"},
-            {"stock_code": "601899", "stock_name": "紫金矿业", "industry_code": "801050", "industry_name": "有色金属"},
-            {"stock_code": "000002", "stock_name": "万科A", "industry_code": "801180", "industry_name": "房地产"},
-        ])
+    def _patch_all(self, monkeypatch, mf=None, pros=None, val=None):
+        """统一 mock 三维聚合 + 成分股映射"""
+        from agents import industry_agent
+        name_map, code_to_ind = self._mock_member()
+        # 默认资金流：电子最高
+        mf = mf if mf is not None else {
+            "801080": 5e9, "801780": 3e9, "801150": 2e9,
+            "801120": 1.5e9, "801050": 1e9, "801180": -1e9,
+        }
+        pros = pros if pros is not None else {
+            "801080": 0.10, "801780": 0.05, "801150": 0.25,
+            "801120": 0.15, "801050": 0.12, "801180": -0.05,
+        }
+        val = val if val is not None else {
+            "801080": 0.3, "801780": 0.7, "801150": 0.5,
+            "801120": 0.4, "801050": 0.6, "801180": 0.8,
+        }
+        monkeypatch.setattr(industry_agent, "_load_member_map",
+                            lambda level: (name_map, code_to_ind))
+        monkeypatch.setattr(industry_agent, "_aggregate_raw_dims_cached",
+                            lambda c, level, date=None: (mf, pros, val))
 
     def test_evaluate_industry_rotation_structure(self, monkeypatch):
         """L2-R3: 输出结构验证"""
         from agents import industry_agent
-
-        monkeypatch.setattr(industry_agent, "_load_moneyflow_window",
-                            lambda risk_mode, date=None: self._mock_moneyflow())
-        monkeypatch.setattr(
-            "data.store_meta.load",
-            lambda dt, **k: self._mock_industry_sw() if dt == "industry_sw" else None
-        )
+        self._patch_all(monkeypatch)
 
         result = industry_agent.evaluate_industry_rotation(risk_mode="balanced")
 
@@ -61,61 +60,54 @@ class TestIndustryRotationOutput:
         assert "allowed_industries" in result
         assert "industry_scores" in result
         assert isinstance(result["allowed_industries"], list)
-        # 输出的应是申万行业代码（801xxx）
         for code in result["allowed_industries"]:
             assert code.startswith("801"), f"应输出申万代码，实际: {code}"
 
     def test_defensive_fewer_industries_than_aggressive(self, monkeypatch):
         """L2-R3: defensive 行业池应窄于 aggressive"""
         from agents import industry_agent
-
-        monkeypatch.setattr(industry_agent, "_load_moneyflow_window",
-                            lambda risk_mode, date=None: self._mock_moneyflow())
-        monkeypatch.setattr(
-            "data.store_meta.load",
-            lambda dt, **k: self._mock_industry_sw() if dt == "industry_sw" else None
-        )
+        self._patch_all(monkeypatch)
 
         defensive = industry_agent.evaluate_industry_rotation(risk_mode="defensive")
         aggressive = industry_agent.evaluate_industry_rotation(risk_mode="aggressive")
 
-        # defensive 池 <= aggressive 池
         assert len(defensive["allowed_industries"]) <= len(aggressive["allowed_industries"]), \
             "defensive 行业池应不宽于 aggressive"
 
     def test_high_inflow_industries_ranked_first(self, monkeypatch):
-        """L2-R2: 资金净流入高的行业排名靠前"""
+        """L2-R2: 资金流主导时净流入高的行业排名靠前"""
         from agents import industry_agent
+        self._patch_all(monkeypatch)
 
-        monkeypatch.setattr(industry_agent, "_load_moneyflow_window",
-                            lambda risk_mode, date=None: self._mock_moneyflow())
-        monkeypatch.setattr(
-            "data.store_meta.load",
-            lambda dt, **k: self._mock_industry_sw() if dt == "industry_sw" else None
-        )
+        # 资金流权重 100% → 电子（最高净流入）入选
+        result = industry_agent.evaluate_industry_rotation(
+            risk_mode="aggressive", weights={"w1": 0.0, "w2": 0.0, "w3": 1.0})
 
-        result = industry_agent.evaluate_industry_rotation(risk_mode="aggressive")
-
-        # 电子（净流入最高 5e9）应在行业池中
-        # 电子对应申万代码 801080
         assert "801080" in result["allowed_industries"], "电子（最高净流入）应入选"
 
     def test_empty_data_returns_empty_pool(self, monkeypatch):
         """L2-R3: 数据缺失时返回空池（容错，不中断）"""
         from agents import industry_agent
-
-        monkeypatch.setattr(industry_agent, "_load_moneyflow_window",
-                            lambda risk_mode, date=None: None)
-        monkeypatch.setattr(
-            "data.store_meta.load",
-            lambda dt, **k: self._mock_industry_sw() if dt == "industry_sw" else None
-        )
+        # 成分股映射为空 → fallback
+        monkeypatch.setattr(industry_agent, "_load_member_map",
+                            lambda level: ({}, {}))
 
         result = industry_agent.evaluate_industry_rotation(risk_mode="balanced")
 
-        # 数据缺失时应返回空 allowed_industries（L3 退化为全市场）
         assert result["allowed_industries"] == [], "数据缺失应返回空池"
         assert result["success"] is False or result.get("fallback") is True
+
+    def test_prosperity_valuation_not_pending(self, monkeypatch):
+        """L2-R2: 三维评分接入后景气度/估值不再是 pending"""
+        from agents import industry_agent
+        self._patch_all(monkeypatch)
+
+        result = industry_agent.evaluate_industry_rotation(
+            risk_mode="balanced", weights={"w1": 0.3, "w2": 0.25, "w3": 0.45})
+        detail = result["industry_detail"]
+        any_code = next(iter(detail))
+        assert detail[any_code]["prosperity"] != "pending"
+        assert detail[any_code]["valuation"] != "pending"
 
 
 class TestScannerIndustryFilter:

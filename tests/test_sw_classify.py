@@ -118,40 +118,42 @@ class TestScannerResolveMembers:
 
 
 class TestIndustryAggregation:
-    """L2 个股资金流聚合评分"""
+    """L2 三维评分（台阶二：L1/L2/L3 统一走成分股聚合）"""
+
+    def _patch_dims(self, monkeypatch, level_code):
+        from agents import industry_agent
+        name_map = {level_code: "测试行业"}
+        code_to_ind = {"000001": level_code}
+        monkeypatch.setattr(industry_agent, "_load_member_map",
+                            lambda level: (name_map, code_to_ind))
+        monkeypatch.setattr(industry_agent, "_aggregate_raw_dims_cached",
+                            lambda c, level, date=None: (
+                                {level_code: 1e8}, {level_code: 0.2}, {level_code: 0.5}))
 
     def test_aggregation_level_passed_through(self, monkeypatch):
-        """evaluate_industry_rotation(level=L2) 调用聚合评分而非东财评分"""
+        """evaluate_industry_rotation(level=L2) 通过成分股聚合产出"""
         from agents import industry_agent
 
-        called = {}
-        def fake_agg(level, date=None):
-            called["level"] = level
-            return pd.DataFrame([
-                {"industry_code": "801081.SI", "industry_name": "半导体",
-                 "score": 80.0, "net_amount_sum": 1e8},
-            ])
-        monkeypatch.setattr(industry_agent, "_score_industries_by_aggregation", fake_agg)
+        captured = {}
+        self._patch_dims(monkeypatch, "801081.SI")
+
+        def spy(level):
+            captured["level"] = level
+            return ({"801081.SI": "半导体"}, {"000001": "801081.SI"})
+        monkeypatch.setattr(industry_agent, "_load_member_map", spy)
 
         r = industry_agent.evaluate_industry_rotation(risk_mode="balanced", level="L2")
-        assert called["level"] == "L2"
+        assert captured["level"] == "L2"
         assert r["success"]
         assert r["level"] == "L2"
         assert "801081.SI" in r["allowed_industries"]
 
-    def test_l1_still_uses_eastmoney(self, monkeypatch):
-        """level=L1 仍走东财板块评分（向后兼容）"""
+    def test_l1_also_uses_aggregation(self, monkeypatch):
+        """level=L1 同样走成分股聚合（台阶二统一路径）"""
         from agents import industry_agent
-
-        called = {}
-        def fake_score(risk_mode, date=None):
-            called["used"] = "eastmoney"
-            return pd.DataFrame([
-                {"industry_code": "801080", "industry_name": "电子",
-                 "score": 75.0, "net_amount_sum": 1e8},
-            ])
-        monkeypatch.setattr(industry_agent, "_score_industries", fake_score)
+        self._patch_dims(monkeypatch, "801080")
 
         r = industry_agent.evaluate_industry_rotation(risk_mode="balanced", level="L1")
-        assert called.get("used") == "eastmoney"
         assert r["level"] == "L1"
+        assert r["success"]
+        assert "801080" in r["allowed_industries"]

@@ -33,9 +33,9 @@ class TestBuildDecisionContextFields:
         assert "l2_weight_config" in ctx
         wc = ctx["l2_weight_config"]
         assert all(k in wc for k in ("w1", "w2", "w3"))
-        # w1 台阶一为 0（景气度数据不足）
-        assert wc["w1"] == 0.0
-        assert abs(wc["w2"] + wc["w3"] - 1.0) < 1e-9
+        # 台阶二景气度接入后 w1>0（防御市重基本面）
+        assert wc["w1"] > 0.0
+        assert abs(wc["w1"] + wc["w2"] + wc["w3"] - 1.0) < 1e-9
 
     def test_allowed_styles_present_empty_by_default(self):
         from agents.strategy_agent import build_decision_context

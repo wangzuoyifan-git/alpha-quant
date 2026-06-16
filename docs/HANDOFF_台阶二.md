@@ -64,12 +64,17 @@ venv/bin/python main.py workflow --industry-level L2 --industries 801081
 - ✅ 物理迁移 641M 数据 + 删除死占位（tushare/daily, daily_basic, factor/moneyflow）
 - ✅ 全回归绿灯（361 passed, 2 skipped）
 
-### 4.2 L2 景气度维度（①）接入
+### 4.2 L2 景气度维度（①）接入 ✅ 已完成（2026-06-16）
 
-- 财务数据按行业聚合（data/fundamental 已有）
-- L2 三维评分完整化：景气度×w1 + 估值×w2 + 资金流×w3
-- 权重 l2_weight_config 已由 L1 按 regime 动态产出（台阶一已通道化）
-- 台阶一现状：只跑估值②+资金流③，景气度①留 "pending"
+- ✅ 三维评分 = 景气度①×w1 + 估值②×w2 + 资金流③×w3（权重从 decision_context.l2_weight_config 传入）
+- ✅ 景气度①：成分股 YOYNI（净利同比）+ npMargin（净利率）行业中位数聚合
+- ✅ 估值②：per-stock PE 历史时序分位 → 行业中位数（规避横截面行业偏差）
+- ✅ 资金流③：moneyflow/stock net_mf_amount 行业累加（原有逻辑）
+- ✅ L1/L2/L3 统一走申万成分股聚合路径（东财名称匹配路径废弃）
+- ✅ w1 激活（defensive regime: w1=0.4/w2=0.35/w3=0.25）
+- ✅ horizon 升级：高景气+低估→long，高资金流+低景气→short，其余→medium
+- ✅ 每日缓存（data/cache/l2_scores/）：首次 ~50s，重复 <0.1s
+- ✅ 全回归绿灯（409 passed，unit+integration）
 
 ### 4.3 allocation 真正约束资金
 

@@ -103,9 +103,18 @@ class TestBuildWorkflowBackwardCompat:
 class TestCheckpointRecovery:
     """NT-L3-01: Checkpoint 断点恢复测试（OB-R4）"""
 
-    def test_checkpoint_saves_state_between_invocations(self):
+    def test_checkpoint_saves_state_between_invocations(self, monkeypatch):
         """测试 checkpoint 在两次调用间保存状态"""
         from agents.orchestrator import build_workflow, make_checkpointer, WorkflowState
+
+        # 隔离重型 L2/扫描真实数据依赖（本测试只验证 checkpoint 接口）
+        monkeypatch.setattr("agents.orchestrator.industry_rotation_node", lambda s: s)
+        monkeypatch.setattr("agents.orchestrator.scan_node", lambda s: s)
+        monkeypatch.setattr("agents.orchestrator.risk_filter_node", lambda s: s)
+        monkeypatch.setattr("agents.orchestrator.human_approval_node", lambda s: s)
+        monkeypatch.setattr("agents.orchestrator.order_node", lambda s: s)
+        monkeypatch.setattr("agents.orchestrator.notify_node", lambda s: s)
+        monkeypatch.setattr("agents.orchestrator.log_result_node", lambda s: s)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "checkpoint.sqlite"
@@ -170,6 +179,14 @@ class TestCheckpointRecovery:
         # Patch 节点函数
         monkeypatch.setattr("agents.orchestrator.check_data_node", mock_check_data_node_failing_once)
         monkeypatch.setattr("agents.orchestrator.macro_regime_node", mock_macro_regime_node)
+        # 隔离重型 L2/扫描真实数据依赖（本测试只验证 checkpoint 机制）
+        monkeypatch.setattr("agents.orchestrator.industry_rotation_node", lambda s: s)
+        monkeypatch.setattr("agents.orchestrator.scan_node", lambda s: s)
+        monkeypatch.setattr("agents.orchestrator.risk_filter_node", lambda s: s)
+        monkeypatch.setattr("agents.orchestrator.human_approval_node", lambda s: s)
+        monkeypatch.setattr("agents.orchestrator.order_node", lambda s: s)
+        monkeypatch.setattr("agents.orchestrator.notify_node", lambda s: s)
+        monkeypatch.setattr("agents.orchestrator.log_result_node", lambda s: s)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "recovery_test.sqlite"
