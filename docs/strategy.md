@@ -137,10 +137,40 @@ class BaseStrategy(ABC):
 | `macd_rsi` | reversal | [risk_off, volatile] | defensive | short | 超跌反弹，熊市底部 |
 | `vol_price_breakout` | breakout | [risk_on] | aggressive | short | 强势突破，牛市趋势 |
 | `etf_momentum` | momentum | [risk_on, balanced] | balanced | short | ETF 动量轮动 |
-| `fundamental_value` | value | [risk_off, balanced, crisis] | defensive | short* | 财务健康低估标的 |
+| `fundamental_value` | quality | [crisis,risk_off,balanced,risk_on,volatile] | defensive | medium | B1 质量价值(GARP) |
+| `deep_value` | value | [crisis,risk_off,balanced,risk_on,volatile] | defensive | long | B2 深度价值 |
+| `growth_pick` | growth | [crisis,risk_off,balanced,risk_on,volatile] | balanced | medium | B3 成长筛选 |
 | `money_flow` | moneyflow | [risk_on, balanced] | aggressive | short | 主力资金净流入 |
 
-*fundamental_value 当前为日线短期实现；台阶二升级为中长期持有时改 medium/long
+**L3-B（B1/B2/B3）applicable_regimes 设计**：配置仓候选不依赖择时，任何 regime 都应产出选股，
+故全 5 种 regime 适用。区别由 L2 行业池 + allowed_styles 收窄，而非 regime。
+
+### 2.1.1 L3-B 基本面策略设计（台阶二）
+
+> **数据量纲（关键）**：`store_fundamental` 来自 BaoStock，财务比率均为**小数**（ROE 0.1057=10.57%），
+> 列名为 BaoStock 风格。估值（pe_ttm/pb_mrq）来自 market 域 K线 df（scanner 已传入）。
+
+**字段映射**（修正历史 bug：旧代码读 Tushare 列名 roew/netprofit_yoy/debt_assets_ratio 全不存在）：
+
+| 指标 | 域 | 列名 | 量纲 |
+|---|---|---|---|
+| ROE | fundamental/profit | `roeAvg` | 小数 |
+| 毛利率 | fundamental/profit | `gpMargin` | 小数 |
+| 净利率 | fundamental/profit | `npMargin` | 小数 |
+| 净利润同比 | fundamental/growth | `YOYNI` | 小数 |
+| 净资产同比 | fundamental/growth | `YOYEquity` | 小数 |
+| 资产负债率 | fundamental/balance | `liabilityToAsset` | 小数 |
+| PE/PB | market（K线 df） | `pe_ttm` / `pb_mrq` | 倍数 |
+
+**三个策略阈值（默认值，全部 self.params 可配置）**：
+
+| 策略 | key | 默认阈值 | 输出 |
+|---|---|---|---|
+| B1 质量价值(GARP) | `fundamental_value` | min_roe=0.15, max_pe=30, max_pb=5, min_growth=0（排除亏损 PE≤0） | WATCH/config/medium |
+| B2 深度价值 | `deep_value` | max_pb=1.5, max_pe=15(>0), max_debt=0.6, 净利为正 | WATCH/config/long |
+| B3 成长筛选 | `growth_pick` | min_ni_growth=0.25, min_equity_growth=0.15, min_roe=0.10 | WATCH/config/medium |
+
+三者均 `signal=WATCH`, `position_type=config`，经 scan_node 落盘 watch_pool，人工确认后进配置仓。
 
 ### 2.2 L3 策略分类（多周期配置定位下）
 
@@ -151,9 +181,9 @@ class BaseStrategy(ABC):
 - 输出：`signal=BUY`, `position_type=trading`, `time_horizon=short`
 
 **L3-B 基本面策略**（半系统化，配置仓候选，经 L2 行业池过滤后供人工确认）
-- 子类：B1 质量价值（高ROE+合理PE/PB，GARP核心）/ B2 深度价值 / B3 成长筛选
+- 子类：B1 质量价值（`fundamental_value`，GARP）/ B2 深度价值（`deep_value`）/ B3 成长筛选（`growth_pick`）
 - 输出：`signal=WATCH`, `position_type=config`, `time_horizon=medium/long`
-- fundamental_value 是 B1 的雏形；完整 B1/B2/B3 策略待台阶二开发
+- 台阶二已完整实现（详见 2.1.1）
 
 **L3-C 事件驱动策略**（待开发）
 - C1 高股息/回购（medium，配置仓）/ C2 业绩超预期（short~medium，交易仓）
@@ -185,10 +215,10 @@ L2→L3 约束传递（decision_context 新字段）：
 
 | 项目 | 台阶一现状 | 台阶二目标 |
 |---|---|---|
-| select_strategies | 部分从硬编码迁移到画像匹配 | 完整画像匹配，自动兼容新策略 |
+| select_strategies | 部分从硬编码迁移到画像匹配 | ✅ 完整画像匹配（style+regime+time_horizon 三维），自动兼容新策略 |
 | market_condition | 旧字段保留向后兼容 | 完全弃用，删除 |
-| fundamental_value time_horizon | 填 short（当前是短线实现） | 升级为中长期时改 medium/long |
-| L3-B 完整策略 | 只有雏形（fundamental_value） | 开发 quality/GARP/高股息 |
+| fundamental_value time_horizon | 填 short（当前是短线实现） | ✅ 重构为 B1 质量价值，medium，WATCH/config |
+| L3-B 完整策略 | 只有雏形（fundamental_value） | ✅ B1/B2/B3 完整实现（台阶二） |
 
 ---
 

@@ -139,13 +139,27 @@ def _get_fundamental_summary(code: str) -> Dict:
             return {"available": False, "note": "无季频财务数据"}
 
         latest = profit.iloc[-1]
+        # BaoStock 列名 + 小数量纲（roeAvg/gpMargin 为小数，转百分数展示）
+        roe = latest.get("roeAvg")
+        gross = latest.get("gpMargin")
+        # 净利润同比来自 growth 域 YOYNI（小数）
+        growth = load_fund(code, "growth")
+        yoy_ni = None
+        if growth is not None and not growth.empty:
+            yoy_ni = growth.iloc[-1].get("YOYNI")
+        # 资产负债率来自 balance 域 liabilityToAsset（小数）
+        balance = load_fund(code, "balance")
+        debt = None
+        if balance is not None and not balance.empty:
+            debt = balance.iloc[-1].get("liabilityToAsset")
+
         return {
             "available": True,
             "reported_date": fund_last_date(code, "profit") or "N/A",
-            "roe": round(float(latest.get("roew", np.nan)), 2) if pd.notna(latest.get("roew")) else None,
-            "netprofit_yoy": round(float(latest.get("netprofit_yoy", np.nan)), 2) if pd.notna(latest.get("netprofit_yoy")) else None,
-            "grossmargin": None,  # 财报中不一定有，标注不可用
-            "debt_ratio": _safe_float(latest.get("debt_assets_ratio")),
+            "roe": round(float(roe) * 100, 2) if pd.notna(roe) else None,
+            "netprofit_yoy": round(float(yoy_ni) * 100, 2) if pd.notna(yoy_ni) else None,
+            "grossmargin": round(float(gross) * 100, 2) if pd.notna(gross) else None,
+            "debt_ratio": round(float(debt) * 100, 2) if pd.notna(debt) else None,
         }
     except Exception as e:
         logger.debug(f"基本面摘要 {code}: {e}")

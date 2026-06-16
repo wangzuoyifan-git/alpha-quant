@@ -4,6 +4,8 @@ from .macd_rsi import MACDRSIStrategy
 from .vol_price_breakout import VolPriceBreakoutStrategy
 from .etf_momentum import ETFMomentumStrategy
 from .fundamental_value import FundamentalValueStrategy
+from .deep_value import DeepValueStrategy
+from .growth_pick import GrowthPickStrategy
 from .money_flow import MoneyFlowStrategy
 
 BUILTIN_STRATEGIES = {
@@ -12,6 +14,8 @@ BUILTIN_STRATEGIES = {
     "vol_price_breakout": VolPriceBreakoutStrategy,
     "etf_momentum": ETFMomentumStrategy,
     "fundamental_value": FundamentalValueStrategy,
+    "deep_value": DeepValueStrategy,
+    "growth_pick": GrowthPickStrategy,
     "money_flow": MoneyFlowStrategy,
 }
 
@@ -22,5 +26,7 @@ __all__ = [
     "VolPriceBreakoutStrategy",
     "ETFMomentumStrategy",
     "FundamentalValueStrategy",
+    "DeepValueStrategy",
+    "GrowthPickStrategy",
     "MoneyFlowStrategy",
 ]

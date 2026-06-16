@@ -67,12 +67,25 @@ class TestNewStrategyRobustness:
         errors, _, total = self._run_strategy_on_sample(MoneyFlowStrategy(), n=30)
         assert errors == 0, f"{errors}/{total} 只失败"
 
+    def test_deep_value_strategy_no_exception(self):
+        """B2 深度价值策略 robustness"""
+        from strategies.builtin.deep_value import DeepValueStrategy
+        errors, _, total = self._run_strategy_on_sample(DeepValueStrategy(), n=30)
+        assert errors == 0, f"{errors}/{total} 只失败"
+
+    def test_growth_pick_strategy_no_exception(self):
+        """B3 成长筛选策略 robustness"""
+        from strategies.builtin.growth_pick import GrowthPickStrategy
+        errors, _, total = self._run_strategy_on_sample(GrowthPickStrategy(), n=30)
+        assert errors == 0, f"{errors}/{total} 只失败"
+
     def test_all_strategies_registered(self):
-        """验证所有6个策略正确注册"""
+        """验证所有8个策略正确注册（台阶二新增 B2 深度价值 / B3 成长筛选）"""
         from strategies.builtin import BUILTIN_STRATEGIES
-        assert len(BUILTIN_STRATEGIES) == 6
+        assert len(BUILTIN_STRATEGIES) == 8
         required = {"ma_cross", "macd_rsi", "vol_price_breakout",
-                     "etf_momentum", "fundamental_value", "money_flow"}
+                     "etf_momentum", "fundamental_value", "money_flow",
+                     "deep_value", "growth_pick"}
         assert set(BUILTIN_STRATEGIES.keys()) == required
 
 

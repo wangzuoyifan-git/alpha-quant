@@ -13,6 +13,26 @@ import pandas as pd
 MARKET_CONDITIONS = ("bull", "bear", "range", "volatile")
 
 
+def ttm_sum(series: pd.Series, periods: int = 4) -> float:
+    """
+    将单季财务比率（如 BaoStock roeAvg）累加为 TTM（近 N 季）值。
+
+    BaoStock 的 roeAvg 是单季 ROE，需累加近 4 季还原年化口径。
+    数据不足 periods 季时，按已有季数等比例放大估算。
+    返回 float（NaN 表示无有效数据）。
+    """
+    import numpy as np
+    if series is None:
+        return float("nan")
+    v = series.dropna()
+    if len(v) == 0:
+        return float("nan")
+    if len(v) >= periods:
+        return float(v.iloc[-periods:].sum())
+    # 不足 N 季：用已有季均值 × periods 估算年化
+    return float(v.mean() * periods)
+
+
 @dataclass
 class Signal:
     """单个交易信号"""

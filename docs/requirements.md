@@ -909,7 +909,7 @@ decision_context = {
 | Risk Mode | 策略组合 | 理由 |
 |---|---|---|
 | defensive | `fundamental_value` + `etf_momentum`（红利 ETF） | 偏防御、低波动 |
-| balanced | 全部 6 个内置策略 | 不做筛选 |
+| balanced | 全部内置策略（含 L3-B 基本面） | 不做筛选 |
 | aggressive | `ma_cross` + `vol_price_breakout` + `money_flow` | 偏动量、成长 |
 
 **L3-R2 — 扫描输入约束传递**
