@@ -505,7 +505,12 @@ def order_node(state: WorkflowState) -> WorkflowState:
     if not signals:
         state["log"].append("[orders] no signals, skip")
         return state
-    result = generate_orders(signals)
+    ctx = state.get("decision_context", {})
+    result = generate_orders(
+        signals,
+        allocation=ctx.get("allocation"),
+        max_position=ctx.get("max_position"),
+    )
     state["orders"] = result.get("orders", [])
     state["log"].append(f"[orders] generated {result.get('count', 0)} orders")
     return state

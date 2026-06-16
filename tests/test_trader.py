@@ -331,3 +331,84 @@ class TestExecutionFeedback:
         current = 10.0  # 当前价格
         drawdown = (current - peak) / peak
         assert drawdown == pytest.approx(-0.3333, abs=0.001)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 4.3 allocation 约束（台阶二）
+# ═══════════════════════════════════════════════════════════════
+
+class TestAllocationConstraint:
+    """4.3：allocation 真正约束资金池（按 position_type 分流）"""
+
+    def test_to_dict_contains_position_type_and_horizon(self):
+        """指令单包含 position_type / time_horizon 字段"""
+        sig = Signal(code="600519", name="茅台", signal="BUY", price=1600.0,
+                     reason="test", score=80.0,
+                     position_type="trading", time_horizon="short")
+        order = TradeOrder(sig, quantity=100, capital=1_000_000)
+        d = order.to_dict()
+        assert d["position_type"] == "trading"
+        assert d["time_horizon"] == "short"
+
+    def test_trading_type_uses_trading_capital(self, tmp_order_dir):
+        """trading 信号只能动用交易仓资金（trading_pct×max_position×capital）"""
+        ta = TradeAssistant({"initial_capital": 1_000_000, "position_size": 0.1})
+        sig = Signal(code="000001", name="test", signal="BUY", price=10.0,
+                     reason="r", score=80.0, position_type="trading")
+        allocation = {"position_pct": 0.5, "trading_pct": 0.3}
+        max_position = 0.7
+        orders = ta.generate_orders([sig], allocation=allocation,
+                                     max_position=max_position)
+        # 交易仓可用资金 = 1_000_000 × 0.3 × 0.7 = 210_000
+        # 每笔 10% = 21_000 → 2100 股，round to 100 = 2100
+        assert len(orders) == 1
+        assert orders[0].capital <= 1_000_000 * 0.3 * 0.7 + 1  # 不超上限
+
+    def test_config_type_uses_position_capital(self, tmp_order_dir):
+        """config 信号（WATCH→指令单）使用配置仓资金"""
+        ta = TradeAssistant({"initial_capital": 1_000_000, "position_size": 0.1})
+        sig = Signal(code="000002", name="test2", signal="BUY", price=10.0,
+                     reason="r", score=75.0, position_type="config")
+        allocation = {"position_pct": 0.5, "trading_pct": 0.3}
+        max_position = 0.7
+        orders = ta.generate_orders([sig], allocation=allocation,
+                                     max_position=max_position)
+        # 配置仓可用资金 = 1_000_000 × 0.5 × 0.7 = 350_000
+        assert len(orders) == 1
+        assert orders[0].capital <= 1_000_000 * 0.5 * 0.7 + 1
+
+    def test_no_allocation_uses_full_capital(self, tmp_order_dir):
+        """不传 allocation 时退化为原有逻辑（全资金池）"""
+        ta = TradeAssistant({"initial_capital": 500_000, "position_size": 0.1})
+        sig = _make_buy_signal(price=10.0)
+        orders = ta.generate_orders([sig])
+        assert len(orders) == 1
+        assert orders[0].capital == 500_000
+
+    def test_order_node_passes_allocation_to_generate(self, monkeypatch):
+        """order_node 从 decision_context 读 allocation + max_position 并传入"""
+        from agents import orchestrator
+
+        captured = {}
+
+        def fake_gen(signals, allocation=None, max_position=None):
+            captured["allocation"] = allocation
+            captured["max_position"] = max_position
+            return {"success": True, "orders": [], "count": 0}
+
+        import agent_tools
+        monkeypatch.setattr(agent_tools, "generate_orders", fake_gen)
+
+        state = {
+            "filtered_signals": [{"code": "000001", "name": "t", "signal": "BUY",
+                                   "price": 10.0, "score": 80.0, "reason": "r",
+                                   "position_type": "trading", "time_horizon": "short"}],
+            "decision_context": {
+                "allocation": {"position_pct": 0.5, "trading_pct": 0.3},
+                "max_position": 0.7,
+            },
+            "log": [],
+        }
+        orchestrator.order_node(state)
+        assert captured["allocation"] == {"position_pct": 0.5, "trading_pct": 0.3}
+        assert captured["max_position"] == 0.7

@@ -65,6 +65,8 @@ class TradeOrder:
             "take_profit_ratio": self.take_profit_ratio,
             "risk_flags": self.risk_flags,
             "risk_check_detail": self.risk_check_detail,
+            "position_type": self.signal.position_type,
+            "time_horizon": self.signal.time_horizon,
             "expected_price": self.expected_price,
             "actual_price": self.actual_price,
             "actual_quantity": self.actual_quantity,
@@ -252,9 +254,28 @@ class TradeAssistant:
 
     def generate_orders(self, signals: List[Signal],
                         current_capital: float = None,
-                        current_positions: int = 0) -> List[TradeOrder]:
-        """根据信号生成含止损止盈 + 风控标签的指令单（RC1~RC8 全覆盖）"""
+                        current_positions: int = 0,
+                        allocation: dict = None,
+                        max_position: float = None) -> List[TradeOrder]:
+        """根据信号生成含止损止盈 + 风控标签的指令单（RC1~RC8 全覆盖）
+
+        allocation: {"position_pct": float, "trading_pct": float}
+                    由 decision_context.allocation 传入，按 position_type 分流资金池。
+                    不传时退化为全资金池（向后兼容）。
+        max_position: 总仓位上限比例，由 decision_context.max_position 传入。
+        """
         capital = current_capital or self.initial_capital
+        max_pos = max_position if max_position is not None else 1.0
+
+        # 按 position_type 计算对应资金池上限
+        def _available(position_type: str) -> float:
+            if allocation is None:
+                return capital
+            if position_type == "config":
+                return capital * allocation.get("position_pct", 1.0) * max_pos
+            else:  # trading
+                return capital * allocation.get("trading_pct", 1.0) * max_pos
+
         orders = []
 
         # RC5/RC8 全局检查（任一触发则全部拦截并记录告警）
@@ -268,11 +289,12 @@ class TradeAssistant:
         for sig in signals:
             if sig.signal not in ("BUY", "SELL"):
                 continue
-            qty = self._calc_quantity(sig.price, capital)
+            avail = _available(getattr(sig, "position_type", "trading"))
+            qty = self._calc_quantity(sig.price, avail)
             if qty <= 0:
                 continue
 
-            order = TradeOrder(sig, qty, capital,
+            order = TradeOrder(sig, qty, avail,
                                stop_loss_ratio=self.rc_stop_loss,
                                take_profit_ratio=self.rc_take_profit)
 

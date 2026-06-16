@@ -41,13 +41,13 @@ def filter_signals_by_risk(signals: list, current_equity: float = None,
         return {"success": False, "error": str(e)}
 
 
-def generate_orders(signals: list, current_capital: float = None) -> dict:
-    """
-    根据信号生成含止损止盈的指令单。
-    """
+def generate_orders(signals: list, current_capital: float = None,
+                    allocation: dict = None, max_position: float = None) -> dict:
+    """根据信号生成含止损止盈的指令单。"""
     try:
         sig_objs = [Signal(**s) for s in signals]
-        orders = ta.generate_orders(sig_objs, current_capital=current_capital)
+        orders = ta.generate_orders(sig_objs, current_capital=current_capital,
+                                    allocation=allocation, max_position=max_position)
         return {
             "success": True,
             "orders": [o.to_dict() for o in orders],
