@@ -489,6 +489,25 @@ def risk_filter_node(state: WorkflowState) -> WorkflowState:
     return state
 
 
+def llm_candidate_review_node(state: WorkflowState) -> WorkflowState:
+    """
+    LLM-R6: 对 Top N 候选标的做 LLM 定性点评，结果落盘 decision_log。
+    不修改 filtered_signals 任何字段。autonomy=OFF 或 LLM 不可用时静默跳过。
+    """
+    from agents.strategy_agent import llm_review_candidates
+    state["log"] = state.get("log", [])
+    signals = state.get("filtered_signals", [])
+    try:
+        reviews = llm_review_candidates(signals)
+        state["llm_candidate_reviews"] = reviews
+        if reviews:
+            state["log"].append(f"[llm_review] {len(reviews)} 候选标的已点评")
+    except Exception as e:
+        logger.warning("llm_candidate_review_node 异常，静默跳过: %s", e)
+        state["llm_candidate_reviews"] = []
+    return state
+
+
 def human_approval_node(state: WorkflowState) -> WorkflowState:
     """Human-in-the-loop：Phase 1/2 必须人工确认"""
     # Phase 2 实现：向推送渠道发送确认请求，等待回复
@@ -564,6 +583,7 @@ def log_result_node(state: WorkflowState) -> WorkflowState:
         # 阶段三新增：每层节点审计快照（OB-R5）
         "node_audit": state.get("node_audit", []),
         "filtered_signals_count": len(state.get("filtered_signals", [])),
+        "llm_candidate_reviews": state.get("llm_candidate_reviews", []),
         "orders_count": len(state.get("orders", [])),
         "logs": state.get("log", []),
         "error": state.get("error"),
@@ -593,6 +613,7 @@ def build_workflow(checkpointer=None) -> StateGraph:
     graph.add_node("update_data", update_data_node)
     graph.add_node("run_scan", scan_node)
     graph.add_node("risk_filter", risk_filter_node)
+    graph.add_node("llm_candidate_review", llm_candidate_review_node)
     graph.add_node("await_approval", human_approval_node)
     graph.add_node("generate_orders", order_node)
     graph.add_node("notify", notify_node)
@@ -643,8 +664,9 @@ def build_workflow(checkpointer=None) -> StateGraph:
     # run_scan → risk_filter
     graph.add_edge("run_scan", "risk_filter")
 
-    # risk_filter → await_approval
-    graph.add_edge("risk_filter", "await_approval")
+    # risk_filter → llm_candidate_review → await_approval
+    graph.add_edge("risk_filter", "llm_candidate_review")
+    graph.add_edge("llm_candidate_review", "await_approval")
 
     # await_approval → generate_orders
     graph.add_edge("await_approval", "generate_orders")

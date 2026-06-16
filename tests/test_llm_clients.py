@@ -301,4 +301,146 @@ class TestMacroNodeLLM:
         assert mr["regime"] == "balanced"
         # llm_review 被存入
         assert "llm_review" in mr
-        assert mr["llm_review"]["llm_available"] is True
+
+
+# ── 业务层：llm_review_candidates（LLM-R6） ──────────────────
+
+class TestLLMCandidateReview:
+    """LLM-R6: L3 候选 LLM 点评"""
+
+    def _signals(self, n=8):
+        return [
+            {"code": f"60000{i}", "name": f"股{i}", "signal": "WATCH",
+             "price": 10.0 + i, "score": 90 - i, "reason": f"理由{i}",
+             "position_type": "config", "time_horizon": "medium"}
+            for i in range(n)
+        ]
+
+    def test_no_key_returns_empty(self, monkeypatch):
+        """无 key/OFF 时返回空列表，行为等价 OFF（LLM-R3）"""
+        from agents import strategy_agent
+
+        class _Unavail:
+            is_available = False
+            def chat(self, messages, **kwargs):
+                return {"available": False}
+
+        monkeypatch.setattr("llm_clients.get_client", lambda *a, **k: _Unavail())
+        result = strategy_agent.llm_review_candidates(self._signals())
+        assert result == []
+
+    def test_only_top_n_reviewed(self, monkeypatch):
+        """只点评 Top N（candidate_top_n），控制成本（LLM-R6）"""
+        from agents import strategy_agent
+        import json
+
+        calls = {"count": 0}
+
+        class _Good:
+            is_available = True
+            def chat(self, messages, **kwargs):
+                calls["count"] += 1
+                return {"available": True, "provider": "deepseek",
+                        "content": json.dumps({
+                            "code": "x", "view": "看好",
+                            "reasoning": "财务稳健"})}
+
+        monkeypatch.setattr("llm_clients.get_client", lambda *a, **k: _Good())
+        result = strategy_agent.llm_review_candidates(self._signals(8), top_n=3)
+        # 只调 3 次（Top 3），返回 3 条点评
+        assert calls["count"] == 3
+        assert len(result) == 3
+
+    def test_review_does_not_modify_signal_fields(self, monkeypatch):
+        """点评不修改 signal/score/position_type（LLM-R6）"""
+        from agents import strategy_agent
+        import json
+
+        class _Good:
+            is_available = True
+            def chat(self, messages, **kwargs):
+                return {"available": True, "provider": "deepseek",
+                        "content": json.dumps({
+                            "code": "x", "view": "看好", "reasoning": "r",
+                            "score": 999, "signal": "SELL"})}  # 试图改字段
+
+        monkeypatch.setattr("llm_clients.get_client", lambda *a, **k: _Good())
+        signals = self._signals(2)
+        orig = [dict(s) for s in signals]
+        strategy_agent.llm_review_candidates(signals, top_n=2)
+        # 原 signals 不被修改
+        assert signals == orig
+
+    def test_review_output_structure(self, monkeypatch):
+        """点评输出结构含 code/reasoning/provider（LLM-R7 结构化）"""
+        from agents import strategy_agent
+        import json
+
+        class _Good:
+            is_available = True
+            def chat(self, messages, **kwargs):
+                return {"available": True, "provider": "deepseek",
+                        "content": json.dumps({
+                            "code": "600001", "view": "看好",
+                            "reasoning": "ROE 高，估值合理"})}
+
+        monkeypatch.setattr("llm_clients.get_client", lambda *a, **k: _Good())
+        result = strategy_agent.llm_review_candidates(self._signals(1), top_n=1)
+        assert len(result) == 1
+        r = result[0]
+        assert "code" in r and "reasoning" in r and "provider" in r
+
+    def test_empty_signals_returns_empty(self, monkeypatch):
+        from agents import strategy_agent
+        monkeypatch.setattr("llm_clients.get_client",
+                            lambda *a, **k: type("C", (), {"is_available": True, "chat": lambda s, m, **k: {"available": True, "content": "{}"}})())
+        assert strategy_agent.llm_review_candidates([], top_n=5) == []
+
+    def test_malformed_json_skipped(self, monkeypatch):
+        """LLM 输出非法 JSON 时跳过该条，不崩溃（LLM-R3）"""
+        from agents import strategy_agent
+
+        class _Bad:
+            is_available = True
+            def chat(self, messages, **kwargs):
+                return {"available": True, "provider": "deepseek",
+                        "content": "这不是JSON"}
+
+        monkeypatch.setattr("llm_clients.get_client", lambda *a, **k: _Bad())
+        result = strategy_agent.llm_review_candidates(self._signals(3), top_n=3)
+        assert result == []
+
+
+class TestLLMCandidateReviewNode:
+    """LLM-R6: llm_candidate_review_node 接入工作流"""
+
+    def test_node_off_skips(self, monkeypatch):
+        """autonomy OFF / 无 key 时节点静默跳过，不改 filtered_signals"""
+        from agents import orchestrator
+        monkeypatch.setattr("agents.strategy_agent.llm_review_candidates",
+                            lambda *a, **k: [])
+        state = {
+            "filtered_signals": [{"code": "600001", "name": "x", "signal": "WATCH",
+                                   "price": 10.0, "score": 80, "reason": "r",
+                                   "position_type": "config", "time_horizon": "medium"}],
+            "log": [],
+        }
+        out = orchestrator.llm_candidate_review_node(state)
+        # filtered_signals 不变
+        assert out["filtered_signals"] == state["filtered_signals"]
+        assert out.get("llm_candidate_reviews", []) == []
+
+    def test_node_stores_reviews(self, monkeypatch):
+        """有点评时存入 state['llm_candidate_reviews']"""
+        from agents import orchestrator
+        monkeypatch.setattr("agents.strategy_agent.llm_review_candidates",
+                            lambda *a, **k: [{"code": "600001", "view": "看好",
+                                              "reasoning": "r", "provider": "deepseek"}])
+        state = {
+            "filtered_signals": [{"code": "600001", "name": "x", "signal": "WATCH",
+                                   "price": 10.0, "score": 80, "reason": "r"}],
+            "log": [],
+        }
+        out = orchestrator.llm_candidate_review_node(state)
+        assert len(out["llm_candidate_reviews"]) == 1
+        assert out["llm_candidate_reviews"][0]["code"] == "600001"

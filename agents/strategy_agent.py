@@ -358,3 +358,53 @@ def build_decision_context(env: dict = None) -> dict:
         "strategy_keys": strategy_keys,
         "timestamp": datetime.now().isoformat(),
     }
+
+
+def llm_review_candidates(signals: list, top_n: int = None) -> list:
+    """
+    LLM-R6：对 filtered_signals 中 Top N 候选标的做 LLM 定性点评。
+
+    - 只分析 Top N（top_n，默认从 config candidate_top_n=5），控制成本
+    - 不修改 signal/score/position_type 等字段
+    - autonomy_level=OFF 或 LLM 不可用时返回 []（LLM-R3 静默降级）
+
+    Returns:
+        [{"code", "view", "reasoning", "provider"}, ...] 或 []
+    """
+    import json
+    try:
+        from llm_clients import get_client
+        from llm_clients.prompts import CANDIDATE_REVIEW_SYSTEM, candidate_review_user
+        from config.settings import LLM as cfg
+    except Exception:
+        return []
+
+    if top_n is None:
+        top_n = int(cfg.get("candidate_top_n", 5))
+
+    client = get_client()
+    if not client.is_available:
+        return []
+
+    top = sorted(signals, key=lambda s: float(s.get("score", 0)), reverse=True)[:top_n]
+    reviews = []
+    for sig in top:
+        try:
+            result = client.chat([
+                {"role": "system", "content": CANDIDATE_REVIEW_SYSTEM},
+                {"role": "user", "content": candidate_review_user(sig)},
+            ])
+            if not result.get("available"):
+                continue
+            parsed = json.loads(result["content"])
+            reviews.append({
+                "code": sig.get("code"),
+                "view": parsed.get("view", ""),
+                "reasoning": parsed.get("reasoning", ""),
+                "provider": result.get("provider", ""),
+            })
+        except (json.JSONDecodeError, TypeError, KeyError):
+            logger.debug(f"llm_review_candidates {sig.get('code')} JSON 解析失败，跳过")
+        except Exception as e:
+            logger.warning(f"llm_review_candidates {sig.get('code')} 异常: {e}")
+    return reviews

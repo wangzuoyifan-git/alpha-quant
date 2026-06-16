@@ -182,4 +182,5 @@ LLM = {
     "temperature": 0.1,
     "timeout": 30,
     "max_retries": 2,
+    "candidate_top_n": 5,  # LLM-R6: 每日最多点评 Top N 候选标的
 }
