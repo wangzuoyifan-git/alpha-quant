@@ -397,24 +397,31 @@ def evaluate_industry_rotation(risk_mode: str = "balanced",
         selected = scored_rows[:top_n]
 
         allowed = [r["industry_code"] for r in selected]
-        industry_detail = {}
-        industry_horizon_map = {}
-        for r in selected:
-            code = r["industry_code"]
-            horizon = _judge_horizon(
-                prosperity=r["prosperity_score"],
-                valuation=r["valuation_score"],
-                moneyflow=r["moneyflow_score"],
-            )
-            industry_detail[code] = {
-                "industry_name": r["industry_name"],
-                "score": r["score"],
-                "moneyflow": r["net_amount_sum"],
-                "prosperity": r["prosperity_score"] if r["prosperity_score"] is not None else "pending",
-                "valuation": r["valuation_score"] if r["valuation_score"] is not None else "pending",
-                "time_horizon": horizon,
-            }
-            industry_horizon_map[code] = horizon
+
+        def _build_detail(rows):
+            detail, horizon_map = {}, {}
+            for r in rows:
+                code = r["industry_code"]
+                horizon = _judge_horizon(
+                    prosperity=r["prosperity_score"],
+                    valuation=r["valuation_score"],
+                    moneyflow=r["moneyflow_score"],
+                )
+                detail[code] = {
+                    "industry_name": r["industry_name"],
+                    "score": r["score"],
+                    "moneyflow": r["net_amount_sum"],
+                    "prosperity": r["prosperity_score"] if r["prosperity_score"] is not None else "pending",
+                    "valuation": r["valuation_score"] if r["valuation_score"] is not None else "pending",
+                    "time_horizon": horizon,
+                }
+                horizon_map[code] = horizon
+            return detail, horizon_map
+
+        # top-N 明细（L2 自动行业池展示用，保持原契约）
+        industry_detail, industry_horizon_map = _build_detail(selected)
+        # 全量明细（供 industry_override 取池外行业的真实评分，避免显示 0.0）
+        all_detail, all_horizon_map = _build_detail(scored_rows)
 
         logger.info(f"L2 行业池: risk_mode={risk_mode}, weights={weights}, "
                     f"选出 {len(allowed)} 个行业: {[r['industry_name'] for r in selected[:5]]}...")
@@ -425,6 +432,9 @@ def evaluate_industry_rotation(risk_mode: str = "balanced",
             "industry_scores": selected,
             "industry_detail": industry_detail,
             "industry_horizon_map": industry_horizon_map,
+            "all_industry_scores": scored_rows,
+            "all_industry_detail": all_detail,
+            "all_industry_horizon_map": all_horizon_map,
             "allowed_styles": [],
             "fallback": False,
             "risk_mode": risk_mode,

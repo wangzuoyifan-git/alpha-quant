@@ -25,6 +25,11 @@ class DataFetcher:
         self.cache_days = config.get("cache_days", 1)
         self._bs_logged_in = False
         self._bs_lock = threading.Lock()  # 防止多线程并发登录
+        # 单次网络兜底请求的硬超时（秒），防止单只慢请求拖垮并发扫描池
+        self.fetch_timeout = config.get("fetch_timeout", 15)
+        self._tushare_token = config.get("tushare_token", "")
+        self._ts_pro = None
+        self._ts_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # 公共接口
@@ -56,7 +61,7 @@ class DataFetcher:
             return cached
 
         df = self._with_fallback(
-            "_get_daily_akshare", "_get_daily_baostock",
+            "_get_daily_tushare", "_get_daily_akshare", "_get_daily_baostock",
             code=code_clean, start=start, end=end, adjust=adjust
         )
         if df is not None and not df.empty:
@@ -77,6 +82,58 @@ class DataFetcher:
         if df is not None and not df.empty:
             self._save_cache(cache_key, df)
         return df
+
+    # ------------------------------------------------------------------
+    # Tushare Pro 实现（日线主源，已付费、积分充足、接口稳定）
+    # ------------------------------------------------------------------
+
+    def _get_ts_pro(self):
+        """惰性初始化 tushare pro_api（线程安全）。未配置 token 返回 None。"""
+        if not self._tushare_token:
+            return None
+        if self._ts_pro is None:
+            with self._ts_lock:
+                if self._ts_pro is None:
+                    import tushare as ts
+                    self._ts_pro = ts.pro_api(self._tushare_token)
+        return self._ts_pro
+
+    def _get_daily_tushare(self, code: str, start: str, end: str,
+                           adjust: str = "qfq", **_) -> pd.DataFrame:
+        pro = self._get_ts_pro()
+        if pro is None:
+            return pd.DataFrame()
+        # tushare 需带交易所后缀
+        ts_code = f"{code}.SH" if code.startswith("6") else f"{code}.SZ"
+        if adjust in ("qfq", "hfq"):
+            # 复权数据走 pro_bar（adj=qfq/hfq）
+            import tushare as ts
+            df = ts.pro_bar(ts_code=ts_code, adj=adjust,
+                            start_date=start.replace("-", ""),
+                            end_date=end.replace("-", ""))
+        else:
+            df = pro.daily(ts_code=ts_code,
+                           start_date=start.replace("-", ""),
+                           end_date=end.replace("-", ""))
+        if df is None or df.empty:
+            return pd.DataFrame()
+        df = df.rename(columns={
+            "trade_date": "date", "vol": "volume", "pct_chg": "pct_chg",
+        })
+        df["date"] = pd.to_datetime(df["date"], format="%Y%m%d")
+        # 单位对齐本地存储（baostock 口径）：
+        #   tushare vol 单位为「手」→ ×100 转为「股」
+        #   tushare amount 单位为「千元」→ ×1000 转为「元」
+        if "volume" in df.columns:
+            df["volume"] = pd.to_numeric(df["volume"], errors="coerce") * 100
+        if "amount" in df.columns:
+            df["amount"] = pd.to_numeric(df["amount"], errors="coerce") * 1000
+        result_cols = ["date", "open", "high", "low", "close", "volume", "amount", "pct_chg"]
+        for col in result_cols:
+            if col not in df.columns:
+                df[col] = float("nan")
+        # tushare 返回按日期倒序，统一为升序
+        return df[result_cols].sort_values("date").reset_index(drop=True)
 
     # ------------------------------------------------------------------
     # AKShare 实现
@@ -242,15 +299,40 @@ class DataFetcher:
             if method is None:
                 continue
             try:
-                result = method(**kwargs)
+                result = self._call_with_timeout(method, kwargs)
                 if result is not None and (
                     not isinstance(result, pd.DataFrame) or not result.empty
                 ):
                     return result
+            except TimeoutError:
+                logger.warning(f"{method_name} 超时({self.fetch_timeout}s)，尝试下一数据源")
             except Exception as e:
                 logger.warning(f"{method_name} 失败，尝试下一数据源: {e}")
         logger.error("所有数据源均失败")
         return pd.DataFrame()
+
+    def _call_with_timeout(self, method, kwargs: dict):
+        """在独立线程中执行单个数据源调用，超过 fetch_timeout 秒视为超时。
+
+        用线程级超时兜住第三方库内部不受 socket.timeout 控制的阻塞
+        （如 baostock 重连、akshare 长连接挂起），防止拖垮并发扫描池。
+        """
+        timeout = self.fetch_timeout
+        if not timeout or timeout <= 0:
+            return method(**kwargs)
+        from concurrent.futures import ThreadPoolExecutor
+        from concurrent.futures import TimeoutError as FutureTimeout
+        # 每次调用用独立单线程 executor，避免与扫描线程池相互阻塞
+        ex = ThreadPoolExecutor(max_workers=1)
+        future = ex.submit(method, **kwargs)
+        try:
+            result = future.result(timeout=timeout)
+        except FutureTimeout:
+            raise TimeoutError(f"调用超过 {timeout}s")
+        finally:
+            # 不阻塞等待残留线程（第三方库阻塞无法强杀），后台自行结束
+            ex.shutdown(wait=False)
+        return result
 
     def _cache_path(self, key: str) -> Path:
         h = hashlib.md5(key.encode()).hexdigest()[:12]

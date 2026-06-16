@@ -320,15 +320,36 @@ def industry_rotation_node(state: WorkflowState) -> WorkflowState:
         # 收窄扫描规模，便于快速验证完整 workflow）
         override = state.get("industry_override")
         if override:
-            full_detail = result.get("industry_detail", {})
-            full_horizon = result.get("industry_horizon_map", {})
+            # 全量明细（含池外行业），override 行业可取到真实评分而非显示 0.0
+            full_detail = result.get("all_industry_detail") or result.get("industry_detail", {})
+            full_horizon = result.get("all_industry_horizon_map") or result.get("industry_horizon_map", {})
+            full_scores = result.get("all_industry_scores") or result.get("industry_scores", [])
+
+            # 后缀归一化：override 传入的代码可能无 .SI 后缀（如 801080），
+            # 而 L2 内部 key 带后缀（801080.SI）。建立去后缀映射做匹配。
+            def _norm(code):
+                return str(code).split(".")[0]
+
+            detail_by_norm = {_norm(k): (k, v) for k, v in full_detail.items()}
+            horizon_by_norm = {_norm(k): v for k, v in full_horizon.items()}
+            score_by_norm = {_norm(s["industry_code"]): s for s in full_scores}
+
+            new_detail, new_horizon, new_scores = {}, {}, []
+            for c in override:
+                nc = _norm(c)
+                if nc in detail_by_norm:
+                    real_key, d = detail_by_norm[nc]
+                    new_detail[c] = d
+                    new_horizon[c] = horizon_by_norm.get(nc, d.get("time_horizon", "short"))
+                    if nc in score_by_norm:
+                        new_scores.append({**score_by_norm[nc], "industry_code": c})
+                else:
+                    new_horizon[c] = "short"
+
             result["allowed_industries"] = [c for c in override]
-            result["industry_detail"] = {c: full_detail[c] for c in override if c in full_detail}
-            result["industry_horizon_map"] = {c: full_horizon.get(c, "short") for c in override}
-            result["industry_scores"] = [
-                s for s in result.get("industry_scores", [])
-                if s["industry_code"] in override
-            ]
+            result["industry_detail"] = new_detail
+            result["industry_horizon_map"] = new_horizon
+            result["industry_scores"] = new_scores
             state["log"].append(f"[industry_rotation] 手动指定行业范围（override）: {override}")
 
         allowed = result.get("allowed_industries", [])

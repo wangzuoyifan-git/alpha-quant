@@ -176,7 +176,8 @@ class ScanEngine:
         if asset_type == "stock":
             if df is None or len(df) < 30:
                 # 本地没有，回退到网络拉取（不写库）
-                df = self.fetcher.get_daily(code, start, end)
+                # 复权方式对齐本地存储（后复权 hfq），避免量价/价格口径不一致
+                df = self.fetcher.get_daily(code, start, end, adjust="hfq")
                 if df is not None and not df.empty and "date" in df.columns:
                     df = df.set_index("date")
         # ETF 只读本地库，不走网络回退（数据量大，网络拉取太慢）

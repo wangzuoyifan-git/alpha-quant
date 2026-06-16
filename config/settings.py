@@ -24,6 +24,9 @@ DATA_SOURCE = {
     "tushare_token": os.getenv("TUSHARE_TOKEN", ""),   # Tushare Pro Token
     "cache_days": 1,             # 本地缓存有效天数
     "cache_dir": ROOT_DIR / "data" / "cache",
+    # 日线网络兜底单源硬超时（秒）：防止单只慢请求拖垮并发扫描池。
+    # get_daily 优先级：tushare → akshare → baostock。
+    "fetch_timeout": int(os.getenv("FETCH_TIMEOUT", "15")),
 }
 
 # ============================================================

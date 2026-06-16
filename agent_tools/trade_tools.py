@@ -28,13 +28,19 @@ def filter_signals_by_risk(signals: list, current_equity: float = None,
             vix=vix,
             index_drop=index_drop,
         )
+        # blocked 仅统计进入交易仓风控（BUY/SELL）但被 RC 拦下的信号；
+        # WATCH 等配置仓候选不走交易仓风控，不应计入 blocked。
+        tradable = [s for s in signals if s.get("signal") in ("BUY", "SELL")]
+        passed_codes = {(s.code, s.signal) for s in filtered}
+        blocked = [s for s in tradable
+                   if (s.get("code"), s.get("signal")) not in passed_codes]
         return {
             "success": True,
             "passed": [{"code": s.code, "name": s.name, "signal": s.signal,
                          "price": s.price, "score": s.score, "reason": s.reason,
                          "position_type": s.position_type,
                          "time_horizon": s.time_horizon} for s in filtered],
-            "blocked_count": len(signals) - len(filtered),
+            "blocked_count": len(blocked),
         }
     except Exception as e:
         logger.error(f"filter_signals_by_risk 失败: {e}")
