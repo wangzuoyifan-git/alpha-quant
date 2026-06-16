@@ -162,9 +162,9 @@ Agent 层内部实现**三层决策架构**，每层职责如下：
 | market | `data/market/` | 完成 | A股/指数/ETF 日线，5207只，2024起 |
 | meta | `data/meta/` | 完成 | 申万/证监会行业分类，交易日历 |
 | fundamental | `data/fundamental/` | 完成 | 季频财务（利润/资产/现金流/成长/杜邦） |
-| factor | `data/factor/` | 部分完成 | 北向资金、个股资金流向（AKShare近60天）、行业资金流向已有；Tushare 历史资金流见 tushare 域 |
+| factor | `data/factor/` | 重新定位 | 计算型因子（动量/价值/质量等衍生值），台阶二前暂空 |
 | macro | `data/macro/` | 基本完成 | 国内：国债收益率/M2/CPI-PPI/PMI/社融/汇率 已有。境外：VIX/DXY/原油WTI/标普/恒生 已有；美联储利率/LME铜 待下载 |
-| tushare | `data/tushare/` | 基本完成 | moneyflow/moneyflow_ind/moneyflow_mkt/daily/daily_basic/top_list/margin 已有；分钟线 待下载 |
+| moneyflow | `data/moneyflow/` | 完成 | 资金流与情绪域（台阶二新建）：stock/industry/market/northbound/margin/top_list；拆分自原 tushare + factor 域 |
 | events | `data/events/` | 已建设 | E1 定期事件日历、E2 企业事件（减持/质押/分红）、E3 突发事件归档；见 `docs/requirements.md` D8 节 |
 
 > 详细接口和数据结构见 `docs/data.md`
@@ -205,7 +205,7 @@ alpha量化/
 │   ├── store_fundamental.py
 │   ├── store_factor.py
 │   ├── store_macro.py
-│   ├── store_tushare.py
+│   ├── store_moneyflow.py
 │   ├── store_events.py
 │   ├── fetcher.py               # 网络数据获取
 │   ├── downloader.py            # K线批量下载
@@ -213,14 +213,14 @@ alpha量化/
 │   ├── downloader_fundamental.py
 │   ├── downloader_factor.py
 │   ├── downloader_macro.py
-│   ├── downloader_tushare.py
+│   ├── downloader_moneyflow.py
 │   ├── downloader_events.py
 │   ├── market/                  # A股/指数/ETF 日线 Parquet
 │   ├── fundamental/             # 季频财务数据
 │   ├── meta/                    # 行业分类 + 交易日历
-│   ├── factor/                  # 因子数据
+│   ├── factor/                  # 计算型因子（台阶二前暂空）
 │   ├── macro/                   # 宏观数据
-│   ├── tushare/                 # Tushare 数据
+│   ├── moneyflow/               # 资金流与情绪数据
 │   ├── events/                  # 事件数据（E1/E2/E3）
 │   ├── processed/               # 扫描信号 JSON
 │   └── orders/                  # 交易指令单 JSON
@@ -294,7 +294,7 @@ docs:     文档更新
 chore:    构建/依赖/配置等杂项
 ```
 
-`.gitignore` 排除：`data/market/`、`data/kline/`、`data/fundamental/`、`data/meta/`、`data/factor/`、`data/macro/`、`data/tushare/`、`data/events/`、`data/processed/`、`data/orders/`、`data/cache/`、`venv/`、`.env`、`logs/`、`__pycache__/`
+`.gitignore` 排除：`data/market/`、`data/kline/`、`data/fundamental/`、`data/meta/`、`data/factor/`、`data/macro/`、`data/moneyflow/`、`data/events/`、`data/processed/`、`data/orders/`、`data/cache/`、`venv/`、`.env`、`logs/`、`__pycache__/`
 
 ---
 

@@ -18,7 +18,7 @@ import numpy as np
 import data.store as store
 from data.store_meta import load as load_meta
 from data.store_fundamental import load as load_fund, last_date as fund_last_date
-from data.store_factor import load as load_factor, list_moneyflow_codes
+from data.store_moneyflow import load as load_mf, list_codes as list_mf_codes
 
 logger = logging.getLogger(__name__)
 
@@ -99,19 +99,19 @@ def _get_tech_summary(code: str) -> Dict:
 
 def _get_fund_flow_summary(code: str) -> Dict:
     try:
-        mf_codes = list_moneyflow_codes()
+        mf_codes = list_mf_codes("stock")
         if code not in mf_codes:
             return {"available": False, "note": "无个股资金流数据"}
 
-        df = load_factor("moneyflow", code=code)
+        df = load_mf("stock", code=code)
         if df is None or df.empty:
             return {"available": False, "note": "无资金流数据"}
 
         recent = df.iloc[-5:] if len(df) >= 5 else df
         net_main_5d = float(recent.get("net_mf_amount", pd.Series([0])).sum())
         # D7 情绪因子：融资余额近5日变化
-        from data.store_tushare import load as load_ts
-        margin = load_ts("margin", code=code)
+        from data.store_moneyflow import load as load_margin
+        margin = load_margin("margin", code=code)
         margin_change = None
         if margin is not None and not margin.empty and "rzye" in margin.columns:
             m_recent = margin.iloc[-5:] if len(margin) >= 5 else margin

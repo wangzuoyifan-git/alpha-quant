@@ -54,24 +54,15 @@ venv/bin/python main.py workflow --industry-level L2 --industries 801081
 
 ## 四、台阶二待做（按优先级）
 
-### 4.1 数据域物理重构（P3，第一步，最高优先）
+### 4.1 数据域物理重构（P3，第一步，最高优先）✅ 已完成（2026-06-16）
 
-> 完整方案见 `docs/data_refactor_design.md`
+> 完整方案见 `docs/data_refactor_design.md`（P3 执行结果已回填）
 
-- 新建 `moneyflow` 域（吸收所有资金流/情绪类数据）：
-  ```
-  moneyflow/
-  ├── stock/      个股资金流（当前 tushare/moneyflow）
-  ├── industry/   行业资金流（当前 tushare/moneyflow_ind）
-  ├── market      大盘资金流（当前 tushare/moneyflow_mkt）
-  ├── northbound  北向资金（当前 factor/northbound）
-  ├── margin/     融资融券（当前 tushare/margin）
-  └── top_list/   龙虎榜（当前 tushare/top_list）
-  ```
-- 解散 `tushare` 域，`factor` 域重新定位为"计算型因子"
-- **修复已知 bug**：`engine/analysis.py:_get_fund_flow_summary()` 读空的 `factor/moneyflow`，导致辅助分析资金流摘要一直失效；迁移时改指向 `moneyflow/stock/`
-- 影响约 20~30 个测试路径字符串 + 5 个调用方文件 + CLI 命令名 + .gitignore
-- 迁移后全回归必须保持绿灯
+- ✅ 新建 `moneyflow` 域（类型名：stock/margin/industry/top_list/market/northbound）
+- ✅ 解散 `tushare` 域（删除 store_tushare.py + downloader_tushare.py），`factor` 域重新定位为"计算型因子"
+- ✅ **已修复 bug**：`engine/analysis.py:_get_fund_flow_summary()` 改指向 `moneyflow/stock/`，资金流摘要功能恢复
+- ✅ 物理迁移 641M 数据 + 删除死占位（tushare/daily, daily_basic, factor/moneyflow）
+- ✅ 全回归绿灯（361 passed, 2 skipped）
 
 ### 4.2 L2 景气度维度（①）接入
 

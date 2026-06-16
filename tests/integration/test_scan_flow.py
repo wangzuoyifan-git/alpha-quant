@@ -162,12 +162,12 @@ class TestSignalAnalysis:
 
     def test_net_main_5d_calculation(self):
         """IT-AA-05：近5日主力净流入 = 近5条 moneyflow 之和"""
-        from data.store_factor import list_moneyflow_codes, load as load_mf
-        codes = list_moneyflow_codes()
+        from data.store_moneyflow import list_codes as list_mf_codes, load as load_mf
+        codes = list_mf_codes("stock")
         if not codes:
             pytest.skip("无 moneyflow 数据")
         # 任选一只
-        df = load_mf("moneyflow", code=codes[0])
+        df = load_mf("stock", code=codes[0])
         if df is None or len(df) < 5:
             pytest.skip(f"{codes[0]} moneyflow 不足5条")
         import numpy as np

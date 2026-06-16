@@ -15,7 +15,7 @@ import data.store_meta as store_meta
 import data.store_fundamental as store_fund
 import data.store_factor as store_factor
 import data.store_macro as store_macro
-import data.store_tushare as store_ts
+import data.store_moneyflow as store_mf
 
 
 class TestDomainIsolation:
@@ -27,7 +27,7 @@ class TestDomainIsolation:
             store_fund.BASE_DIR,
             store_factor.BASE_DIR,
             store_macro.BASE_DIR,
-            store_ts.BASE_DIR,
+            store_mf.BASE_DIR,
         ]
         resolved = [str(Path(b).resolve()) for b in bases]
         assert len(resolved) == len(set(resolved))

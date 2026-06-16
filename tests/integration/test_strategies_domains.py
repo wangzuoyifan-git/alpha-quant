@@ -87,9 +87,9 @@ class TestNewDataDomain:
         import data.store_fundamental as sf
         import data.store_factor as sfact
         import data.store_macro as smacro
-        import data.store_tushare as sts
+        import data.store_moneyflow as smf
 
-        for mod in [store, sm, sf, sfact, smacro, sts]:
+        for mod in [store, sm, sf, sfact, smacro, smf]:
             bases.append(str(Path(mod.BASE_DIR).resolve()))
         assert len(bases) == len(set(bases)), f"域名重复: {bases}"
 
@@ -113,14 +113,14 @@ class TestNewDataDomain:
                 assert not df.empty, f"{dtype} 为空"
                 assert len(df) > 3, f"{dtype} 数据过少: {len(df)}"
 
-    def test_tushare_store_roundtrip_with_real_data(self):
-        """tushare 域数据读取"""
-        import data.store_tushare as sts
-        margin_codes = sts.list_codes("margin")
-        daily_codes = sts.list_codes("daily")
-        has_data = len(margin_codes) > 0 or len(daily_codes) > 0
+    def test_moneyflow_store_roundtrip_with_real_data(self):
+        """moneyflow 域数据读取"""
+        import data.store_moneyflow as smf
+        margin_codes = smf.list_codes("margin")
+        stock_codes = smf.list_codes("stock")
+        has_data = len(margin_codes) > 0 or len(stock_codes) > 0
         if not has_data:
-            pytest.skip("tushare 域无数据")
+            pytest.skip("moneyflow 域无数据")
 
     def test_meta_industry_mapping(self):
         """ST-ND-02：行业映射数据完整性"""

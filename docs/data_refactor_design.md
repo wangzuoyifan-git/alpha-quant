@@ -1,9 +1,20 @@
 # 数据域重构设计方案
 
-> 状态：设计阶段（仅方案，不含代码改动）
+> 状态：**P3 已执行**（2026-06-16，台阶二第一步）
 > 创建：2026-06-15
 > 背景：台阶二开发前的数据基础整理
-> 决策：① 仅出设计方案，暂不物理迁移 ② 资金流拆为独立 `moneyflow` 域
+> 决策：① 资金流拆为独立 `moneyflow` 域 ② tushare 域解散 ③ factor 域重新定位为计算型因子
+>
+> **执行结果（P3，commit 待填）**：
+> - 新建 `data/store_moneyflow.py` + `data/downloader_moneyflow.py`（类型名：stock/margin/industry/top_list/market/northbound）
+> - 删除 `data/store_tushare.py` + `data/downloader_tushare.py`
+> - `data/store_factor.py` 重构为计算型因子存储（factor_name 任意名，单文件/分代码两种模式）
+> - `data/downloader_factor.py` 改为 stub（计算型因子待台阶二实现）
+> - 物理迁移：tushare/{moneyflow→stock, moneyflow_ind→industry, moneyflow_mkt→market, margin, top_list} + factor/northbound → moneyflow/ 域
+> - 删除死占位：tushare/daily, tushare/daily_basic, factor/moneyflow/
+> - **修复 bug**：engine/analysis.py:_get_fund_flow_summary 原读空的 factor/moneyflow，改指向 moneyflow/stock，功能恢复
+> - CLI：init-tushare/update-tushare → init-moneyflow/update-moneyflow
+> - 全回归：361 passed, 2 skipped（含 test_store_moneyflow 22 个新增用例）
 
 ---
 

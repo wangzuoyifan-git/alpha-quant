@@ -280,7 +280,7 @@ def download_all_corp_events(codes: list = None,
                               end: str = None) -> dict:
     """下载全部企业事件：减持/质押/分红"""
     end = end or datetime.now().strftime(_FMT_DASH)
-    from data.downloader_tushare import _get_all_stock_codes
+    from data.downloader_moneyflow import _get_all_stock_codes
     from data.store_events import save_corp_events
 
     if codes is None:

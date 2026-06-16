@@ -9,7 +9,7 @@ import data.store as store
 import data.store_fundamental as store_fund
 import data.store_factor as store_factor
 import data.store_macro as store_macro
-import data.store_tushare as store_ts
+import data.store_moneyflow as store_mf
 
 logger = logging.getLogger(__name__)
 
@@ -48,26 +48,30 @@ def check_data_freshness() -> dict:
         if codes:
             result["domains"][f"fundamental/{dtype}"] = store_fund.last_date(codes[0], dtype) or "N/A"
 
-    for dtype in ("moneyflow_sector", "northbound"):
-        ld = store_factor.last_date(dtype)
-        if ld:
-            result["domains"][f"factor/{dtype}"] = ld
-
     for dtype in store_macro.VALID_TYPES:
         ld = store_macro.last_date(dtype)
         if ld:
             result["domains"][f"macro/{dtype}"] = ld
 
-    margin_codes = store_ts.list_codes("margin")
+    margin_codes = store_mf.list_codes("margin")
     if margin_codes:
-        ld = store_ts.last_date("margin", code=margin_codes[0])
-        result["domains"]["tushare/margin"] = ld or "N/A"
+        ld = store_mf.last_date("margin", code=margin_codes[0])
+        result["domains"]["moneyflow/margin"] = ld or "N/A"
+
+    mf_codes = store_mf.list_codes("stock")
+    if mf_codes:
+        ld = store_mf.last_date("stock", code=mf_codes[0])
+        result["domains"]["moneyflow/stock"] = ld or "N/A"
+
+    nb_ld = store_mf.last_date("northbound")
+    if nb_ld:
+        result["domains"]["moneyflow/northbound"] = nb_ld
 
     return result
 
 
 VALID_DOMAINS = ("market", "meta", "fundamental", "factor",
-                 "macro", "tushare", "events")
+                 "macro", "moneyflow", "events")
 
 
 def update_domain(domain: str) -> dict:
@@ -103,9 +107,9 @@ def update_domain(domain: str) -> dict:
         elif domain == "macro":
             from data.downloader_macro import MacroDownloader
             MacroDownloader().update_db()
-        elif domain == "tushare":
-            from data.downloader_tushare import TushareDownloader
-            TushareDownloader().update_db()
+        elif domain == "moneyflow":
+            from data.downloader_moneyflow import MoneyflowDownloader
+            MoneyflowDownloader().update_db()
         elif domain == "events":
             from data.downloader_events import update_events
             update_events()

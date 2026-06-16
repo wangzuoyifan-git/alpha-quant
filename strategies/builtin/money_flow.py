@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 from ..base import BaseStrategy, Signal
-from data.store_factor import load as load_factor
+from data.store_moneyflow import load as load_factor
 
 
 class MoneyFlowStrategy(BaseStrategy):
@@ -38,7 +38,7 @@ class MoneyFlowStrategy(BaseStrategy):
         lookback = self.params.get("lookback", 5)
         min_net = self.params.get("min_net_inflow", 0)  # 最低净流入额
 
-        mf = load_factor("moneyflow", code=code)
+        mf = load_factor("stock", code=code)
         if mf is None or mf.empty or len(mf) < lookback:
             return []
 

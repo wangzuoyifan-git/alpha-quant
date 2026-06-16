@@ -31,9 +31,8 @@ data/meta/
   calendar.parquet       交易日历
 
 data/factor/
-  northbound.parquet     北向资金（日频，2024起）
-  moneyflow/             个股资金流向（AKShare 近60天，每日增量）
-  moneyflow_sector/      行业资金流向（AKShare 当日榜）
+  （计算型因子域，台阶二重构后专放衍生因子：动量/价值/质量等。
+   原始资金流已迁往 moneyflow 域。台阶二前暂空。）
 
 data/macro/
   国内宏观（D5a）：
@@ -53,14 +52,13 @@ data/macro/
   sp500.parquet          标普500指数（日频）
   hsi.parquet            恒生指数（日频）
 
-data/tushare/
-  moneyflow/             个股资金流向（2010起，按code分片）
-  moneyflow_ind/         行业资金流向（按date分片）
-  moneyflow_mkt/         大盘资金流向（单文件）
-  daily/                 日线行情（按code分片）
-  daily_basic/           每日指标 PE/PB/换手率/市值（按code分片）
-  top_list/              龙虎榜（按date分片）
-  margin/                融资融券明细（按code分片）
+data/moneyflow/                                           （资金流与情绪域，台阶二新建）
+  stock/                 个股资金流向（Tushare，2010起，按code分片）← 原 tushare/moneyflow
+  industry/              行业资金流向（Tushare 东财，按date分片）   ← 原 tushare/moneyflow_ind
+  market.parquet         大盘资金流向（Tushare 东财，单文件）       ← 原 tushare/moneyflow_mkt
+  northbound.parquet     北向资金（AKShare，日频，2024起）         ← 原 factor/northbound
+  margin/                融资融券明细（Tushare，按code分片）       ← 原 tushare/margin
+  top_list/              龙虎榜（Tushare，按date分片）             ← 原 tushare/top_list
 
 data/events/                                              （D8，已建设）
   calendar.json          E1 定期事件日历（宏观/政策/财报季窗口期）
@@ -141,17 +139,20 @@ store_fund.last_date(code, data_type) -> Optional[str]
 
 ### 2.4 factor 域（data/store_factor.py）
 
+> 台阶二重构：factor 域重新定位为**计算型因子**（动量/价值/质量等衍生值）。
+> 原始资金流（个股/行业/大盘/北向）已迁往 moneyflow 域（见 2.6）。
+
 ```python
 import data.store_factor as store_factor
 
-store_factor.save(data_type, df, code=None) -> None
-store_factor.load(data_type, code=None, start=None, end=None) -> Optional[DataFrame]
-store_factor.exists(data_type, code=None) -> bool
-store_factor.last_date(data_type) -> Optional[str]
-store_factor.list_moneyflow_codes() -> List[str]
+store_factor.save(factor_name, df, code=None) -> None
+store_factor.load(factor_name, code=None, start=None, end=None) -> Optional[DataFrame]
+store_factor.exists(factor_name, code=None) -> bool
+store_factor.last_date(factor_name, code=None) -> Optional[str]
 ```
 
-`data_type` 取值：`northbound` / `moneyflow` / `moneyflow_sector` / `moneyflow_market`
+`factor_name` 任意因子名；提供 `code` 时按 `{factor_name}/{code}.parquet` 分片存储，
+否则单文件 `{factor_name}.parquet`。台阶二前暂无已落地因子。
 
 ### 2.5 macro 域（data/store_macro.py）
 
@@ -169,21 +170,27 @@ store_macro.last_date(data_type) -> Optional[str]
 仍未实现下载器（VALID_TYPES 已预留）：`fed_rate` / `copper_lme` / `us_bond_yield`（美债已并入 `bond_yield`）。
 注：`update_db()` 仅增量更新 bond_yield/m2/cpi_ppi/pmi/shrongji，境外指标和汇率需手动重跑 `init_db()` 或单独下载方法。
 
-### 2.6 tushare 域（data/store_tushare.py）
+### 2.6 moneyflow 域（data/store_moneyflow.py）
+
+> 台阶二新建：资金流与情绪类原始数据独立成域（拆分自原 tushare + factor 域）。
 
 ```python
-import data.store_tushare as store_ts
+import data.store_moneyflow as store_mf
 
 # 支持 code分片 / date分片 / 单文件 三种存储模式
-store_ts.save(data_type, df, code=None, date=None) -> None
-store_ts.load(data_type, code=None, date=None, start=None, end=None) -> Optional[DataFrame]
-store_ts.list_codes(data_type) -> List[str]
-store_ts.list_dates(data_type) -> List[str]
-store_ts.last_date(data_type, code=None) -> Optional[str]
-store_ts.stats() -> dict
+store_mf.save(data_type, df, code=None, date=None) -> None
+store_mf.load(data_type, code=None, date=None, start=None, end=None) -> Optional[DataFrame]
+store_mf.exists(data_type, code=None, date=None) -> bool
+store_mf.list_codes(data_type) -> List[str]
+store_mf.list_dates(data_type) -> List[str]
+store_mf.last_date(data_type, code=None) -> Optional[str]
+store_mf.stats() -> dict
 ```
 
-`data_type` 取值：`moneyflow` / `moneyflow_ind` / `moneyflow_mkt` / `daily` / `daily_basic` / `top_list` / `margin`
+`data_type` 取值：
+- code分片：`stock`（个股资金流）/ `margin`（融资融券）
+- date分片：`industry`（行业资金流）/ `top_list`（龙虎榜）
+- 单文件：`market`（大盘资金流）/ `northbound`（北向资金）
 
 **margin（D7 情绪因子）字段说明**（来源 Tushare `margin_detail`，均为个股级别；字段需求来源见 `docs/requirements.md` D7 节）：
 

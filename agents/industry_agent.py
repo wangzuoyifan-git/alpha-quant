@@ -36,9 +36,9 @@ def _load_latest_moneyflow_ind(date: str = None) -> pd.DataFrame | None:
     加载最近一个有数据的交易日的 moneyflow_ind。
     若 date 为 None，取已有最新日期。
     """
-    import data.store_tushare as st
+    import data.store_moneyflow as st
 
-    dates = st.list_dates("moneyflow_ind")
+    dates = st.list_dates("industry")
     if not dates:
         return None
 
@@ -51,7 +51,7 @@ def _load_latest_moneyflow_ind(date: str = None) -> pd.DataFrame | None:
     else:
         use_date = dates[-1]
 
-    return st.load("moneyflow_ind", date=use_date)
+    return st.load("industry", date=use_date)
 
 
 def _load_moneyflow_window(risk_mode: str, date: str = None) -> pd.DataFrame | None:
@@ -151,7 +151,7 @@ def _score_industries_by_aggregation(level: str = "L2",
     ind_to_name = dict(zip(member[code_col].astype(str), member[name_col].astype(str)))
 
     # 读全市场个股资金流的目标日截面（net_mf_amount）
-    base = Path(__file__).parent.parent / "data" / "tushare" / "moneyflow"
+    base = Path(__file__).parent.parent / "data" / "moneyflow" / "stock"
     files = glob.glob(str(base / "*.parquet"))
     if not files:
         return pd.DataFrame()
