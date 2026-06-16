@@ -106,8 +106,8 @@
 | S1-评分 | 置信度评分 0~100 | UT-ST-03 | — | — | — | ✅ L1 |
 | S1-多维独立 | 不同维度策略各自独立输出 | UT-MG-03 | — | — | — | ✅ L1 |
 | S2-技术面 | 均线/MACD/RSI/量价突破信号 | UT-ST-07/UT-ST-08 | IT-SC-01 | ST-NS-01 | AT-03 | ✅ L1+L2+L3+L4 |
-| S2-基本面 | ROE/成长性/估值分位数信号 | — | — | — | — | ❌ 无覆盖（待开发） |
-| S2-资金面 | 主力净流入/北向资金信号 | — | — | — | — | ❌ 无覆盖（待开发） |
+| S2-基本面 | ROE/成长性/估值分位数信号 | TestB1QualityValue/TestB2DeepValue/TestB3GrowthPick | ST-NS-02 | — | — | ✅ 台阶二（B1/B2/B3） |
+| S2-资金面 | 主力净流入/北向资金信号 | UT-ST-09（money_flow） | ST-NS-02 | — | — | ✅ L1 |
 | S3-加权合并 | 多维度按权重合并为综合评分 | UT-MG-01 | IT-SC-01 | ST-NS-04 | — | ✅ L1+L2+L3 |
 | S3-合并可配置 | 合并权重可配置，不硬编码 | — | — | — | — | ❌ 无覆盖 |
 | S3-保留原始信号 | 合并后保留各维度原始信号 | UT-MG-02 | — | — | — | ✅ L1 |
@@ -328,7 +328,7 @@
 | LLM-R3 | 可降级（超时/限流/key 缺失自动回退规则版） | NT-L4-01/03/04 | ✅ L1 |
 | LLM-R4 | llm_clients 洋葱架构（L0 core / L1 client / L2 __init__） | NT-L4-02/03/11 | ✅ L1 |
 | LLM-R5 | L1 regime LLM 研判约束（只调 confidence，regime 永不变） | NT-L4-04/05/06/10 | ✅ L1 |
-| LLM-R6 | L3 候选 LLM 点评约束（Top N，不改字段，落盘） | — | ⏳ 台阶二（候选链路落盘后补） |
+| LLM-R6 | L3 候选 LLM 点评约束（Top N，不改字段，落盘） | TestLLMCandidateReview + TestLLMCandidateReviewNode | ✅ 台阶二 |
 | LLM-R7 | 结构化推理强制（推理链非自由文本） | NT-L4-05 | ✅ L1 |
 | LLM-R8 | autonomy_level 可配机制（默认 OFF，可回退） | NT-L4-01/04（OFF 行为等价验证） | ✅ L1 |
 | AC16 | LLM 调用集中管控（禁止 agents 直接 import openai/anthropic） | 代码审查 + NT-L4-01 | ✅ L1 |

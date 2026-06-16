@@ -636,7 +636,7 @@ LLM = {
 - ⏳ `agents/event_agent.py`（新增，负责 E2 NLP 解析和 E3 识别）— 对应阶段六
 - ✅ `agent_tools/strategy_tools.py`（backtest + compare 部分）
 - ⏳ Orchestrator 增加 `evaluate` 节点、`event_monitor` 节点；`await_approval` 节点已实现
-- ⏳ agents 接入 LLM 推理（对应阶段四）
+- ✅ agents 接入 LLM 推理（L1 regime 研判 + L3 候选点评，台阶二完成）
 
 ### Phase 3：全自动交易
 

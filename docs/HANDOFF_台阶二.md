@@ -52,7 +52,10 @@ venv/bin/python main.py workflow --industry-level L2 --industries 801081
 
 ---
 
-## 四、台阶二待做（按优先级）
+## 四、台阶二任务（全部 ✅ 完成，2026-06-16）
+
+> 台阶二全部完成：4.1 数据域重构 → 4.2 L2 三维评分 → 4.3 allocation 约束 →
+> 4.4 L3-B 策略 → 4.5 画像匹配 → 4.6 LLM-R6。全回归 422 passed, 2 skipped。
 
 ### 4.1 数据域物理重构（P3，第一步，最高优先）✅ 已完成（2026-06-16）
 
@@ -76,29 +79,34 @@ venv/bin/python main.py workflow --industry-level L2 --industries 801081
 - ✅ 每日缓存（data/cache/l2_scores/）：首次 ~50s，重复 <0.1s
 - ✅ 全回归绿灯（409 passed，unit+integration）
 
-### 4.3 allocation 真正约束资金
+### 4.3 allocation 真正约束资金 ✅ 已完成（2026-06-16，commit f8ff4b9）
 
-- 台阶一只传递记录（position_pct/trading_pct），不真正约束
-- 台阶二让配置仓/交易仓资金分配在指令单生成时真正生效
+- ✅ generate_orders() 按 position_type 分流资金池：
+    trading 信号 = capital × trading_pct × max_position
+    config 信号  = capital × position_pct × max_position
+    不传 allocation 时退化全资金池（向后兼容）
+- ✅ TradeOrder.to_dict() 补 position_type/time_horizon 字段
+- ✅ order_node 从 decision_context 取 allocation+max_position 传入
 
-### 4.4 L3-B 完整基本面策略
+### 4.4 L3-B 完整基本面策略 ✅ 已完成（2026-06-16，commit 34d9d54）
 
-- B1 质量价值（高ROE+合理PE/PB，GARP核心）
-- B2 深度价值
-- B3 成长筛选
-- 输出 signal=WATCH, position_type=config, time_horizon=medium/long
-- fundamental_value 是 B1 雏形，需完整化
+- ✅ B1 质量价值（fundamental_value 重构，GARP：高ROE(TTM)+合理PE/PB）
+- ✅ B2 深度价值（deep_value：低PB+低PE+盈利为正+负债可控）
+- ✅ B3 成长筛选（growth_pick：高净利增长+高净资产增长+ROE达标）
+- ✅ 输出 signal=WATCH, position_type=config, time_horizon=medium/long
+- ✅ 修复隐藏 bug：旧代码读 Tushare 列名(roew等)全不存在，实际 BaoStock 小数列
+- ✅ roeAvg 单季→TTM 累加（base.ttm_sum）
 
-### 4.5 select_strategies 完整画像匹配
+### 4.5 select_strategies 完整画像匹配 ✅ 已完成（2026-06-16，commit 34d9d54）
 
-- allowed_styles 由 L2 行业特性收窄（台阶一直通，空列表）
-- industry_horizon_map 智能判断（台阶一用 score≥60→short 简单规则）
+- ✅ style + applicable_regimes + time_horizon 三维收窄
+- ✅ 验证：horizon=[short]只选技术策略，[medium]含B1/B3，[long]含B2
 
-### 4.6 LLM-R6 L3 候选 LLM 点评
+### 4.6 LLM-R6 L3 候选 LLM 点评 ✅ 已完成（2026-06-16，commit 89f1881）
 
-- 只分析 Top N（candidate_top_n，默认5），控制成本
-- 不修改 signal/score/position_type 字段
-- 输出落盘 decision_log.llm_candidate_reviews（台阶一不进推送）
+- ✅ llm_review_candidates(signals, top_n)：只点评 Top N（candidate_top_n=5）
+- ✅ 不修改 signal/score/position_type 字段；OFF/无key/JSON错误时静默降级
+- ✅ llm_candidate_review_node 接入工作流，落盘 decision_log.llm_candidate_reviews
 
 ---
 
