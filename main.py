@@ -56,7 +56,8 @@ trader = TradeAssistant(BACKTEST, RISK_CONTROL)
 
 
 def cmd_scan(date: str | None = None, asset_types: list | None = None,
-             strategy: str | None = None, codes: list | None = None):
+             strategy: str | None = None, codes: list | None = None,
+             industries: list | None = None, industry_level: str = "L1"):
     """执行扫描并推送信号。支持单策略/指定股票快速验证 L3。"""
     from rich.console import Console
     from rich.table import Table
@@ -66,15 +67,25 @@ def cmd_scan(date: str | None = None, asset_types: list | None = None,
     asset_types = asset_types or ["stock"]
     label = "+".join(asset_types)
 
+    # 行业 → 股票代码解析（优先级：--codes > --industries > 全市场）
+    if not codes and industries:
+        from data.store_meta import get_member_stocks
+        codes = get_member_stocks(industries, level=industry_level)
+        if not codes:
+            console.print(f"[yellow]行业 {industries} 无成员股数据，请先运行 init-meta[/yellow]")
+            return
+
     # 策略选择
     strat_map = {strategy: BUILTIN_STRATEGIES[strategy]} if strategy else BUILTIN_STRATEGIES
     strat_label = strategy or f"全部({len(strat_map)}个)"
+    pool_label = (f"{len(codes)}只（行业 {industries}）" if industries and codes
+                  else f"{len(codes)}只" if codes else "全市场")
     console.print(Panel(
         f"[bold cyan]Alpha量化 - L3 策略扫描[/bold cyan]\n"
         f"策略: [yellow]{strat_label}[/yellow]  "
         f"资产: [yellow]{label}[/yellow]  "
         f"日期: [yellow]{date or '今日'}[/yellow]  "
-        f"股票池: [yellow]{len(codes) if codes else '全市场'}只[/yellow]",
+        f"股票池: [yellow]{pool_label}[/yellow]",
         expand=False
     ))
 
@@ -883,6 +894,10 @@ if __name__ == "__main__":
                         help="只运行指定策略（不传则全部策略）")
     p_scan.add_argument("--codes", nargs="*",
                         help="只扫描指定股票代码（如 000001 600519），不传则全市场")
+    p_scan.add_argument("--industries", nargs="*",
+                        help="按申万行业代码过滤股票池（如 801080 801780），与--codes互斥")
+    p_scan.add_argument("--industry-level", default="L1", choices=["L1", "L2", "L3"],
+                        help="行业层级（默认L1）")
 
     # workflow（分层决策：L1→L2→L3）
     p_wf = sub.add_parser("workflow", help="运行分层决策 workflow（L1宏观→L2行业→L3个股，可视化）")
@@ -993,7 +1008,9 @@ if __name__ == "__main__":
         cmd_dbstats()
     elif args.command == "scan":
         cmd_scan(date=args.date, asset_types=args.types,
-                 strategy=args.strategy, codes=args.codes)
+                 strategy=args.strategy, codes=args.codes,
+                 industries=args.industries,
+                 industry_level=args.industry_level)
     elif args.command == "workflow":
         cmd_workflow(date=args.date, industries=args.industries,
                      asset_types=args.types, industry_level=args.industry_level)
