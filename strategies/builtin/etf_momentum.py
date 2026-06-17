@@ -38,6 +38,7 @@ class ETFMomentumStrategy(BaseStrategy):
     risk_profile = "balanced"
     time_horizon = "short"
     data_dependency = ["technical"]
+    applicable_asset_types = ["etf"]   # 仅适用于 ETF，扫描引擎自动过滤
     market_condition = "bull"  # @deprecated
 
     def requires_bars(self) -> int:

@@ -207,6 +207,10 @@ class ScanEngine:
 
         signals = []
         for strategy in self.strategies.values():
+            # ⑦ 资产类型过滤：策略声明了 applicable_asset_types 且不含当前类型则跳过
+            allowed_types = getattr(strategy, "applicable_asset_types", [])
+            if allowed_types and asset_type not in allowed_types:
+                continue
             try:
                 sigs = strategy.generate_signals(df_reset, code, name)
                 signals.extend(sigs)

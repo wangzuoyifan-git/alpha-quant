@@ -76,6 +76,8 @@ class BaseStrategy(ABC):
     time_horizon: str = "short"
     # ⑥ 数据依赖（占位）
     data_dependency: List[str] = ["technical"]
+    # ⑦ 适用资产类型（空列表=不限制，["etf"]=只跑ETF）
+    applicable_asset_types: List[str] = []
 
     # @deprecated: 用 applicable_regimes 替代
     market_condition: str = "range"
