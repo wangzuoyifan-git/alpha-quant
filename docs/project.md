@@ -1,7 +1,7 @@
 # Alpha量化 — 项目总览
 
 > 所有 Session 的共同基础参考。专项内容见各模块文档。
-> 最后更新：2026-06-11（新增：分层决策架构）
+> 最后更新：2026-06-17（K线主源切换 Tushare；新增 inspect 数据直查工具）
 
 ---
 
@@ -126,8 +126,8 @@
 ┌──────────────────────▼──────────────────────────────────┐
 │                   数据层                                 │
 │  data/store*.py       本地存储（Parquet，6个域）           │
-│  data/downloader*.py  批量下载器（6个域）                  │
-│  data/fetcher.py      网络获取（AKShare主/BaoStock备）     │
+│  data/downloader*.py  批量下载器（7个域）                  │
+│  data/fetcher.py      网络获取（Tushare主/AKShare/BaoStock备）│
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -159,13 +159,13 @@ Agent 层内部实现**三层决策架构**，每层职责如下：
 
 | 域 | 路径 | 状态 | 说明 |
 |---|---|---|---|
-| market | `data/market/` | 完成 | A股/指数/ETF 日线，5207只，2024起 |
-| meta | `data/meta/` | 完成 | 申万/证监会行业分类，交易日历 |
+| market | `data/market/` | 完成 | A股/指数/ETF 日线（Tushare hfq），5531/760/2032只，2024起；baostock基线备份在 `data/market_baostock/` |
+| meta | `data/meta/` | 完成 | 申万SW2021三级（L1=31/L2=134/L3=346）/证监会行业分类/交易日历 |
 | fundamental | `data/fundamental/` | 完成 | 季频财务（利润/资产/现金流/成长/杜邦） |
 | factor | `data/factor/` | 重新定位 | 计算型因子（动量/价值/质量等衍生值），台阶二前暂空 |
 | macro | `data/macro/` | 基本完成 | 国内：国债收益率/M2/CPI-PPI/PMI/社融/汇率 已有。境外：VIX/DXY/原油WTI/标普/恒生 已有；美联储利率/LME铜 待下载 |
-| moneyflow | `data/moneyflow/` | 完成 | 资金流与情绪域（台阶二新建）：stock/industry/market/northbound/margin/top_list；拆分自原 tushare + factor 域 |
-| events | `data/events/` | 已建设 | E1 定期事件日历、E2 企业事件（减持/质押/分红）、E3 突发事件归档；见 `docs/requirements.md` D8 节 |
+| moneyflow | `data/moneyflow/` | 完成 | 资金流与情绪域：stock/industry/market/northbound/margin/top_list；行业资金流用东财BK体系（覆盖申万L1全部/L2约95%） |
+| events | `data/events/` | 已建设 | E1 定期事件日历、E2 企业事件（减持/质押/分红）、E3 突发事件归档 |
 
 > 详细接口和数据结构见 `docs/data.md`
 
@@ -208,14 +208,16 @@ alpha量化/
 │   ├── store_moneyflow.py
 │   ├── store_events.py
 │   ├── fetcher.py               # 网络数据获取
-│   ├── downloader.py            # K线批量下载
+│   ├── downloader.py            # K线批量下载（BaoStock，降级备用）
+│   ├── downloader_tushare.py    # K线批量下载（Tushare，主链路）
 │   ├── downloader_meta.py
 │   ├── downloader_fundamental.py
 │   ├── downloader_factor.py
 │   ├── downloader_macro.py
 │   ├── downloader_moneyflow.py
 │   ├── downloader_events.py
-│   ├── market/                  # A股/指数/ETF 日线 Parquet
+│   ├── market/                  # A股/指数/ETF 日线 Parquet（Tushare hfq）
+│   ├── market_baostock/         # BaoStock 历史基线（静态快照，交叉验证用）
 │   ├── fundamental/             # 季频财务数据
 │   ├── meta/                    # 行业分类 + 交易日历
 │   ├── factor/                  # 计算型因子（台阶二前暂空）
@@ -258,6 +260,7 @@ alpha量化/
 │   └── update_quarterly.sh
 │
 ├── tools/                       # 开发验证工具
+│   ├── inspect_data.py          # 数据直查工具（K线/资金流/宏观/基本面）
 │   ├── plot_kline.py
 │   └── test_init_flow.py
 │

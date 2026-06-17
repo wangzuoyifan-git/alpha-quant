@@ -1,7 +1,7 @@
 # Alpha量化 — 数据层文档
 
 > 数据层接口、各域结构、数据源说明、待办缺口。
-> 最后更新：2026-05-29
+> 最后更新：2026-06-17（K线主源切换为 Tushare；新增 inspect 数据直查工具）
 >
 > **项目基础信息见 `docs/project.md`**
 > **数据需求详细定义（D1~D7 含需求来源、字段要求、时效要求）见 `docs/requirements.md` 第二章**
@@ -11,62 +11,68 @@
 ## 一、当前数据库状态
 
 ```
-data/market/cn/
-  stock/        5207只   294万行   348MB   字段：OHLCV+换手率+PE/PB/PS/PCF+isST
-  index/         541只    30万行    25MB   字段：OHLCV+pct_chg
-  etf/          1535只    65万行    42MB   字段：OHLCV+pct_chg（2024-01-02起）
-  ipo_dates.json         8624只上市日期+行业+名称索引
+data/market/cn/                       ← 主数据（Tushare hfq 口径，2026-06-17 全量重建）
+  stock/        5531只   318万行   289MB   字段：OHLCV+换手率+PE/PB/PS+isST
+  index/         760只    38万行    32MB   字段：OHLCV+pct_chg
+  etf/          2032只    93万行    57MB   字段：OHLCV+pct_chg（不复权）
+  ipo_dates.json         8957只上市日期+行业+名称索引
+
+data/market_baostock/cn/              ← BaoStock 历史基线（静态快照，交叉验证用，不再更新）
+  stock/        5208只   baostock hfq 口径（2026-06-16 备份）
 
 data/fundamental/
   profit/       5207只   季频盈利数据（2024Q1起）
-  balance/      5207只   季频资产负债
+  balance/      4819只   季频资产负债
   cashflow/     5207只   季频现金流
   growth/       5207只   季频成长能力
   dupont/       5207只   季频杜邦分析
 
 data/meta/
-  industry_csrc.parquet  证监会行业分类
-  industry_sw.parquet    申万行业分类（股票→行业映射）
-  sw_index/              申万行业指数日线
-  calendar.parquet       交易日历
+  industry_classify.parquet  申万分类树（L1=31 / L2=134 / L3=346，SW2021，Tushare）
+  industry_member.parquet    股票→三级行业映射（5530只，Tushare index_member_all）
+  industry_csrc.parquet      证监会行业分类
+  industry_sw.parquet        申万行业分类（旧版，向后兼容）
+  sw_index/                  申万行业指数日线
+  calendar.parquet           交易日历
 
 data/factor/
-  （计算型因子域，台阶二重构后专放衍生因子：动量/价值/质量等。
-   原始资金流已迁往 moneyflow 域。台阶二前暂空。）
+  （计算型因子域，台阶二前暂空。）
 
 data/macro/
   国内宏观（D5a）：
-  bond_yield.parquet     中外国债收益率2Y/5Y/10Y/30Y（含美债，日频）
+  bond_yield.parquet     中外国债收益率2Y/5Y/10Y/30Y（含美债字段，日频）
   cny_usd.parquet        人民币汇率CNY/USD（日频）
   m2.parquet             M2货币供应同比（月频）
   shrongji.parquet       社融规模增量/存量同比（月频）
   cpi_ppi.parquet        CPI/PPI同比（月频）
   pmi.parquet            PMI制造业/非制造业（月频）
   境外宏观（D5b）：
-  fed_rate.parquet       美联储基准利率（事件触发）       ⚠️ 待下载（VALID_TYPES 已留，无下载器）
-  us_bond_yield.parquet  美债收益率（实际并入 bond_yield，无独立文件）
+  fed_rate.parquet       美联储基准利率                    ⚠️ 待下载
   vix.parquet            VIX恐慌指数（VIX期货代理，日频）
   dxy.parquet            美元指数DXY（日频）
   oil_wti.parquet        WTI原油价格（日频）
-  copper_lme.parquet     LME铜价（日频）                 ⚠️ 待下载（VALID_TYPES 已留，无下载器）
+  copper_lme.parquet     LME铜价                          ⚠️ 待下载
   sp500.parquet          标普500指数（日频）
   hsi.parquet            恒生指数（日频）
 
-data/moneyflow/                                           （资金流与情绪域，台阶二新建）
-  stock/                 个股资金流向（Tushare，2010起，按code分片）← 原 tushare/moneyflow
-  industry/              行业资金流向（Tushare 东财，按date分片）   ← 原 tushare/moneyflow_ind
-  market.parquet         大盘资金流向（Tushare 东财，单文件）       ← 原 tushare/moneyflow_mkt
-  northbound.parquet     北向资金（AKShare，日频，2024起）         ← 原 factor/northbound
-  margin/                融资融券明细（Tushare，按code分片）       ← 原 tushare/margin
-  top_list/              龙虎榜（Tushare，按date分片）             ← 原 tushare/top_list
+data/moneyflow/
+  stock/                 个股资金流（Tushare，2010起，按code分片）
+  industry/              行业资金流（东财 BK 体系，按date分片，583个交易日）
+  market.parquet         大盘资金流（Tushare 东财，单文件）
+  northbound.parquet     北向资金（AKShare，日频，2024起）
+  margin/                融资融券明细（Tushare，按code分片）
+  top_list/              龙虎榜（Tushare，按date分片）
 
-data/events/                                              （D8，已建设）
-  calendar.json          E1 定期事件日历（宏观/政策/财报季窗口期）
+data/events/
+  calendar.json          E1 定期事件日历
   corporate/             E2 企业事件（按code分片）
-    {code}.json          单股所有企业事件记录（减持/质押/分红）
-  market_shock/          E3 突发事件归档（事后人工记录，Phase 2+ LLM 驱动）
-    {event_id}.json      按 event_id 归档的突发事件记录
+  market_shock/          E3 突发事件归档
 ```
+
+**行业资金流双体系说明：**
+- `data/meta/industry_classify` + `industry_member`：申万 SW2021（L1/L2/L3），用于行业归属查询
+- `data/moneyflow/industry`：东财 BK 板块资金流（1013个），名称覆盖申万L1全部31个、L2约95%（127/134）、L3约97%（334/346）
+- 缺资金流的申万 L2（7个）：国有大型银行Ⅱ/股份制银行Ⅱ/城商行Ⅱ/农商行Ⅱ/其他银行Ⅱ/本地生活服务Ⅱ/社交Ⅱ（东财将银行合并为单一板块）
 
 ---
 
@@ -279,18 +285,39 @@ store_events.load_market_shocks(date: str = None) -> list[dict]   # 可按 date 
 
 ## 三、下载器接口
 
-### 3.1 market 域（data/downloader.py）
+### 3.1 market 域（data/downloader_tushare.py — 主链路）
+
+> **2026-06-17 迁移完成**：K线主下载源从 BaoStock 切换为 Tushare。
+> `main.py` 的 `_build_kline_downloader()` 自动选择：有 `TUSHARE_TOKEN` 走 tushare，无则降级 baostock。
 
 ```python
-from data.downloader import KlineDownloader
+from data.downloader_tushare import TushareKlineDownloader
+import tushare as ts
 
-dl = KlineDownloader(fetcher, workers=1)
+pro = ts.pro_api(token, timeout=20)   # 单接口硬超时20s
+dl = TushareKlineDownloader(pro)
 dl.init_db(start="2024-01-02", end=None, force=False,
            types=["stock", "index", "etf"]) -> dict
 dl.update_db(end=None, types=["stock", "index", "etf"]) -> dict
 ```
 
-BaoStock → store 列名映射：`tradestatus→trade_status, pctChg→pct_chg, peTTM→pe_ttm, pbMRQ→pb_mrq, psTTM→ps_ttm, pcfNcfTTM→pcf_ttm, isST→is_st`
+数据源映射：
+- stock：`pro_bar(adj='hfq')` + `daily_basic`（pe/pb/ps/turn）
+- index：`index_daily`，preclose 由 `close.shift(1)` 补
+- ETF：`pro_bar(asset='FD', adj=None)`，不复权
+
+单位换算（Tushare → 本地 schema）：
+- `vol`（手）× 100 → `volume`（股）
+- `amount`（千元）× 1000 → `amount`（元）
+- `trade_status` 全量置 "1"（tushare 无停牌字段，后续可用 `suspend_d` 精化）
+- `is_st` 全量置 "0"（后续可用 `namechange` 精化；scanner 用股票名过滤ST，不依赖此列）
+- `pcf_ttm` 全量 NaN（`daily_basic` 不返回 `pcf_ncf_ttm`，无下游依赖）
+
+容错机制：每只下载套 `ThreadPoolExecutor` 超时包装（`_PER_STOCK_TIMEOUT=45s`），防止 TCP 半开连接死卡。
+
+**旧 BaoStock 下载器（data/downloader.py）保留**，作为无 token 时的降级备用，不删除。
+
+BaoStock → store 列名映射（旧）：`tradestatus→trade_status, pctChg→pct_chg, peTTM→pe_ttm, pbMRQ→pb_mrq, psTTM→ps_ttm, pcfNcfTTM→pcf_ttm, isST→is_st`
 
 ### 3.2 其他域下载器
 
@@ -356,9 +383,9 @@ fetcher.get_financial(code) -> DataFrame
 
 | 数据源 | 用途 | 限制 |
 |---|---|---|
-| BaoStock | market/fundamental/meta(证监会) | 免费，稳定，串行，不支持线程并发 |
-| AKShare | ETF行情/meta(申万)/factor/macro | 免费，东财接口有限流，需 sleep(0.5~1s) |
-| Tushare Pro | moneyflow/daily/top_list/margin/分钟线等 | 已付费，积分充足；需配置 `TUSHARE_TOKEN` |
+| **Tushare Pro（主）** | K线日线（stock/index/ETF）/ fundamental / moneyflow / meta（申万SW2021）| 已付费，积分充足；单接口超时20s；需配置 `TUSHARE_TOKEN` |
+| BaoStock（备） | K线降级备用（无 token 时自动切换）；历史基线保留在 `data/market_baostock/` | 免费，连接偶尔不稳定 |
+| AKShare | ETF行情（辅）/ macro（境外指标）/ northbound | 免费，东财接口有限流 |
 
 ---
 

@@ -1,7 +1,7 @@
 # Alpha量化 — 运维手册
 
 > CLI 速查、定时脚本、环境变量配置、Git 规范。
-> 最后更新：2026-05-29
+> 最后更新：2026-06-17（K线主源切换 Tushare；新增 inspect 数据直查工具）
 >
 > **项目基础信息见 `docs/project.md`**
 
@@ -53,11 +53,11 @@ source venv/bin/activate
 ### 数据管理
 
 ```bash
-# market 域
+# market 域（主源：Tushare，自动降级 BaoStock）
 python3 main.py init                              # 全量下载（stock+index+etf，2024-01-02起）
 python3 main.py init --start 2023-01-01           # 指定起始日期
 python3 main.py init --types stock                # 只下载A股
-python3 main.py init --force                      # 强制重新下载（覆盖已有数据）
+python3 main.py init --force                      # 强制覆盖（迁移/重建用，baostock基线备份在 data/market_baostock/）
 python3 main.py update                            # 每日增量更新到今天
 python3 main.py dbstats                           # 查看 market 域统计
 
@@ -65,27 +65,55 @@ python3 main.py dbstats                           # 查看 market 域统计
 python3 main.py init-meta                         # 行业分类+申万指数+交易日历
 python3 main.py init-fundamental                  # 季频财务数据（2024起）
 python3 main.py init-fundamental --start-year 2022
-python3 main.py init-factor                       # D3a 个股资金流+D3c 北向资金+行业资金流
-python3 main.py init-macro                         # D5a 国内宏观（国债/M2/CPI/PMI/社融/汇率）
-                                                  # D5b 境外宏观（VIX/DXY/原油WTI/标普/恒生）；LME铜/美联储利率待下载
-
-# 事件数据（D8，store/downloader 已建设，暂无 CLI 入口）
-# events 域目前通过 Python 调用：
-#   from data.downloader_events import init_events, update_events
-#   init_events()      # E1 日历 + E2 企业事件全量
-#   update_events()    # E1 补充 + E2 近3月增量
-
-# Tushare 域
-python3 main.py init-tushare                      # 全部类型（moneyflow 2010起，其余 2024起）
-python3 main.py init-tushare --types moneyflow    # 只下载个股资金流向（D3a 历史）
-python3 main.py init-tushare --types margin       # 只下载融资融券（D7 情绪因子）
-python3 main.py init-tushare --types moneyflow_ind  # 行业资金流向（D3b）
-python3 main.py init-tushare --moneyflow-start 2015-01-01
-python3 main.py update-tushare                    # 增量更新 tushare 域
+python3 main.py init-macro                        # 宏观经济数据
+python3 main.py init-moneyflow                    # 资金流与情绪（stock 2010起，其余 2024起）
+python3 main.py init-moneyflow --types stock      # 只下载个股资金流
+python3 main.py update-moneyflow                  # 增量更新 moneyflow 域
 
 # 全域更新
-python3 main.py update-all                        # 更新 market+meta+fundamental+factor+macro+tushare（不含 events）
+python3 main.py update-all                        # market+meta+fundamental+factor+macro+moneyflow
 ```
+
+### 数据直查（inspect）
+
+```bash
+# K线行情（支持代码或名称，名称模糊匹配；多候选时提示用户选择）
+python3 main.py inspect kline 贵州茅台 --n 20
+python3 main.py inspect kline 600519 --start 2026-01-01 --end 2026-06-16
+python3 main.py inspect kline 000300 --type index
+python3 main.py inspect kline 510300 --type etf --plot
+python3 main.py inspect kline --codes 贵州茅台 000001 宁德时代         # 多只横向对比
+python3 main.py inspect kline --codes 茅台 平安银行 --metric pct_chg   # 指定对比指标
+
+# 个股资金流
+python3 main.py inspect mf 茅台 --n 10
+python3 main.py inspect mf --codes 贵州茅台 000001 --start 2026-05-01  # 多只对比
+
+# 行业资金流（支持名称精确/模糊匹配）
+python3 main.py inspect ind 食品饮料 --n 20
+python3 main.py inspect ind --codes 食品饮料 银行 半导体                # 多行业对比
+python3 main.py inspect ind --all                                      # 全行业排名汇总（最新一天）
+python3 main.py inspect ind --all --start 2026-06-01                   # 指定日期全行业汇总
+
+# 宏观数据
+python3 main.py inspect macro list                                     # 列出可用指标及新鲜度
+python3 main.py inspect macro bond_yield --n 20
+python3 main.py inspect macro vix --start 2026-01-01 --plot
+
+# 基本面（季频财务）
+python3 main.py inspect fundamental 贵州茅台                           # 默认 profit 表
+python3 main.py inspect fundamental 茅台 --metric growth               # 成长指标
+python3 main.py inspect fundamental 600519 --metric dupont --n 8       # 杜邦分析
+python3 main.py inspect fundamental --metric list                      # 列出可用表
+python3 main.py inspect fundamental --codes 茅台 平安银行 --metric profit  # 多只对比
+```
+
+inspect 通用参数：
+- `--n N`：显示最近N条（默认20，不设 start/end 时生效）
+- `--start YYYY-MM-DD` / `--end YYYY-MM-DD`：时间范围（优先于 --n）
+- `--plot`：显示 matplotlib 图表（需安装 matplotlib）
+- `--codes`：多个代码/名称，空格分隔
+- `--metric`：对比指标（kline默认close，mf默认net_mf_amount，ind默认net_amount）
 
 ### Agent 工作流（暂无 CLI 入口）
 
@@ -270,26 +298,31 @@ pytest-cov
 
 ## 六、常见问题
 
-**BaoStock 连接超时**
+**K线下载卡死/进度停滞**
 ```bash
-# 检查网络，重试即可；后台进程中 bs.login() 可能死循环，
-# downloader_fundamental.py 已用 threading.Thread + join(timeout) 包装
+# 用 setsid 彻底脱离终端，避免被 job control 暂停
+setsid venv/bin/python3 main.py init --force > logs/init_full.log 2>&1 < /dev/null &
+tail -f logs/init_full.log
+# 进度每50只打一次日志，watch 文件数监控：
+watch -n 30 'ls data/market/cn/stock/*.parquet | wc -l'
+```
+
+**BaoStock 连接超时（降级模式）**
+```bash
+# 无 TUSHARE_TOKEN 时才走 baostock，配置 token 即可切回 tushare 主源
 ```
 
 **AKShare 接口限流（429）**
 ```bash
 # 正常现象，downloader 内置指数退避重试（最多3次）
-# 如频繁失败，适当增大 sleep 间隔
 ```
 
 **扫描耗时过长**
 ```bash
 # 默认 20 线程，全市场约 83 秒
-# 可在 config/settings.py 的 SCAN 中调整 workers（需同步修改 ScanEngine 初始化）
 ```
 
 **Web 看板指令单重复显示**
 ```bash
-# 已知问题，trader/assistant.py 的持久化逻辑待优化
 # 临时处理：清空 data/orders/ 目录
 ```
