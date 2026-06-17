@@ -136,11 +136,23 @@ class MACrossStrategy(BaseStrategy):
                 mf = load_mf("stock", code=code)
                 if mf is not None and len(mf) >= mf_lookback and "net_mf_amount" in mf.columns:
                     net = float(mf.iloc[-mf_lookback:]["net_mf_amount"].sum())
+                    # 时效标注：资金流最新日期是否明显落后于当前 df
+                    mf_latest = mf.index.max()
+                    df_latest = pd.to_datetime(df["date"].iloc[-1]) if "date" in df.columns else None
+                    stale = (df_latest is not None and
+                             (df_latest - mf_latest).days > 5)
+                    stale_tag = "(数据较旧)" if stale else ""
+                    # 金额显示：≥100万用亿，否则用万，避免 0.0亿 的误导
+                    abs_net = abs(net)
+                    if abs_net >= 1e6:
+                        amt_str = f"{net/1e8:.2f}亿"
+                    else:
+                        amt_str = f"{net/1e4:.1f}万"
                     if net > 0:
                         score = min(score + 5.0, 100.0)
-                        reasons.append(f"主力净流入{net/1e8:.1f}亿")
+                        reasons.append(f"主力净流入{amt_str}{stale_tag}")
                     else:
-                        reasons.append(f"主力净流出{abs(net)/1e8:.1f}亿⚠")
+                        reasons.append(f"主力净流出{amt_str}⚠{stale_tag}")
                 else:
                     reasons.append("资金流数据不足")
             except Exception:
