@@ -1,7 +1,7 @@
 # Alpha量化 — 运维手册
 
 > CLI 速查、定时脚本、环境变量配置、Git 规范。
-> 最后更新：2026-06-17（K线主源切换 Tushare；新增 inspect 数据直查工具）
+> 最后更新：2026-06-17（scan命令扩展：--strategy/--codes/--industries/--industry-level；backtest 基准对比）
 >
 > **项目基础信息见 `docs/project.md`**
 
@@ -127,16 +127,37 @@ from agents import check_and_update, recommend_daily_plan
 ### 分析
 
 ```bash
-# 扫描
-python3 main.py scan                              # 今日全市场扫描（A股）
-python3 main.py scan --date 2025-01-10            # 指定日期
-python3 main.py scan --types etf                  # 扫描 ETF
+# 全市场扫描
+python3 main.py scan                              # 今日全市场扫描（A股，全部策略）
+python3 main.py scan --date 2026-06-16            # 指定日期
+python3 main.py scan --types etf                  # 扫描 ETF（只跑 etf_momentum）
 python3 main.py scan --types stock etf            # 同时扫描 A股 + ETF
 
-# 回测
-python3 main.py backtest --strategy macd_rsi
-python3 main.py backtest --strategy ma_cross --start 2024-01-02 --end 2026-05-25
-python3 main.py backtest --codes 600519 000001 300750
+# L3 独立验证（不经过 L1/L2）
+python3 main.py scan --strategy ma_cross          # 单策略全市场
+python3 main.py scan --strategy fundamental_value --industries 银行
+                                                  # 单策略 + 行业名称（精确/模糊匹配）
+python3 main.py scan --strategy growth_pick --industries 半导体 --industry-level L2
+                                                  # 单策略 + 申万二级行业
+python3 main.py scan --codes 招商银行 贵州茅台 宁德时代
+                                                  # 所有策略 + 指定股票（支持名称）
+python3 main.py scan --strategy ma_cross --codes 600519 000858
+                                                  # 单策略 + 指定股票（代码或名称均可）
+python3 main.py scan --industries 电子 医药生物   # 多行业（L1，名称自动解析）
+
+# 参数说明
+# --strategy: 策略 key（ma_cross/macd_rsi/vol_price_breakout/etf_momentum/
+#              fundamental_value/deep_value/growth_pick），不传=全部
+# --codes: 6位股票代码或名称，空格分隔；名称模糊匹配，多候选时列出供选择
+# --industries: 申万行业代码或名称，与 --codes 互斥；模糊匹配多候选时列出
+# --industry-level: L1/L2/L3（默认 L1）
+# --date: 指定扫描日期（默认今日）
+
+# 回测（支持基准对比 vs 沪深300）
+python3 main.py backtest --strategy ma_cross
+python3 main.py backtest --strategy ma_cross --start 2024-01-02 --end 2026-06-16
+python3 main.py backtest --strategy etf_momentum --codes 510300 159919  # ETF回测
+# 输出：总收益/年化/最大回撤/夏普/胜率/盈亏比 + 基准收益/超额收益(alpha)/beta
 ```
 
 ### 交易辅助
