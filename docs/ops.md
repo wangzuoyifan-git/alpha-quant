@@ -1,7 +1,7 @@
 # Alpha量化 — 运维手册
 
 > CLI 速查、定时脚本、环境变量配置、Git 规范。
-> 最后更新：2026-06-17（scan命令扩展：--strategy/--codes/--industries/--industry-level；backtest 基准对比）
+> 最后更新：2026-06-17（新增 portfolio 持仓评估 / data-status 数据状态命令）
 >
 > **项目基础信息见 `docs/project.md`**
 
@@ -167,6 +167,35 @@ python3 main.py orders                            # 查看待确认指令单
 python3 main.py confirm <order_id>                # 确认指令单
 python3 main.py cancel <order_id>                 # 取消指令单
 ```
+
+### 持仓评估
+
+持仓文件 `data/portfolio.json`（填不复权买入均价，与交易软件一致）：
+
+```json
+[
+  {"code": "600519", "name": "贵州茅台", "cost": 9800.0, "shares": 100},
+  {"code": "000876", "name": "新希望",   "cost": 11.40,  "shares": 2000}
+]
+```
+
+```bash
+python3 main.py portfolio                         # 评估今日持仓
+python3 main.py portfolio --date 2026-06-16       # 指定日期
+python3 main.py portfolio --file my_pf.json       # 指定持仓文件
+```
+
+输出内容：现价（不复权）/ 盈亏% / 加仓-观望-止盈-止损建议 / 止损价 / 止盈价 / 委托参考价  
+建议逻辑：有SELL信号→减仓，跌破成本-7%→触发止损，涨超成本+20%→考虑止盈，有BUY信号→持有/可加仓
+
+### 数据状态
+
+```bash
+python3 main.py data-status                       # 各域数据新鲜度 + 后台更新进程实时进度
+```
+
+输出：各域最新日期/距今天数/状态（✓≤3天 / ⚠4~14天 / ✗>14天）  
+若有后台 update/update-moneyflow 进程在跑，顶部实时显示其日志最后一行（含进度条）
 
 ### 服务
 
