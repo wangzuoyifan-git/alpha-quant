@@ -886,6 +886,128 @@ def cmd_dbstats():
     print(f"  合计: {total.get('count', 0)}只  {total.get('rows', 0):>10,}行  {total.get('size_mb', 0):.1f}MB")
 
 
+def cmd_data_status():
+    """各域数据新鲜度 + 后台更新进程状态"""
+    import subprocess
+    from rich.console import Console
+    from rich.table import Table
+    from rich.panel import Panel
+    from datetime import datetime
+
+    console = Console()
+
+    # ── 后台更新进程检测 ──────────────────────────────────────
+    bg_tasks = {}  # cmd_keyword -> last_log_line
+    try:
+        result = subprocess.run(["ps", "aux"], capture_output=True, text=True)
+        for line in result.stdout.splitlines():
+            if "main.py" not in line or "grep" in line:
+                continue
+            today = datetime.now().strftime("%Y%m%d")
+            # 精确匹配命令关键词（避免 update-moneyflow 被 update 误匹配）
+            cmd_map = [
+                ("update-moneyflow", f"logs/update_mf_{today}.log"),
+                ("update-all",       f"logs/update_all_{today}.log"),
+                ("init-moneyflow",   f"logs/init_tushare_moneyflow.log"),
+                ("update",           f"logs/update_kline_{today}.log"),
+                ("init",             f"logs/init_{today}.log"),
+            ]
+            for kw, log_file in cmd_map:
+                # 用空格边界匹配，避免 update 匹配到 update-moneyflow
+                if f" {kw}" in line or line.endswith(kw):
+                    last_line = "(运行中)"
+                    p = Path(log_file)
+                    if p.exists() and p.stat().st_size > 0:
+                        try:
+                            lines = p.read_text(errors="ignore").strip().splitlines()
+                            if lines:
+                                last_line = lines[-1][-120:]
+                        except Exception:
+                            pass
+                    bg_tasks[kw] = last_line
+                    break
+    except Exception:
+        pass
+
+    if bg_tasks:
+        for cmd, status in bg_tasks.items():
+            console.print(Panel(
+                f"[bold yellow]⟳ 后台任务: {cmd}[/bold yellow]\n{status}",
+                expand=False
+            ))
+
+    # ── 各域最新日期 ──────────────────────────────────────────
+    import data.store as store
+    import data.store_meta as store_meta
+    import data.store_fundamental as store_fund
+    import data.store_macro as store_macro
+    import data.store_moneyflow as store_mf
+
+    today_str = datetime.now().strftime("%Y-%m-%d")
+
+    def _age(date_str):
+        """计算距今天数，返回 (days, color)"""
+        if not date_str:
+            return None, "red"
+        try:
+            d = datetime.strptime(str(date_str)[:10], "%Y-%m-%d")
+            days = (datetime.now() - d).days
+            color = "green" if days <= 3 else "yellow" if days <= 14 else "red"
+            return days, color
+        except Exception:
+            return None, "red"
+
+    rows = []
+
+    # market
+    sample_codes = store.list_codes("stock", market="cn")[:3]
+    market_date = None
+    for c in sample_codes:
+        d = store.last_date(c, asset_type="stock", market="cn")
+        if d and (market_date is None or d > market_date):
+            market_date = d
+    rows.append(("market/stock", market_date))
+
+    mf_codes = store_mf.list_codes("stock")
+    mf_last = store_mf.last_date("stock", code=mf_codes[0]) if mf_codes else None
+    rows.append(("moneyflow/stock", mf_last))
+
+    ind_dates = store_mf.list_dates("industry") if hasattr(store_mf, "list_dates") else store_mf.list_codes("industry")
+    ind_last = sorted(ind_dates)[-1] if ind_dates else None
+    rows.append(("moneyflow/industry", ind_last))
+
+    for dtype in ("bond_yield", "pmi", "m2"):
+        d = store_macro.last_date(dtype)
+        if d:
+            rows.append((f"macro/{dtype}", d))
+            break  # 宏观取一个代表即可
+
+    fund_codes = store_fund.list_codes("profit")
+    if fund_codes:
+        fd = store_fund.last_date(fund_codes[0], "profit")
+        rows.append(("fundamental/profit", fd))
+
+    cal = store_meta.last_date("calendar")
+    rows.append(("meta/calendar", cal))
+
+    table = Table(title="数据域新鲜度", show_lines=False)
+    table.add_column("域", style="cyan", width=24)
+    table.add_column("最新日期", width=12)
+    table.add_column("距今", justify="right", width=8)
+    table.add_column("状态", width=6)
+
+    for domain, date_val in rows:
+        date_str = str(date_val)[:10] if date_val else "无数据"
+        days, color = _age(date_str if date_val else None)
+        age_str = f"{days}天" if days is not None else "-"
+        status = "✓" if (days is not None and days <= 3) else "⚠" if (days is not None and days <= 14) else "✗"
+        table.add_row(domain, date_str,
+                      f"[{color}]{age_str}[/{color}]",
+                      f"[{color}]{status}[/{color}]")
+
+    console.print(table)
+
+
 def cmd_schedule():
     """启动定时任务调度"""
     try:
@@ -979,6 +1101,8 @@ if __name__ == "__main__":
 
     # dbstats
     sub.add_parser("dbstats", help="查看本地K线数据库统计")
+    # data-status
+    sub.add_parser("data-status", help="各域数据新鲜度 + 后台更新进程状态")
 
     # scan
     p_scan = sub.add_parser("scan", help="全市场扫描（支持单策略/指定股票快速验证L3）")
@@ -1102,6 +1226,8 @@ if __name__ == "__main__":
         cmd_update(end=args.end, workers=args.workers, types=args.types)
     elif args.command == "dbstats":
         cmd_dbstats()
+    elif args.command == "data-status":
+        cmd_data_status()
     elif args.command == "scan":
         cmd_scan(date=args.date, asset_types=args.types,
                  strategy=args.strategy, codes=args.codes,
