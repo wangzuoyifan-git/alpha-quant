@@ -929,9 +929,31 @@ def cmd_portfolio(date: str | None = None,
             continue
 
         name = ipo_dates.get(f"cn:{code}", {}).get("name", code)
-        current_price = float(df.iloc[-1]["close"])
+        hfq_price = float(df.iloc[-1]["close"])
         cost = cost_map[code]
         shares = shares_map[code]
+
+        # hfq 现价换算回不复权口径（与用户填写的 cost 对齐）
+        # 方法：从 Tushare 拉不复权当日收盘，算出复权因子，转换历史 hfq 序列
+        try:
+            from config.settings import DATA_SOURCE as _DS
+            import tushare as _ts
+            _pro = _ts.pro_api(_DS["tushare_token"])
+            _tsc = code + (".SH" if code.startswith("6") or code.startswith("9") else ".SZ")
+            _raw = _pro.daily(ts_code=_tsc,
+                              start_date=end.replace("-", ""),
+                              end_date=end.replace("-", ""))
+            if _raw is not None and not _raw.empty:
+                real_price = float(_raw.iloc[0]["close"])
+                adj_factor = hfq_price / real_price   # hfq = real * factor
+            else:
+                real_price = hfq_price
+                adj_factor = 1.0
+        except Exception:
+            real_price = hfq_price
+            adj_factor = 1.0
+
+        current_price = real_price  # 展示用不复权价
         pnl_pct = (current_price - cost) / cost * 100
 
         # 运行所有适用于 stock 的策略
