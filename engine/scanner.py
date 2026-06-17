@@ -61,7 +61,8 @@ class ScanEngine:
     def scan(self, date: str = None,
              asset_types: List[str] = None,
              industry_filter: List[str] = None,
-             industry_level: str = "L1") -> List[Signal]:
+             industry_level: str = "L1",
+             etf_whitelist: List[str] = None) -> List[Signal]:
         """
         执行全市场扫描
         :param date: 扫描日期，默认今日
@@ -69,6 +70,9 @@ class ScanEngine:
         :param industry_filter: L2 行业池约束（申万行业代码列表）。
                                 非 None 时，仅扫描属于这些行业的股票（约束前置）。
                                 None 时为全市场扫描（向后兼容 AC13）。
+        :param etf_whitelist: L2 行业ETF白名单（代码列表）。
+                              非 None 时，ETF 扫描仅限白名单内品种（L2 行业择时）。
+                              None 时为全 ETF 扫描（向后兼容）。
         :return: 所有策略触发的信号列表（按评分降序）
         """
         if not self.strategies:
@@ -111,10 +115,10 @@ class ScanEngine:
         if "etf" in asset_types:
             print(f"\n[1/3] 获取 ETF 列表..." if "stock" not in asset_types
                   else "", end="", flush=True)
-            etf_list = self._get_filtered_etf_list()
+            etf_list = self._get_filtered_etf_list(etf_whitelist=etf_whitelist)
             for _, row in etf_list.iterrows():
                 scan_targets.append((row["code"], row["name"], "etf"))
-            print(f"  ETF: {len(etf_list)} 只", flush=True)
+            print(f"  ETF: {len(etf_list)} 只" + (" (L2白名单)" if etf_whitelist else ""), flush=True)
 
         total = len(scan_targets)
         print(f"[2/3] 待扫描标的: {total}，开始并发计算信号...", flush=True)
@@ -308,14 +312,21 @@ class ScanEngine:
         logger.info(f"有效股票数: {len(stock_list)}")
         return stock_list.reset_index(drop=True)
 
-    def _get_filtered_etf_list(self) -> pd.DataFrame:
-        """从本地库获取 ETF 列表，过滤掉本地无数据的品种"""
+    def _get_filtered_etf_list(self, etf_whitelist: List[str] = None) -> pd.DataFrame:
+        """
+        从本地库获取 ETF 列表，过滤掉本地无数据的品种。
+        :param etf_whitelist: L2 行业ETF白名单；非None时仅返回白名单内且本地有数据的品种。
+        """
         ipo_dates = store.load_ipo_dates()
-
         codes = store.list_codes("etf", market="cn")
         if not codes:
             print("  本地无 ETF 数据，请先运行 init --types etf", flush=True)
             return pd.DataFrame(columns=["code", "name"])
+
+        # 应用 L2 行业ETF白名单约束
+        if etf_whitelist is not None:
+            whiteset = set(etf_whitelist)
+            codes = [c for c in codes if c in whiteset]
 
         rows = []
         for code in codes:

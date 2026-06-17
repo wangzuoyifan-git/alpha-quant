@@ -426,6 +426,13 @@ def evaluate_industry_rotation(risk_mode: str = "balanced",
         logger.info(f"L2 行业池: risk_mode={risk_mode}, weights={weights}, "
                     f"选出 {len(allowed)} 个行业: {[r['industry_name'] for r in selected[:5]]}...")
 
+        # 行业 → 行业ETF 映射（L3 etf_momentum 白名单）
+        import data.store as _store
+        from data.store_meta import get_industry_etfs
+        available_etfs = set(_store.list_codes("etf", market="cn"))
+        etf_candidates = get_industry_etfs(allowed, available_codes=available_etfs)
+        logger.info(f"L2 行业ETF白名单: {len(etf_candidates)} 只 ETF")
+
         return {
             "success": True,
             "allowed_industries": allowed,
@@ -436,6 +443,7 @@ def evaluate_industry_rotation(risk_mode: str = "balanced",
             "all_industry_detail": all_detail,
             "all_industry_horizon_map": all_horizon_map,
             "allowed_styles": [],
+            "etf_candidates": etf_candidates,   # L3 etf_momentum 白名单
             "fallback": False,
             "risk_mode": risk_mode,
             "level": level,
@@ -455,6 +463,7 @@ def _fallback(risk_mode: str, error: str = None) -> dict:
         "industry_detail": {},
         "industry_horizon_map": {},
         "allowed_styles": [],
+        "etf_candidates": [],
         "fallback": True,
         "risk_mode": risk_mode,
     }

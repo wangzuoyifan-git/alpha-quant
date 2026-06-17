@@ -365,6 +365,8 @@ def industry_rotation_node(state: WorkflowState) -> WorkflowState:
         # allowed_time_horizons：从 horizon_map 中汇总出现的 horizon 类型
         horizons = set(result.get("industry_horizon_map", {}).values())
         ctx["allowed_time_horizons"] = sorted(horizons) if horizons else ["short"]
+        # L2 行业ETF白名单：供 scan_node 限制 ETF 扫描范围
+        ctx["etf_whitelist"] = result.get("etf_candidates", [])
         # 重算 strategy_keys（现在 allowed_styles 已填充）
         from agents.strategy_agent import select_strategies
         ctx["strategy_keys"] = select_strategies(ctx)
@@ -451,11 +453,13 @@ def scan_node(state: WorkflowState) -> WorkflowState:
     state["log"] = state.get("log", [])
     ctx = state.get("decision_context", {})
     allowed_industries = ctx.get("allowed_industries") or None  # 空列表→None（全市场）
+    etf_whitelist = ctx.get("etf_whitelist") or None            # 空列表→None（全ETF扫描）
     result = run_scan(
         date=state.get("date"),
         strategies=state.get("strategy_keys"),
         industry_filter=allowed_industries,
         industry_level=state.get("industry_level", "L1"),
+        etf_whitelist=etf_whitelist,
     )
     # 阶段三：sanitize numpy 类型（OB-R4）
     state["scan_results"] = _to_native(result)
