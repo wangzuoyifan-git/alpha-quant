@@ -55,55 +55,103 @@ notifier = Notifier(NOTIFIER)
 trader = TradeAssistant(BACKTEST, RISK_CONTROL)
 
 
-def cmd_scan(date: str | None = None, asset_types: list | None = None):
-    """执行全市场扫描并推送信号"""
+def cmd_scan(date: str | None = None, asset_types: list | None = None,
+             strategy: str | None = None, codes: list | None = None):
+    """执行扫描并推送信号。支持单策略/指定股票快速验证 L3。"""
     from rich.console import Console
     from rich.table import Table
+    from rich.panel import Panel
 
     console = Console()
     asset_types = asset_types or ["stock"]
     label = "+".join(asset_types)
-    console.print(f"[bold cyan]Alpha量化 - 全市场扫描启动 ({label})[/bold cyan]")
+
+    # 策略选择
+    strat_map = {strategy: BUILTIN_STRATEGIES[strategy]} if strategy else BUILTIN_STRATEGIES
+    strat_label = strategy or f"全部({len(strat_map)}个)"
+    console.print(Panel(
+        f"[bold cyan]Alpha量化 - L3 策略扫描[/bold cyan]\n"
+        f"策略: [yellow]{strat_label}[/yellow]  "
+        f"资产: [yellow]{label}[/yellow]  "
+        f"日期: [yellow]{date or '今日'}[/yellow]  "
+        f"股票池: [yellow]{len(codes) if codes else '全市场'}只[/yellow]",
+        expand=False
+    ))
 
     engine = ScanEngine(fetcher, SCAN)
-    engine.load_strategies(BUILTIN_STRATEGIES)
+    engine.load_strategies(strat_map)
 
-    signals = engine.scan(date=date, asset_types=asset_types)
+    # 指定股票池时跳过全市场扫描（直接加载指定代码）
+    if codes:
+        import data.store as store
+        from strategies.base import Signal as Sig
+        ipo_dates = store.load_ipo_dates()
+        from datetime import datetime, timedelta
+        max_bars = max(s.requires_bars() for s in engine.strategies.values())
+        end = date or datetime.now().strftime("%Y-%m-%d")
+        start = (datetime.strptime(end, "%Y-%m-%d") -
+                 timedelta(days=int(max_bars * 1.5))).strftime("%Y-%m-%d")
+        signals = []
+        for code in codes:
+            df = store.load(code, asset_type="stock", market="cn", start=start, end=end)
+            if df is None or df.empty:
+                console.print(f"[dim]  {code}: 无本地数据[/dim]")
+                continue
+            df = df.reset_index()
+            name = ipo_dates.get(f"cn:{code}", {}).get("name", code)
+            for strat in engine.strategies.values():
+                sigs = strat.generate_signals(df, code, name)
+                signals.extend(sigs)
+        signals.sort(key=lambda s: s.score, reverse=True)
+    else:
+        signals = engine.scan(date=date, asset_types=asset_types)
 
     if not signals:
-        console.print("[yellow]今日无触发信号[/yellow]")
+        console.print("[yellow]无触发信号[/yellow]")
         return
 
-    # 终端展示
-    table = Table(title=f"选股信号 (共 {len(signals)} 个)")
-    table.add_column("代码", style="cyan")
-    table.add_column("名称")
-    table.add_column("信号", style="bold")
-    table.add_column("价格", justify="right")
-    table.add_column("评分", justify="right")
-    table.add_column("原因")
-    for s in signals:
-        color = "red" if s.signal == "BUY" else "green"
-        table.add_row(
-            s.code, s.name,
-            f"[{color}]{s.signal}[/{color}]",
-            f"¥{s.price:.2f}",
-            f"{s.score:.0f}",
-            s.reason,
-        )
-    console.print(table)
+    # 按信号类型分组展示
+    buy_sigs  = [s for s in signals if s.signal == "BUY"]
+    sell_sigs = [s for s in signals if s.signal == "SELL"]
+    watch_sigs = [s for s in signals if s.signal == "WATCH"]
 
-    # 推送通知
-    notifier.send_signals(signals)
+    def _render_table(sigs, title, color):
+        if not sigs:
+            return
+        t = Table(title=title, show_lines=True)
+        t.add_column("代码", style="cyan", width=8)
+        t.add_column("名称", width=12)
+        t.add_column("价格", justify="right", width=8)
+        t.add_column("评分", justify="right", width=6)
+        t.add_column("持仓类型", width=8)
+        t.add_column("触发原因")
+        t.add_column("事件警告", style="yellow")
+        for s in sigs:
+            warnings = ", ".join(s.extra.get("event_warnings", []))
+            t.add_row(
+                s.code, s.name,
+                f"¥{s.price:.2f}",
+                f"[{color}]{s.score:.0f}[/{color}]",
+                s.position_type,
+                s.reason,
+                warnings or "-",
+            )
+        console.print(t)
 
-    # 持久化信号
-    from signals.manager import save_signals
-    save_signals(signals, date=date)
+    _render_table(buy_sigs,   f"BUY 信号（{len(buy_sigs)} 个）",   "red")
+    _render_table(sell_sigs,  f"SELL 信号（{len(sell_sigs)} 个）",  "green")
+    _render_table(watch_sigs, f"WATCH 信号（{len(watch_sigs)} 个）（配置仓候选）", "magenta")
 
-    # 生成指令单
-    orders = trader.generate_orders(signals)
-    if orders:
-        console.print(f"\n[bold]已生成 {len(orders)} 份指令单，运行 `python main.py orders` 查看[/bold]")
+    console.print(f"\n[bold]合计: {len(signals)} 个信号（BUY {len(buy_sigs)} / SELL {len(sell_sigs)} / WATCH {len(watch_sigs)}）[/bold]")
+
+    # 非指定股票模式才推送/持久化
+    if not codes:
+        notifier.send_signals(signals)
+        from signals.manager import save_signals
+        save_signals(signals, date=date)
+        orders = trader.generate_orders(signals)
+        if orders:
+            console.print(f"[bold]已生成 {len(orders)} 份指令单，运行 `python main.py orders` 查看[/bold]")
 
 
 def cmd_backtest(strategy_key: str = "macd_rsi",
@@ -826,12 +874,15 @@ if __name__ == "__main__":
     sub.add_parser("dbstats", help="查看本地K线数据库统计")
 
     # scan
-    p_scan = sub.add_parser("scan", help="全市场扫描")
+    p_scan = sub.add_parser("scan", help="全市场扫描（支持单策略/指定股票快速验证L3）")
     p_scan.add_argument("--date", help="指定日期 YYYY-MM-DD（默认今日）")
-    p_scan.add_argument("--types", nargs="*",
-                        default=["stock"],
+    p_scan.add_argument("--types", nargs="*", default=["stock"],
                         choices=["stock", "etf"],
                         help="扫描资产类型（默认 stock；可传 etf 或 stock etf）")
+    p_scan.add_argument("--strategy", choices=list(BUILTIN_STRATEGIES.keys()),
+                        help="只运行指定策略（不传则全部策略）")
+    p_scan.add_argument("--codes", nargs="*",
+                        help="只扫描指定股票代码（如 000001 600519），不传则全市场")
 
     # workflow（分层决策：L1→L2→L3）
     p_wf = sub.add_parser("workflow", help="运行分层决策 workflow（L1宏观→L2行业→L3个股，可视化）")
@@ -941,7 +992,8 @@ if __name__ == "__main__":
     elif args.command == "dbstats":
         cmd_dbstats()
     elif args.command == "scan":
-        cmd_scan(date=args.date, asset_types=args.types)
+        cmd_scan(date=args.date, asset_types=args.types,
+                 strategy=args.strategy, codes=args.codes)
     elif args.command == "workflow":
         cmd_workflow(date=args.date, industries=args.industries,
                      asset_types=args.types, industry_level=args.industry_level)
