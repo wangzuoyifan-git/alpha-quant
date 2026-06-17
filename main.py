@@ -204,6 +204,9 @@ def cmd_scan(date: str | None = None, asset_types: list | None = None,
             df = df.reset_index()
             name = ipo_dates.get(f"cn:{code}", {}).get("name", code)
             for strat in engine.strategies.values():
+                allowed = getattr(strat, "applicable_asset_types", [])
+                if allowed and "stock" not in allowed:
+                    continue
                 sigs = strat.generate_signals(df, code, name)
                 signals.extend(sigs)
         signals.sort(key=lambda s: s.score, reverse=True)
