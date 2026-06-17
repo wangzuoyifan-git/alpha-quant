@@ -55,6 +55,91 @@ notifier = Notifier(NOTIFIER)
 trader = TradeAssistant(BACKTEST, RISK_CONTROL)
 
 
+def _resolve_stock_codes(queries: list[str]) -> list[str] | None:
+    """
+    将股票查询（代码或名称）解析为6位代码列表。
+    - 6位纯数字 → 直接当代码
+    - 其他 → ipo_dates 中精确/模糊匹配名称
+    - 多候选 → 打印候选让用户明确，返回 None
+    """
+    import data.store as store
+    ipo = store.load_ipo_dates()
+    stock_ipo = {k: v for k, v in ipo.items() if v.get("type") == "stock"}
+
+    result = []
+    for q in queries:
+        if q.isdigit() and len(q) == 6:
+            result.append(q)
+            continue
+        exact = [k.split(":")[1] for k, v in stock_ipo.items() if v.get("name") == q]
+        if exact:
+            result.extend(exact)
+            continue
+        fuzzy = [(k.split(":")[1], v.get("name", ""))
+                 for k, v in stock_ipo.items() if q in v.get("name", "")]
+        if not fuzzy:
+            print(f"[错误] 找不到股票 '{q}'，请检查名称或代码")
+            return None
+        if len(fuzzy) == 1:
+            result.append(fuzzy[0][0])
+            continue
+        print(f"[提示] '{q}' 匹配到 {len(fuzzy)} 只股票，请用更精确的名称或代码：")
+        for code, name in fuzzy[:20]:
+            print(f"  {code}  {name}")
+        if len(fuzzy) > 20:
+            print(f"  ...（共 {len(fuzzy)} 个）")
+        return None
+    return result
+
+
+def _resolve_sw_industries(queries: list[str], level: str = "L1") -> list[str] | None:
+    """
+    将申万行业查询（代码或名称）解析为标准行业代码列表。
+    - 纯数字（6位）或带后缀（如801080.SI）→ 直接当代码
+    - 其他 → industry_member 中精确/模糊匹配行业名称
+    - 多候选 → 打印让用户明确，返回 None
+    """
+    from data.store_meta import load as load_meta
+    member = load_meta("industry_member")
+    if member is None or member.empty:
+        print("[错误] 申万行业分类数据不存在，请先运行 init-meta")
+        return None
+
+    name_col = {"L1": "l1_name", "L2": "l2_name", "L3": "l3_name"}.get(level, "l1_name")
+    code_col = {"L1": "l1_code", "L2": "l2_code", "L3": "l3_code"}.get(level, "l1_code")
+    # 去重行业列表
+    ind_df = member[[code_col, name_col]].drop_duplicates().reset_index(drop=True)
+
+    result = []
+    for q in queries:
+        # 已是代码形式（纯数字或带.SI）
+        q_norm = q.split(".")[0]
+        if q_norm.isdigit():
+            full = q if "." in q else f"{q}.SI"
+            result.append(full)
+            continue
+        # 精确名称匹配
+        exact = ind_df[ind_df[name_col] == q]
+        if not exact.empty:
+            result.extend(exact[code_col].tolist())
+            continue
+        # 模糊匹配
+        fuzzy = ind_df[ind_df[name_col].str.contains(q, na=False)]
+        if fuzzy.empty:
+            print(f"[错误] 找不到申万行业 '{q}'")
+            sample = ind_df[name_col].head(8).tolist()
+            print(f"  示例：{sample}")
+            return None
+        if len(fuzzy) == 1:
+            result.extend(fuzzy[code_col].tolist())
+            continue
+        print(f"[提示] '{q}' 匹配到 {len(fuzzy)} 个申万{level}行业，请用更精确的名称：")
+        for _, row in fuzzy.iterrows():
+            print(f"  {row[code_col]}  {row[name_col]}")
+        return None
+    return result
+
+
 def cmd_scan(date: str | None = None, asset_types: list | None = None,
              strategy: str | None = None, codes: list | None = None,
              industries: list | None = None, industry_level: str = "L1"):
@@ -67,12 +152,20 @@ def cmd_scan(date: str | None = None, asset_types: list | None = None,
     asset_types = asset_types or ["stock"]
     label = "+".join(asset_types)
 
-    # 行业 → 股票代码解析（优先级：--codes > --industries > 全市场）
-    if not codes and industries:
+    # 名称/代码解析（--codes 和 --industries 均支持名称输入）
+    if codes:
+        codes = _resolve_stock_codes(codes)
+        if codes is None:
+            return  # 有歧义，已打印候选，让用户重新输入
+    elif industries:
+        resolved = _resolve_sw_industries(industries, level=industry_level)
+        if resolved is None:
+            return
         from data.store_meta import get_member_stocks
-        codes = get_member_stocks(industries, level=industry_level)
+        codes = get_member_stocks(resolved, level=industry_level)
+        industries = resolved  # 用于 pool_label 显示标准化后的名称
         if not codes:
-            console.print(f"[yellow]行业 {industries} 无成员股数据，请先运行 init-meta[/yellow]")
+            console.print(f"[yellow]行业 {resolved} 无成员股数据，请先运行 init-meta[/yellow]")
             return
 
     # 策略选择
