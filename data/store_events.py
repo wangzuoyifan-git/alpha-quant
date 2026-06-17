@@ -105,6 +105,32 @@ def has_reduce_window(code: str, date: str = None) -> bool:
     return False
 
 
+def has_pledge_risk(code: str, threshold: float = 50.0) -> bool:
+    """
+    检查股权质押风险：最新质押比例超过阈值。
+
+    pledge_ratio 字段为百分比（如 30.5 = 30.5%）。
+    高比例质押在股价下跌时面临强制平仓风险，为潜在做空催化剂。
+
+    Args:
+        code: 股票代码（6位纯数字）
+        threshold: 质押比例告警阈值（默认 50%，超过则认为有风险）
+
+    Returns:
+        True 表示有质押风险（pledge_ratio >= threshold）
+    """
+    events = load_corp_events(code)
+    if not events:
+        return False
+    pledges = [e for e in events if e.get("event_type") == "pledge"]
+    if not pledges:
+        return False
+    # 取最新一条（按 date 降序）
+    pledges.sort(key=lambda e: e.get("date", ""), reverse=True)
+    ratio = pledges[0].get("detail", {}).get("pledge_ratio", 0.0)
+    return float(ratio) >= threshold
+
+
 # ═══════════════════════════════════════════════════════════════
 # E3 突发事件
 # ═══════════════════════════════════════════════════════════════

@@ -184,3 +184,71 @@ class TestF1F2Execution:
         data = json.loads((tmp_path / f"{order_id}.json").read_text())
         assert "price_deviation" in data
         assert abs(data["price_deviation"] - 5.0) < 0.1  # (10.5/10.0-1)*100 = 5%
+
+
+class TestRC7PledgeAndWatchWarning:
+    """RC7 扩展：股权质押过滤 + WATCH 信号事件标注"""
+
+    def test_buy_blocked_by_pledge(self, monkeypatch):
+        """BUY 信号在高比例质押时被 RC7_pledge 拦截"""
+        from data import store_events
+        monkeypatch.setattr(store_events, "has_reduce_window", lambda code, date=None: False)
+        monkeypatch.setattr(store_events, "has_pledge_risk", lambda code, threshold=50.0: True)
+
+        ta = _make_ta()
+        sigs = ta.filter_signals_by_risk([_make_signal("000001", "BUY")])
+        assert sigs == []  # enforce=True 时被过滤
+
+    def test_buy_not_blocked_when_pledge_low(self, monkeypatch):
+        """低质押比例 BUY 信号不被拦截"""
+        from data import store_events
+        monkeypatch.setattr(store_events, "has_reduce_window", lambda code, date=None: False)
+        monkeypatch.setattr(store_events, "has_pledge_risk", lambda code, threshold=50.0: False)
+
+        ta = _make_ta()
+        sigs = ta.filter_signals_by_risk([_make_signal("000001", "BUY")])
+        assert len(sigs) == 1
+
+    def test_watch_gets_event_warning_not_blocked(self, monkeypatch):
+        """WATCH 信号有减持/质押风险时打标注而非拦截"""
+        from data import store_events
+        monkeypatch.setattr(store_events, "has_reduce_window", lambda code, date=None: True)
+        monkeypatch.setattr(store_events, "has_pledge_risk", lambda code, threshold=50.0: True)
+
+        ta = _make_ta()
+        watch_sig = _make_signal("000001", "WATCH")
+        # WATCH 信号不经 filtered 列表（filter_signals_by_risk 只处理 BUY/SELL）
+        # 但事件标注发生在迭代中，需要直接调用
+        ta.filter_signals_by_risk([watch_sig])
+        # WATCH 不被拦截，但 extra 中有 event_warnings
+        assert "event_warnings" in watch_sig.extra
+        warnings = watch_sig.extra["event_warnings"]
+        assert "WARN_reduce" in warnings
+        assert "WARN_pledge" in warnings
+
+    def test_watch_no_warning_when_clean(self, monkeypatch):
+        """无事件风险的 WATCH 信号不被打标"""
+        from data import store_events
+        monkeypatch.setattr(store_events, "has_reduce_window", lambda code, date=None: False)
+        monkeypatch.setattr(store_events, "has_pledge_risk", lambda code, threshold=50.0: False)
+
+        ta = _make_ta()
+        watch_sig = _make_signal("000001", "WATCH")
+        ta.filter_signals_by_risk([watch_sig])
+        assert watch_sig.extra.get("event_warnings") is None
+
+    def test_has_pledge_risk_threshold(self, tmp_path, monkeypatch):
+        """has_pledge_risk 按阈值正确判断"""
+        import json
+        from data.store_events import save_corp_events, has_pledge_risk
+        monkeypatch.setattr("data.store_events.E2_CORP_DIR", tmp_path)
+
+        save_corp_events("000999", [{
+            "event_id": "pledge_test_1", "code": "000999",
+            "event_type": "pledge", "date": "2026-01-01",
+            "end_date": None,
+            "detail": {"pledge_ratio": 55.0},
+            "source": "test", "phase": 1,
+        }])
+        assert has_pledge_risk("000999", threshold=50.0) is True
+        assert has_pledge_risk("000999", threshold=60.0) is False

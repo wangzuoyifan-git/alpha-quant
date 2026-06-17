@@ -209,6 +209,22 @@ class TradeAssistant:
 
         filtered = []
         for sig in signals:
+            # WATCH 信号事件风险标注（打标签供人工判断，不强制拦截）
+            if sig.signal == "WATCH" and self.risk.get("reduce_window_block", True):
+                try:
+                    from data.store_events import has_reduce_window, has_pledge_risk
+                    warn_flags = []
+                    if has_reduce_window(sig.code):
+                        warn_flags.append("WARN_reduce")
+                    if has_pledge_risk(sig.code,
+                                       threshold=self.risk.get("pledge_ratio_threshold", 50.0)):
+                        warn_flags.append("WARN_pledge")
+                    if warn_flags:
+                        sig.extra["event_warnings"] = warn_flags
+                        logger.info(f"WATCH 标注 {sig.code}：{warn_flags}")
+                except Exception:
+                    pass
+
             if sig.signal not in ("BUY", "SELL"):
                 continue
 
@@ -224,17 +240,38 @@ class TradeAssistant:
             rc2_ok = self.check_position_count(len(positions))
             rc3_ok = self.check_industry_concentration(order, industry_pos, equity)
 
-            # RC7：减持窗口期过滤（BUY 信号在大股东减持窗口内拦截）
+            # RC7：减持窗口期 + 高比例股权质押过滤（BUY 信号拦截）
             rc7_ok = True
             if sig.signal == "BUY" and self.risk.get("reduce_window_block", True):
                 try:
-                    from data.store_events import has_reduce_window
+                    from data.store_events import has_reduce_window, has_pledge_risk
                     if has_reduce_window(sig.code):
-                        order.risk_flags.append("RC7")
+                        order.risk_flags.append("RC7_reduce")
                         rc7_ok = False
                         logger.info(f"RC7 拦截 {sig.code}：处于减持窗口期")
+                    elif has_pledge_risk(sig.code,
+                                        threshold=self.risk.get("pledge_ratio_threshold", 50.0)):
+                        order.risk_flags.append("RC7_pledge")
+                        rc7_ok = False
+                        logger.info(f"RC7 拦截 {sig.code}：股权质押比例过高")
                 except Exception:
                     pass  # 事件数据缺失时不阻断
+
+            # WATCH 信号事件风险标注（打标签供人工判断，不强制拦截）
+            if sig.signal == "WATCH":
+                try:
+                    from data.store_events import has_reduce_window, has_pledge_risk
+                    warn_flags = []
+                    if has_reduce_window(sig.code):
+                        warn_flags.append("WARN_reduce")
+                    if has_pledge_risk(sig.code,
+                                       threshold=self.risk.get("pledge_ratio_threshold", 50.0)):
+                        warn_flags.append("WARN_pledge")
+                    if warn_flags:
+                        sig.extra["event_warnings"] = warn_flags
+                        logger.info(f"WATCH 标注 {sig.code}：{warn_flags}")
+                except Exception:
+                    pass
 
             # RC2 标记（对单个信号不直接标记 RC2，在生成指令单时全局检查）
             if not rc2_ok:
