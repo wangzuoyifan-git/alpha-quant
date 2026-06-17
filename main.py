@@ -483,16 +483,34 @@ def cmd_web():
         print("请先安装 Flask: pip install flask")
 
 
+def _build_kline_downloader(workers: int = 1):
+    """构建 K 线下载器。
+
+    主链路优先 Tushare（已付费、稳定）；未配置 token 时降级 baostock。
+    两个下载器接口对齐（init_db / update_db），上层无需感知差异。
+    """
+    token = DATA_SOURCE.get("tushare_token", "")
+    if token:
+        import tushare as ts
+        from data.downloader_tushare import TushareKlineDownloader
+        # timeout=20：单接口硬超时（防止网络异常时单只死堵）
+        pro = ts.pro_api(token, timeout=20)
+        logger.info("K线主下载源: Tushare（pro_bar hfq）")
+        return TushareKlineDownloader(pro, workers=workers)
+    logger.warning("未配置 TUSHARE_TOKEN，K线下载降级为 baostock")
+    return KlineDownloader(fetcher, workers=workers)
+
+
 def cmd_init(start: str = "2024-01-02", end: str | None = None, force: bool = False,
              workers: int = 1, types: list | None = None):
     """首次全量下载全市场 K 线数据（支持断点续传）"""
-    dl = KlineDownloader(fetcher, workers=workers)
+    dl = _build_kline_downloader(workers=workers)
     dl.init_db(start=start, end=end, force=force, types=types)
 
 
 def cmd_update(end: str | None = None, workers: int = 1, types: list | None = None):
     """增量更新：补全每只证券到最新交易日"""
-    dl = KlineDownloader(fetcher, workers=workers)
+    dl = _build_kline_downloader(workers=workers)
     dl.update_db(end=end, types=types)
 
 
@@ -601,6 +619,102 @@ def cmd_update_all():
         print(f"  moneyflow 跳过: {e}")
 
     logger.info("全域增量更新完成！")
+
+
+def cmd_inspect(subtype: str, target: str = "",
+                n: int = 20, asset_type: str = "stock",
+                level: str = "L1", plot: bool = False,
+                start: str = None, end: str = None,
+                codes: list = None, metric: str = None,
+                all_items: bool = False):
+    """数据直查工具"""
+    from tools.inspect_data import (cmd_kline, cmd_stock_mf, cmd_ind_mf, cmd_macro,
+                                    cmd_kline_multi, cmd_stock_mf_multi, cmd_ind_mf_multi,
+                                    cmd_fundamental, _resolve_codes, _resolve_industries)
+    import data.store_moneyflow as _mf
+
+    # ── 名称→代码解析（kline / mf）──────────────────────────
+    def resolve_stock_targets(raw: list[str]) -> list[str] | None:
+        resolved = _resolve_codes(raw, asset_type=asset_type)
+        return resolved  # None 表示需要用户明确
+
+    # ── 行业名解析（ind）────────────────────────────────────
+    def resolve_ind_targets(raw: list[str]) -> list[str] | None:
+        dates = _mf.list_dates("industry")
+        if not dates:
+            print("[错误] 无行业资金流数据")
+            return None
+        ref = _mf.load("industry", date=sorted(dates)[-1])
+        if ref is None:
+            return None
+        return _resolve_industries(raw, ref)
+
+    if subtype == "kline":
+        raw = codes or ([target] if target else [])
+        if not raw:
+            print("请提供股票代码或名称：inspect kline 贵州茅台  或  --codes 茅台 平安银行")
+            return
+        targets = resolve_stock_targets(raw)
+        if targets is None:
+            return
+        if len(targets) == 1:
+            cmd_kline(targets[0], asset_type=asset_type, n=n,
+                      start=start, end=end, plot=plot)
+        else:
+            cmd_kline_multi(targets, metric=metric or "close",
+                            asset_type=asset_type, n=n, start=start, end=end)
+
+    elif subtype == "mf":
+        raw = codes or ([target] if target else [])
+        if not raw:
+            print("请提供股票代码或名称：inspect mf 贵州茅台  或  --codes 茅台 平安银行")
+            return
+        targets = resolve_stock_targets(raw)
+        if targets is None:
+            return
+        if len(targets) == 1:
+            cmd_stock_mf(targets[0], n=n, start=start, end=end, plot=plot)
+        else:
+            cmd_stock_mf_multi(targets, metric=metric or "net_mf_amount",
+                                n=n, start=start, end=end)
+
+    elif subtype == "ind":
+        raw = codes or ([target] if target else [])
+        if not raw and not all_items:
+            print("请提供行业名称：inspect ind 食品饮料  或  --codes 银行 半导体  或  --all")
+            return
+        if all_items or not raw:
+            cmd_ind_mf_multi([], metric=metric or "net_amount",
+                             all_industries=True, n=n, start=start, end=end)
+        else:
+            resolved = resolve_ind_targets(raw)
+            if resolved is None:
+                return
+            if len(resolved) == 1:
+                cmd_ind_mf(resolved[0], n=n, level=level,
+                           start=start, end=end, plot=plot)
+            else:
+                cmd_ind_mf_multi(resolved, metric=metric or "net_amount",
+                                 all_industries=False, n=n, start=start, end=end)
+
+    elif subtype == "macro":
+        cmd_macro(target, n=n, start=start, end=end, plot=plot)
+    elif subtype == "fundamental":
+        raw = codes or ([target] if target else [])
+        if not raw:
+            if metric == "list" or not metric:
+                cmd_fundamental("", data_type="list")
+                return
+            print("请提供股票代码或名称")
+            return
+        resolved = _resolve_codes(raw, asset_type="stock")
+        if not resolved:
+            return
+        for code in resolved:
+            cmd_fundamental(code, data_type=metric or "profit",
+                            n=n, start=start, end=end)
+    else:
+        print("可用子类型: kline / mf / ind / macro")
 
 
 def cmd_dbstats():
@@ -789,6 +903,27 @@ if __name__ == "__main__":
     # update-all
     sub.add_parser("update-all", help="更新所有数据域（market+meta+fundamental+factor+macro）")
 
+    # inspect
+    p_ins = sub.add_parser("inspect", help="数据直查工具（K线/个股资金流/行业资金流/宏观）")
+    p_ins.add_argument("subtype", choices=["kline", "mf", "ind", "macro", "fundamental"],
+                       help="查询类型: kline=K线 mf=个股资金流 ind=行业资金流 macro=宏观 fundamental=基本面")
+    p_ins.add_argument("target", nargs="?", default="",
+                       help="查询目标: 股票代码(kline/mf) / 行业名(ind) / 宏观指标名或list(macro)")
+    p_ins.add_argument("--n", type=int, default=20, help="显示最近N条（默认20）")
+    p_ins.add_argument("--type", dest="asset_type", default="stock",
+                       choices=["stock", "index", "etf"], help="资产类型（kline用，默认stock）")
+    p_ins.add_argument("--codes", nargs="*", default=None,
+                       help="多个代码/行业名（空格分隔），与 target 二选一")
+    p_ins.add_argument("--metric", default=None,
+                       help="多只对比时的指标（kline默认close，mf默认net_mf_amount，ind默认net_amount）")
+    p_ins.add_argument("--all", dest="all_items", action="store_true",
+                       help="ind --all：输出全部行业资金流排名汇总")
+    p_ins.add_argument("--level", default="L1", choices=["L1", "L2", "L3"],
+                       help="行业层级（ind用，默认L1）")
+    p_ins.add_argument("--start", default=None, help="起始日期 YYYY-MM-DD")
+    p_ins.add_argument("--end", default=None, help="结束日期 YYYY-MM-DD")
+    p_ins.add_argument("--plot", action="store_true", help="显示 matplotlib 图表")
+
     # web
     sub.add_parser("web", help="启动Web看板")
 
@@ -847,5 +982,12 @@ if __name__ == "__main__":
         cmd_update_moneyflow(types=args.types)
     elif args.command == "update-all":
         cmd_update_all()
+    elif args.command == "inspect":
+        cmd_inspect(subtype=args.subtype, target=args.target,
+                    n=args.n, asset_type=args.asset_type,
+                    level=args.level, plot=args.plot,
+                    start=args.start, end=args.end,
+                    codes=args.codes, metric=args.metric,
+                    all_items=args.all_items)
     else:
         parser.print_help()
