@@ -139,9 +139,12 @@ class MACrossStrategy(BaseStrategy):
                     if net > 0:
                         score = min(score + 5.0, 100.0)
                         reasons.append(f"主力净流入{net/1e8:.1f}亿")
-                    # 资金流为负不过滤（ADX已确认趋势），只是不加分
+                    else:
+                        reasons.append(f"主力净流出{abs(net)/1e8:.1f}亿⚠")
+                else:
+                    reasons.append("资金流数据不足")
             except Exception:
-                pass  # 资金流数据缺失不阻断主流程
+                reasons.append("资金流不可用")
 
         return [Signal(
             code=code, name=name, signal="BUY",
