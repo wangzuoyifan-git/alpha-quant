@@ -116,6 +116,10 @@ store_meta.save(data_type, df, code=None) -> None
 store_meta.load(data_type, code=None, start=None, end=None) -> Optional[DataFrame]
 store_meta.exists(data_type, code=None) -> bool
 store_meta.last_date(data_type) -> Optional[str]
+store_meta.get_member_stocks(industry_codes, level="L1") -> list[str]
+store_meta.get_industry_etfs(industry_codes, available_codes=None) -> list[str]
+# get_industry_etfs：根据申万L1行业代码列表，返回对应代表性行业ETF代码列表
+# SW_L1_ETF_MAP：模块级常量，31个申万L1行业→代表性行业ETF映射表（供L2输出etf_candidates用）
 ```
 
 `data_type` 取值：`industry_csrc` / `industry_sw` / `sw_index` / `calendar`

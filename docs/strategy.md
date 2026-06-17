@@ -172,6 +172,10 @@ class BaseStrategy(ABC):
     data_dependency: list[str] = ["technical"]
     #   取值：technical / fundamental / moneyflow / macro
 
+    # ⑦ 适用资产类型 — 扫描引擎按此过滤，空列表=不限制
+    applicable_asset_types: list[str] = []
+    #   取值：stock / etf（如 ["etf"] 则只在 ETF 扫描时运行）
+
     # ── 旧字段：保留向后兼容 ──
     market_condition: str = "range"   # @deprecated 用 applicable_regimes 替代
 
@@ -186,6 +190,8 @@ class BaseStrategy(ABC):
             "applicable_regimes": self.applicable_regimes,
             "risk_profile": self.risk_profile,
             "time_horizon": self.time_horizon,
+            "position_type": "config" if self.time_horizon in ("medium", "long") else "trading",
+            "applicable_asset_types": self.applicable_asset_types,
             "data_dependency": self.data_dependency,
             "applicable_scenario": self.applicable_scenario,
             "description": self.description,
@@ -229,16 +235,16 @@ class BaseStrategy(ABC):
 > **策略标签草案**：applicable_regimes 是筛选事实来源，strategy_keys 由 `select_strategies()` 按画像匹配产出。
 > 具体标签值待更多策略开发后随实践校准，不应拘泥于当前 6 个内置策略。
 
-| key | style | applicable_regimes | risk_profile | time_horizon | 正交维度 |
-|---|---|---|---|---|---|
-| `ma_cross` | momentum | [balanced, risk_on] | balanced | short | 趋势跟踪（个股，待升级为主力） |
-| `macd_rsi` | reversal | [risk_off, volatile] | defensive | short | 均值回归 |
-| `vol_price_breakout` | breakout | [risk_on] | aggressive | short | 突破 |
-| `etf_momentum` | momentum | [risk_on, balanced] | balanced | short | ETF 轮动 |
-| `fundamental_value` | quality | [crisis,risk_off,balanced,risk_on,volatile] | defensive | medium | 质量（Quality） |
-| `deep_value` | value | [crisis,risk_off,balanced,risk_on,volatile] | defensive | long | 价值（Value） |
-| `growth_pick` | growth | [crisis,risk_off,balanced,risk_on,volatile] | balanced | medium | 成长（Growth） |
-| `money_flow` | moneyflow | [risk_on, balanced] | aggressive | short | 🔻 待降级为过滤层（非独立维度） |
+| key | style | applicable_regimes | risk_profile | time_horizon | 版本 | 正交维度 |
+|---|---|---|---|---|---|---|
+| `ma_cross` | momentum | [balanced, risk_on] | balanced | short | v2.0 | 趋势跟踪（个股主力，ADX+资金流） |
+| `macd_rsi` | reversal | [risk_off, volatile] | defensive | short | v2.0 | 均值回归（RSI背离+超卖） |
+| `vol_price_breakout` | breakout | [risk_on] | aggressive | short | v2.0 | 突破（蓄力确认+ATR标准化） |
+| `etf_momentum` | momentum | [risk_on, balanced] | balanced | short | v2.0 | ETF 轮动（绝对+相对动量，仅ETF） |
+| `fundamental_value` | quality | [crisis,risk_off,balanced,risk_on,volatile] | defensive | medium | v3.0 | 质量（Quality，PE历史分位） |
+| `deep_value` | value | [crisis,risk_off,balanced,risk_on,volatile] | defensive | long | v2.0 | 价值（Value，行业排除+股息） |
+| `growth_pick` | growth | [crisis,risk_off,balanced,risk_on,volatile] | balanced | medium | v2.0 | 成长（Growth，PEG控估值） |
+| ~~`money_flow`~~ | moneyflow | — | — | — | 降级 | 已降级为趋势策略内置过滤层，不注册 |
 
 > **正交维度列**：标注每个策略在第〇章正交框架中占据的 Alpha 来源。`money_flow` 不构成独立正交维度，规划降级为趋势/突破策略的内置确认过滤层。
 
@@ -442,15 +448,19 @@ signals = engine.scan(date=None, asset_types=["stock", "etf"])
 ```python
 # backtest/engine.py
 backtester = Backtester(fetcher, BACKTEST)
-result = backtester.run(strategy, stock_codes=[], start="2024-01-02", end="2026-05-25")
+result = backtester.run(strategy, stock_codes=[], start="2024-01-02", end="2026-06-16",
+                        asset_type="stock")  # asset_type="etf" 支持 ETF 回测
 print(result.summary())
 ```
 
 回测约定：
 - `stock_codes` 为空时自动使用本地全市场数据
+- `asset_type` 支持 "stock"（默认）/ "etf"
 - 最多同时持仓10只（当前硬编码，待从 config 读取）
 - 按 `position_size`（默认10%）分配资金
-- 夏普比率当前未扣除无风险利率
+- 夏普比率已扣除无风险利率（2%）
+- **基准对比**：`BacktestResult` 含 `benchmark_return`（沪深300同期收益）/ `alpha`（超额年化）/ `beta`，
+  `summary()` 有基准数据时展示「基准收益/超额收益(alpha)/beta」
 
 ---
 

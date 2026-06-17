@@ -137,7 +137,8 @@ def get_active_event_windows(date: str = None) -> dict:
 
 def check_reduce_window(code: str, date: str = None) -> dict:
     """
-    检查标的是否处于大股东减持窗口期（对应 RC7）。
+    检查标的是否处于大股东减持或高比例股权质押窗口期（对应 RC7）。
+    RC7 覆盖：减持窗口期（event_type=reduce）+ 高比例质押（pledge_ratio≥50%）
 
     Returns:
         {"success": bool, "code": str, "in_window": bool,
@@ -173,7 +174,11 @@ def run_backtest(strategy_key: str,
         {"success": bool, "strategy": str, "total_return": float,
          "annual_return": float, "max_drawdown": float,
          "sharpe_ratio": float, "win_rate": float,
-         "total_trades": int, "error": str}
+         "total_trades": int,
+         "benchmark_return": float,   # 基准（沪深300）同期总收益率
+         "alpha": float,              # 超额年化收益（策略年化 - 基准年化）
+         "beta": float,               # 策略相对基准 beta
+         "error": str}
     """
 
 def list_strategies() -> dict:
@@ -460,10 +465,13 @@ LLM = {
    - 资金流维度：`moneyflow_ind` 近 N 日累计净流入，按申万行业名称精确匹配东财板块排名
    - 结合 `risk_mode` 调整行业池宽窄（defensive 取 Top 5~7，aggressive 取 Top 8~12）
    - 输出 `allowed_industries`（申万行业代码列表）+ `industry_scores`，写入 `decision_context`
+   - **输出 `etf_candidates`**（行业ETF白名单）：选出行业池后通过 `get_industry_etfs()` 映射对应行业ETF，
+     供 L3 etf_momentum 在白名单内择时（ETF 配置决策上移到 L2，L3 只做择时确认）
 
 4. **Agent 层 `agents/orchestrator.py`**
    - 串入 `industry_rotation_node`，L1 → L2 → L3（condition_context 逐层填充）
    - scan_node 从 `decision_context["allowed_industries"]` 读取，传给 `run_scan`
+   - scan_node 从 `decision_context["etf_whitelist"]` 读取 ETF 白名单，传给 `run_scan(etf_whitelist=...)`
 
 **数据对齐方案**（已验证）：
 - 东财 `moneyflow_ind.name`（1012 板块）与申万一级行业名精确匹配（31/31 可匹配）
@@ -605,7 +613,7 @@ LLM = {
 - 每日自动检查数据新鲜度，触发增量更新（含 events/calendar 更新）
 - 自动执行全市场扫描，生成信号
 - 扫描前查询当日事件窗口期，对窗口期内信号做降权处理
-- RC7/RC8 风控过滤（减持窗口期、VIX 代理熔断）
+- RC7/RC8 风控过滤（减持窗口期+高比例质押、VIX 代理熔断）
 - 推送信号到企微/邮件（含事件背景字段）
 - 生成指令单，等待人工确认
 
