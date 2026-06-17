@@ -872,6 +872,173 @@ def cmd_inspect(subtype: str, target: str = "",
         print("可用子类型: kline / mf / ind / macro")
 
 
+def cmd_portfolio(date: str | None = None,
+                  portfolio_file: str = "data/portfolio.json"):
+    """
+    持仓评估：对持仓股运行全部交易策略，输出加仓/减仓/止损建议、止盈止损点、委托参考价。
+    持仓文件格式：[{"code":"600519","name":"贵州茅台","cost":1500.0,"shares":100}, ...]
+    """
+    import json
+    from rich.console import Console
+    from rich.table import Table
+    from rich.panel import Panel
+
+    console = Console()
+
+    # ── 读持仓文件 ─────────────────────────────────────────────
+    pf_path = Path(portfolio_file)
+    if not pf_path.exists():
+        console.print(f"[red]持仓文件不存在: {portfolio_file}[/red]")
+        console.print("请创建 data/portfolio.json，格式：")
+        console.print('[{"code":"600519","name":"贵州茅台","cost":1500.0,"shares":100}]')
+        return
+    holdings = json.loads(pf_path.read_text(encoding="utf-8"))
+    if not holdings:
+        console.print("[yellow]持仓文件为空[/yellow]")
+        return
+
+    codes = [h["code"] for h in holdings]
+    cost_map = {h["code"]: float(h["cost"]) for h in holdings}
+    shares_map = {h["code"]: int(h["shares"]) for h in holdings}
+
+    console.print(Panel(
+        f"[bold cyan]Alpha量化 - 持仓评估[/bold cyan]\n"
+        f"持仓: [yellow]{len(holdings)}只[/yellow]  "
+        f"日期: [yellow]{date or '今日'}[/yellow]",
+        expand=False
+    ))
+
+    # ── 加载 K 线数据并运行所有策略 ────────────────────────────
+    import data.store as store
+    from datetime import datetime, timedelta
+    end = date or datetime.now().strftime("%Y-%m-%d")
+    max_bars = max(s().requires_bars() for s in BUILTIN_STRATEGIES.values())
+    start = (datetime.strptime(end, "%Y-%m-%d") -
+             timedelta(days=int(max_bars * 1.5))).strftime("%Y-%m-%d")
+
+    ipo_dates = store.load_ipo_dates()
+    stop_loss_r = RISK_CONTROL.get("stop_loss_ratio", 0.07)
+    take_profit_r = RISK_CONTROL.get("take_profit_ratio", 0.20)
+
+    # 每只持仓的评估结果
+    results = []
+    for code in codes:
+        df = store.load(code, asset_type="stock", market="cn", start=start, end=end)
+        if df is None or df.empty:
+            results.append({"code": code, "error": "无本地数据"})
+            continue
+
+        name = ipo_dates.get(f"cn:{code}", {}).get("name", code)
+        current_price = float(df.iloc[-1]["close"])
+        cost = cost_map[code]
+        shares = shares_map[code]
+        pnl_pct = (current_price - cost) / cost * 100
+
+        # 运行所有适用于 stock 的策略
+        df_r = df.reset_index()
+        buy_sigs, sell_sigs, watch_sigs = [], [], []
+        for key, cls in BUILTIN_STRATEGIES.items():
+            strat = cls()
+            allowed = getattr(strat, "applicable_asset_types", [])
+            if allowed and "stock" not in allowed:
+                continue
+            for s in strat.generate_signals(df_r, code, name):
+                if s.signal == "BUY":
+                    buy_sigs.append(s)
+                elif s.signal == "SELL":
+                    sell_sigs.append(s)
+                elif s.signal == "WATCH":
+                    watch_sigs.append(s)
+
+        # ── 建议逻辑 ─────────────────────────────────────────
+        # 有 SELL 信号 → 减仓/止损
+        # 有 BUY 信号且盈利 → 持有/可加仓
+        # 有 BUY 信号且亏损超止损线 → 止损
+        # 无信号 → 观望
+        hit_stop = current_price <= cost * (1 - stop_loss_r)
+        hit_take = current_price >= cost * (1 + take_profit_r)
+
+        if sell_sigs:
+            action = "🔴 减仓/止损"
+            action_reason = sell_sigs[0].reason[:40]
+        elif hit_stop:
+            action = "🔴 触发止损"
+            action_reason = f"跌破成本止损线 ¥{cost*(1-stop_loss_r):.2f}"
+        elif hit_take:
+            action = "🟡 考虑止盈"
+            action_reason = f"已达止盈目标 ¥{cost*(1+take_profit_r):.2f}"
+        elif buy_sigs:
+            action = "🟢 持有/可加仓"
+            action_reason = buy_sigs[0].reason[:40]
+        elif watch_sigs:
+            action = "🔵 配置仓持有"
+            action_reason = watch_sigs[0].reason[:40]
+        else:
+            action = "⚪ 观望"
+            action_reason = "无明确信号"
+
+        # ── 价格参考 ─────────────────────────────────────────
+        # 止损价：成本价下方 stop_loss_r（硬性），或当前价下方（更保守取两者较高）
+        stop_loss_from_cost = cost * (1 - stop_loss_r)
+        stop_loss_from_current = current_price * (1 - stop_loss_r)
+        stop_loss_price = max(stop_loss_from_cost, stop_loss_from_current)
+
+        # 止盈价：成本价上方 take_profit_r
+        take_profit_price = cost * (1 + take_profit_r)
+
+        # 委托参考价：买入用昨收+0.5%（次日竞价参考），卖出用昨收-0.5%
+        bid_price = round(current_price * 1.005, 2)    # 买入委托参考（略高于收盘）
+        ask_price = round(current_price * 0.995, 2)    # 卖出委托参考（略低于收盘）
+
+        results.append({
+            "code": code, "name": name,
+            "current": current_price, "cost": cost, "shares": shares,
+            "pnl_pct": pnl_pct,
+            "action": action, "action_reason": action_reason,
+            "stop_loss": stop_loss_price,
+            "take_profit": take_profit_price,
+            "bid_price": bid_price, "ask_price": ask_price,
+            "buy_signals": len(buy_sigs), "sell_signals": len(sell_sigs),
+            "event_warnings": [],
+        })
+
+    # ── 输出（卡片式，每只股票一块）────────────────────────────
+    for r in results:
+        if "error" in r:
+            console.print(Panel(f"[red]{r['code']}: {r['error']}[/red]", expand=False))
+            continue
+        pnl = r["pnl_pct"]
+        pnl_color = "green" if pnl >= 0 else "red"
+        action = r["action"]
+        if "减仓" in action or "止损" in action:
+            order_ref = f"卖出委托参考: ¥{r['ask_price']:.2f}（昨收-0.5%）"
+        elif "加仓" in action:
+            order_ref = f"买入委托参考: ¥{r['bid_price']:.2f}（昨收+0.5%）"
+        elif "止盈" in action:
+            order_ref = f"卖出委托参考: ¥{r['ask_price']:.2f}（昨收-0.5%）"
+        else:
+            order_ref = "委托: 观望暂不操作"
+
+        text = (
+            f"[bold]{r['code']}  {r['name']}[/bold]\n"
+            f"  现价: ¥{r['current']:.2f}   成本: ¥{r['cost']:.2f}   "
+            f"持仓盈亏: [{pnl_color}]{pnl:+.1f}%[/{pnl_color}]  ({r['shares']}股)\n"
+            f"  建议: {action}\n"
+            f"  原因: {r['action_reason']}\n"
+            f"  ──────────────────────────────\n"
+            f"  🛡  止损价: ¥{r['stop_loss']:.2f}   "
+            f"🎯 止盈价: ¥{r['take_profit']:.2f}\n"
+            f"  📋 {order_ref}"
+        )
+        border = "red" if "止损" in action or "减仓" in action else \
+                 "yellow" if "止盈" in action else \
+                 "green" if "加仓" in action or "持有" in action else "white"
+        console.print(Panel(text, border_style=border, expand=False))
+
+    console.print(f"[dim]止损基准: 成本/当日收盘较高者下方 {stop_loss_r*100:.0f}%  "
+                  f"止盈目标: 成本上方 {take_profit_r*100:.0f}%[/dim]")
+
+
 def cmd_dbstats():
     """查看本地 K 线数据库统计"""
     import data.store as store
@@ -1103,6 +1270,11 @@ if __name__ == "__main__":
     sub.add_parser("dbstats", help="查看本地K线数据库统计")
     # data-status
     sub.add_parser("data-status", help="各域数据新鲜度 + 后台更新进程状态")
+    # portfolio
+    p_pf = sub.add_parser("portfolio", help="持仓评估：加仓/止损建议 + 止盈止损点 + 委托参考价")
+    p_pf.add_argument("--date", help="评估日期 YYYY-MM-DD（默认今日）")
+    p_pf.add_argument("--file", default="data/portfolio.json",
+                      help="持仓文件路径（默认 data/portfolio.json）")
 
     # scan
     p_scan = sub.add_parser("scan", help="全市场扫描（支持单策略/指定股票快速验证L3）")
@@ -1228,6 +1400,8 @@ if __name__ == "__main__":
         cmd_dbstats()
     elif args.command == "data-status":
         cmd_data_status()
+    elif args.command == "portfolio":
+        cmd_portfolio(date=args.date, portfolio_file=args.file)
     elif args.command == "scan":
         cmd_scan(date=args.date, asset_types=args.types,
                  strategy=args.strategy, codes=args.codes,
