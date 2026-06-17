@@ -124,7 +124,7 @@ class MACDRSIStrategy(BaseStrategy):
             ))
 
         # 卖出：MACD 死叉
-        macd_cross_down = prev_dif >= prev_dea and last_dif < prev_dea
+        macd_cross_down = prev_dif >= prev_dea and last_dif < last_dea
         if macd_cross_down:
             rsi_note = f"，RSI({last_rsi:.1f})" if last_rsi > 50 else ""
             signals.append(Signal(
