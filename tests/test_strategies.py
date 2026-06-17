@@ -238,7 +238,7 @@ class TestVolPriceBreakoutStrategy:
             "close": close,
             "volume": np.full(n, 500000.0),
         })
-        sigs = VolPriceBreakoutStrategy({"lookback": 20, "breakout_pct": 0.005}).generate_signals(df, "000001", "测试")
+        sigs = VolPriceBreakoutStrategy({"lookback": 20, "scan_sell": True}).generate_signals(df, "000001", "测试")
         sell_sigs = [s for s in sigs if s.signal == "SELL"]
         assert len(sell_sigs) >= 1, f"close[-1]={close[-1]:.2f}, prev_low~14.5, should trigger SELL"
 

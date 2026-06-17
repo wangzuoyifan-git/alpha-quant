@@ -80,11 +80,11 @@ class TestNewStrategyRobustness:
         assert errors == 0, f"{errors}/{total} 只失败"
 
     def test_all_strategies_registered(self):
-        """验证所有8个策略正确注册（台阶二新增 B2 深度价值 / B3 成长筛选）"""
+        """验证正交框架下 7 个策略正确注册（money_flow 已降级为过滤层）"""
         from strategies.builtin import BUILTIN_STRATEGIES
-        assert len(BUILTIN_STRATEGIES) == 8
+        assert len(BUILTIN_STRATEGIES) == 7
         required = {"ma_cross", "macd_rsi", "vol_price_breakout",
-                     "etf_momentum", "fundamental_value", "money_flow",
+                     "etf_momentum", "fundamental_value",
                      "deep_value", "growth_pick"}
         assert set(BUILTIN_STRATEGIES.keys()) == required
 

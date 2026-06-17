@@ -91,6 +91,7 @@ class BaseStrategy(ABC):
             "applicable_regimes": self.applicable_regimes,
             "risk_profile": self.risk_profile,
             "time_horizon": self.time_horizon,
+            "position_type": "config" if self.time_horizon in ("medium", "long") else "trading",
             "data_dependency": self.data_dependency,
             "applicable_scenario": self.applicable_scenario,
             "description": self.description,

@@ -1,10 +1,11 @@
 """
 内置策略：B3 成长筛选 — L3-B 基本面策略
 
-高净利润增长 + 高净资产增长 + ROE 达标，成长型配置标的。
-输出配置仓候选：signal=WATCH, position_type=config, time_horizon=medium。
-
-数据量纲：fundamental 域来自 BaoStock，财务比率为小数（YOYNI 0.25=25%）。
+正交维度：成长（Growth）— 盈利增长预期溢价
+升级自 v1.0，改进：
+  - 新增收入增长维度（YOYEPS 或 YOYAsset 替代只看净利润，防止一次性利润粉饰）
+  - 新增 PEG 控制估值：PE / (净利增长率*100) ≤ peg_max（默认 1.5），防高位接盘
+  - PEG 仅在 PE 和增速均可用时生效，缺失时降级为只用财务指标
 """
 from typing import List
 
@@ -20,17 +21,18 @@ class GrowthPickStrategy(BaseStrategy):
     B3 成长筛选
 
     筛选条件（默认值，均可通过 params 配置）：
-      - YOYNI（净利润同比）>= min_ni_growth（默认 0.25，即 25%）
-      - YOYEquity（净资产同比）>= min_equity_growth（默认 0.15）
-      - roeAvg >= min_roe（默认 0.10，即 10%）
+      - YOYNI（净利润同比）>= min_ni_growth（默认 0.25）
+      - YOYEquity（净资产同比）>= min_equity_growth（默认 0.15）— 收入/资产双验证
+      - roeAvg（TTM）>= min_roe（默认 0.10）
+      - PEG = pe_ttm / (YOYNI*100) <= peg_max（默认 1.5，0=禁用）
     """
 
     name = "成长筛选"
-    description = "高净利增长+高净资产增长+ROE达标的成长型配置标的"
-    version = "1.0.0"
+    description = "净利+净资产双增长+ROE+PEG估值控制，成长型配置仓候选"
+    version = "2.0.0"
     applicable_regimes = ["crisis", "risk_off", "balanced", "risk_on", "volatile"]
     style = "growth"
-    applicable_scenario = "捕捉业绩高速成长的优质成长股，中期配置"
+    applicable_scenario = "捕捉业绩高速成长的优质成长股，PEG防高估；中期配置"
     risk_profile = "balanced"
     time_horizon = "medium"
     data_dependency = ["fundamental", "technical"]
@@ -43,6 +45,7 @@ class GrowthPickStrategy(BaseStrategy):
         min_ni_growth = self.params.get("min_ni_growth", 0.25)
         min_equity_growth = self.params.get("min_equity_growth", 0.15)
         min_roe = self.params.get("min_roe", 0.10)
+        peg_max = self.params.get("peg_max", 1.5)
 
         if df is None or df.empty or "close" not in df.columns:
             return []
@@ -61,20 +64,29 @@ class GrowthPickStrategy(BaseStrategy):
         profit = load_fund(code, "profit")
         if profit is None or profit.empty:
             return []
-        # roeAvg 单季累加为 TTM 年化口径
         roe = ttm_sum(profit.get("roeAvg")) if "roeAvg" in profit.columns else np.nan
         if pd.isna(roe) or roe < min_roe:
             return []
 
-        price = float(df.iloc[-1]["close"])
+        last = df.iloc[-1]
+        price = float(last["close"])
         if price <= 2 or price > 500:
             return []
+
+        # PEG 控制估值（pe_ttm 来自 K 线 df）
+        pe = float(last.get("pe_ttm", np.nan))
+        peg = np.nan
+        if peg_max > 0 and pd.notna(pe) and pe > 0 and yoy_ni > 0:
+            peg = pe / (yoy_ni * 100)
+            if peg > peg_max:
+                return []  # 高增长但估值更高，性价比不足
 
         reasons = [f"净利同比{yoy_ni*100:+.1f}%",
                    f"净资产同比{yoy_equity*100:+.1f}%",
                    f"ROE{roe*100:.1f}%"]
+        if pd.notna(peg):
+            reasons.append(f"PEG{peg:.2f}")
 
-        # 评分：净利增长主导 + ROE 加分
         score = 40.0 + yoy_ni * 100 * 0.5 + roe * 100 * 1.0
         score = float(min(max(score, 0.0), 100.0))
 

@@ -1,10 +1,108 @@
 # Alpha量化 — 策略层文档
 
 > 策略基类接口、内置策略说明、开发指南、待开发清单。
-> 最后更新：2026-06-12（新增：6维策略能力画像 schema、多周期配置定位、Signal 仓位归属字段）
+> 最后更新：2026-06-17（新增：正交策略组合框架——少而精、正交、上层可选，作为策略层演进的设计约束）
 >
 > **项目基础信息见 `docs/project.md`**
 > **策略信号需求定义（S1~S4 含信号本质、多维度合并、扫描过滤规则）见 `docs/requirements.md` 第三章 3.1 节**
+> **正交策略组合框架（策略层顶层设计纲领）见本文档第〇章**
+
+---
+
+## 〇、正交策略组合框架（策略层设计纲领）
+
+> 新增于 2026-06-17。本章是策略层的**顶层设计约束**，统领内置策略的取舍、优化方向和上层选择逻辑。
+> 后续新增/优化策略必须先对照本章框架，确认其占据的正交维度与上层选择关系。
+
+### 0.1 核心理念：少而精、正交、上层可选
+
+策略层不追求数量，追求**正交覆盖**。设计原则：
+
+1. **少而精**：每个仓位类型（配置仓/交易仓）只保留少数几个策略，每个策略捕捉一个**独立的 Alpha 来源**。
+2. **正交性**：策略之间捕捉的收益来源互不重叠。同一标的被多个正交策略同时命中，代表"多个独立视角都看好"，才值得在信号合并层加成——若策略本身重叠（如两个都是趋势动量），同时命中是冗余而非共振。
+3. **上层可选**：策略本身不做择时判断，**由 L1（regime）控开关、L2（行业特性）控偏好**来动态激活合适的策略子集。策略之间互不知道彼此存在。
+
+**对立性是正交框架的关键**：交易仓里"趋势跟踪（追涨）"与"均值回归（抄底）"是天然对立的，同时全开会相互抵消。上层的核心价值就是根据 regime 只激活其中一类——这正是分层决策架构（L1/L2 约束 L3）存在的意义。
+
+### 0.2 配置仓正交维度（L3-B，WATCH，中长期持有）
+
+对应 Fama-French 经典因子，三个维度是学术验证的长期正交 Alpha 来源：
+
+| 维度 | 捕捉的 Alpha | 适用行业特性 | 适用 regime | 当前策略 |
+|---|---|---|---|---|
+| **质量**（Quality） | 高 ROE、盈利稳定性溢价 | 消费/医药/白马 | 全 regime | `fundamental_value`（B1 GARP） |
+| **价值**（Value） | 低估值均值回归溢价 | 银行/地产/周期低谷 | crisis/risk_off | `deep_value`（B2） |
+| **成长**（Growth） | 盈利增长预期溢价 | 科技/新能源/成长赛道 | risk_on/balanced | `growth_pick`（B3） |
+
+配置仓三策略已覆盖三个正交维度，方向正确，**保持 3 个不增加**，仅做针对性质量优化（见 0.4）。
+
+### 0.3 交易仓正交维度（L3-A，BUY，短期波段）
+
+| 维度 | 捕捉的 Alpha | 适用行业特性 | 适用 regime | 当前归属 |
+|---|---|---|---|---|
+| **趋势跟踪**（Trend） | 价格动量延续溢价 | 任何行业趋势期 | risk_on/balanced | `ma_cross`（弱，需升级） |
+| **均值回归**（Mean Reversion） | 超跌反弹、技术超卖修复 | 高波动行业底部 | risk_off/volatile | `macd_rsi` |
+| **突破**（Breakout） | 结构突破后的趋势加速 | 活跃赛道/新高策略 | risk_on | `vol_price_breakout`（需修复） |
+| **ETF 轮动**（Trend-ETF） | ETF 相对动量轮动 | 宽基/行业 ETF | risk_on/balanced | `etf_momentum` |
+
+**资金流（Smart Money）的定位调整**：当前 `money_flow` 是纯单因子选股，存在系统性缺陷（详见 0.4）。在正交框架下，资金流**不应作为独立选股策略**，而应降级为**趋势/突破策略的内置确认过滤层**（主力净流入确认 = 提高信号置信度），或作为辅助评分维度。原因：资金流缺乏方向判断（主力净流入可能是出货前对倒），单独使用 Alpha 极弱；与技术面结合才有价值。
+
+### 0.4 当前策略 → 正交框架映射与优化方向
+
+```
+配置仓（3个，覆盖完整，仅优化质量）：
+  B1 fundamental_value → Quality ✅  优化：加 PE 历史分位过滤（替代固定 PE≤30），防高估市买入
+  B2 deep_value        → Value   ✅  优化：行业排除（金融/地产走独立逻辑）+ 股息率验证，防价值陷阱
+  B3 growth_pick       → Growth  ✅  优化：加收入增长维度 + PEG≤阈值控估值，防高位接盘
+
+交易仓（精简到 4 个，清晰正交）：
+  趋势跟踪（个股）  → 升级 ma_cross：加 ADX≥20 趋势确认 + 资金流内置过滤（吸收 money_flow）
+  均值回归          → 保留 macd_rsi：放宽 RSI 阈值 + 改 RSI 背离判断
+  突破              → 修复 vol_price_breakout：加蓄力确认（突破前缩量）+ 明确 SELL 语义
+  ETF 轮动          → 保留 etf_momentum：加绝对动量过滤（跑不赢无风险利率不发信号）
+  money_flow        → 取消独立策略，能力并入趋势跟踪作为确认过滤层
+```
+
+**当前问题诊断**：
+- `ma_cross` 与 `etf_momentum` 都是趋势动量，对个股 `etf_momentum` 不适用、`ma_cross` 又太弱，职责边界模糊 → 升级 `ma_cross` 成为个股趋势跟踪主力
+- `money_flow` 纯单因子、评分按绝对流入额偏向大盘股、无技术面确认 → 降级为过滤层
+- 交易仓缺一个干净有效的个股趋势跟踪 → 由升级后的 `ma_cross` 填补
+
+### 0.5 上层选择逻辑（L1/L2 如何驱动策略激活）
+
+策略层不做择时，激活由上层约束决定：
+
+```
+L1 regime       →   激活的交易仓策略（控开关）
+─────────────────────────────────────────────
+risk_on         →   趋势跟踪 + 突破（追涨进攻）
+balanced        →   趋势跟踪（保守参数）
+risk_off        →   均值回归（超跌抄底）
+volatile        →   均值回归（高波动寻底）
+crisis          →   交易仓全关，仅保留防御型配置仓
+
+L2 行业特性     →   配置仓策略偏好（控偏好）
+─────────────────────────────────────────────
+高景气 + 低估    →   B1 Quality（time_horizon=long）
+高成长赛道       →   B3 Growth（time_horizon=medium）
+熊市防御         →   B2 Value + 高股息
+```
+
+实现载体：`select_strategies(decision_context)` 按 `regime` + `allowed_styles` + `allowed_time_horizons` 三维画像匹配（见 2.3 节）。**新增策略只要正确声明 `style` / `applicable_regimes` / `time_horizon` 画像，即可被上层自动纳入选择，无需改动 select_strategies 逻辑。**
+
+### 0.6 业界对标（优化时的参考基准）
+
+| 维度 | 业界最佳实践 | 当前差距 |
+|---|---|---|
+| 质量（B1） | Piotroski F-Score（9 项财务健康度） | 仅单指标阈值过滤 |
+| 价值（B2） | EV/EBITDA + 连续 3 年盈利 + 股息 | PE/PB 组合，无行业区分 |
+| 成长（B3） | CAN SLIM（盈利+收入+新高+机构+行业景气） | 仅财务比率，无 PEG/收入 |
+| 趋势 | ADX 趋势强度过滤 + 资金流共振 | MA5/MA20 裸金叉 |
+| 均值回归 | RSI 背离 > RSI 阈值穿越 | 简单阈值穿越 |
+| 突破 | ATR 标准化 + N 日缩量蓄力确认 | 固定百分比 + 当日量比 |
+| ETF 动量 | Dual Momentum（绝对+相对） | 仅相对动量 |
+
+> 优化时不要求一次到位对齐业界，按"先补正交空白 → 再提单策略质量"的顺序推进。
 
 ---
 
@@ -131,16 +229,18 @@ class BaseStrategy(ABC):
 > **策略标签草案**：applicable_regimes 是筛选事实来源，strategy_keys 由 `select_strategies()` 按画像匹配产出。
 > 具体标签值待更多策略开发后随实践校准，不应拘泥于当前 6 个内置策略。
 
-| key | style | applicable_regimes | risk_profile | time_horizon | 说明 |
+| key | style | applicable_regimes | risk_profile | time_horizon | 正交维度 |
 |---|---|---|---|---|---|
-| `ma_cross` | momentum | [balanced, risk_on] | balanced | short | 趋势启动期均线金叉 |
-| `macd_rsi` | reversal | [risk_off, volatile] | defensive | short | 超跌反弹，熊市底部 |
-| `vol_price_breakout` | breakout | [risk_on] | aggressive | short | 强势突破，牛市趋势 |
-| `etf_momentum` | momentum | [risk_on, balanced] | balanced | short | ETF 动量轮动 |
-| `fundamental_value` | quality | [crisis,risk_off,balanced,risk_on,volatile] | defensive | medium | B1 质量价值(GARP) |
-| `deep_value` | value | [crisis,risk_off,balanced,risk_on,volatile] | defensive | long | B2 深度价值 |
-| `growth_pick` | growth | [crisis,risk_off,balanced,risk_on,volatile] | balanced | medium | B3 成长筛选 |
-| `money_flow` | moneyflow | [risk_on, balanced] | aggressive | short | 主力资金净流入 |
+| `ma_cross` | momentum | [balanced, risk_on] | balanced | short | 趋势跟踪（个股，待升级为主力） |
+| `macd_rsi` | reversal | [risk_off, volatile] | defensive | short | 均值回归 |
+| `vol_price_breakout` | breakout | [risk_on] | aggressive | short | 突破 |
+| `etf_momentum` | momentum | [risk_on, balanced] | balanced | short | ETF 轮动 |
+| `fundamental_value` | quality | [crisis,risk_off,balanced,risk_on,volatile] | defensive | medium | 质量（Quality） |
+| `deep_value` | value | [crisis,risk_off,balanced,risk_on,volatile] | defensive | long | 价值（Value） |
+| `growth_pick` | growth | [crisis,risk_off,balanced,risk_on,volatile] | balanced | medium | 成长（Growth） |
+| `money_flow` | moneyflow | [risk_on, balanced] | aggressive | short | 🔻 待降级为过滤层（非独立维度） |
+
+> **正交维度列**：标注每个策略在第〇章正交框架中占据的 Alpha 来源。`money_flow` 不构成独立正交维度，规划降级为趋势/突破策略的内置确认过滤层。
 
 **L3-B（B1/B2/B3）applicable_regimes 设计**：配置仓候选不依赖择时，任何 regime 都应产出选股，
 故全 5 种 regime 适用。区别由 L2 行业池 + allowed_styles 收窄，而非 regime。
@@ -172,21 +272,37 @@ class BaseStrategy(ABC):
 
 三者均 `signal=WATCH`, `position_type=config`，经 scan_node 落盘 watch_pool，人工确认后进配置仓。
 
-### 2.2 L3 策略分类（多周期配置定位下）
+### 2.2 L3 策略分类（正交框架定位下）
 
-系统定位"多周期配置+择时"，L3 策略按用途分三类：
+系统定位"多周期配置+择时"，L3 策略按仓位类型分两大类，每类按正交维度组织（详见第〇章）：
 
-**L3-A 技术策略**（当前已有，全自动，交易仓）
-- ma_cross / macd_rsi / vol_price_breakout / etf_momentum / money_flow
-- 输出：`signal=BUY`, `position_type=trading`, `time_horizon=short`
+**L3-A 技术策略**（全自动，交易仓，BUY，`position_type=trading`，`time_horizon=short`）
 
-**L3-B 基本面策略**（半系统化，配置仓候选，经 L2 行业池过滤后供人工确认）
-- 子类：B1 质量价值（`fundamental_value`，GARP）/ B2 深度价值（`deep_value`）/ B3 成长筛选（`growth_pick`）
-- 输出：`signal=WATCH`, `position_type=config`, `time_horizon=medium/long`
-- 台阶二已完整实现（详见 2.1.1）
+按正交维度组织，目标精简到 4 个：
+
+| 正交维度 | 策略 key | 状态 |
+|---|---|---|
+| 趋势跟踪（个股） | `ma_cross`（v2：ADX≥20 + 资金流内置过滤） | ✅ 已升级 |
+| 均值回归 | `macd_rsi`（v2：RSI 阈值放宽至40 + RSI背离判断） | ✅ 已优化 |
+| 突破 | `vol_price_breakout`（v2：蓄力确认 + ATR标准化 + SELL语义明确） | ✅ 已修复 |
+| ETF 轮动 | `etf_momentum`（v2：绝对动量过滤） | ✅ 已优化 |
+| ~~资金流~~ | ~~`money_flow`~~ → 已降级，能力并入趋势跟踪过滤层 | ✅ 已降级 |
+
+**L3-B 基本面策略**（半系统化，配置仓候选，WATCH，`position_type=config`，经 L2 行业池过滤后供人工确认）
+
+按 Fama-French 三因子正交组织，保持 3 个不增加：
+
+| 正交维度 | 策略 key | time_horizon | 状态 |
+|---|---|---|---|
+| 质量（Quality） | `fundamental_value`（B1 GARP，v3） | medium | ✅ 已加 PE 历史分位过滤 |
+| 价值（Value） | `deep_value`（B2，v2） | long | ✅ 已加行业排除+股息+连续盈利 |
+| 成长（Growth） | `growth_pick`（B3，v2） | medium | ✅ 已加净资产增长+PEG控估值 |
+
+台阶二已完整实现（详见 2.1.1），正交化优化已落地（见第〇章 0.4）。
 
 **L3-C 事件驱动策略**（待开发）
 - C1 高股息/回购（medium，配置仓）/ C2 业绩超预期（short~medium，交易仓）
+- 注：事件驱动是独立于上述正交维度的第三类 Alpha 来源（事件冲击），依赖 E2/E3 数据完善
 
 ### 2.3 与分层决策集成（约束流）
 
@@ -340,19 +456,34 @@ print(result.summary())
 
 ## 六、待开发清单
 
-### 高优先级
-- [ ] 修复 `vol_price_breakout` SELL 信号逻辑
-- [ ] 回测支持 ETF（`backtest --asset_type etf`）
-- [ ] 回测基准对比（与沪深300对比超额收益）
+> 总纲：按第〇章正交策略组合框架推进，顺序为「先补正交空白 → 再提单策略质量」。
 
-### 中优先级
-- [ ] 行业轮动策略（依赖 meta 域申万行业数据）
-- [ ] 均值回归策略（RSI 超买超卖，适合宽基 ETF）
-- [ ] 趋势跟踪策略（60/120日均线，适合所有 ETF）
+### 正交化改造（对应第〇章 0.4）✅ 已完成
+
+**交易仓精简与升级：**
+- [x] 升级 `ma_cross` → 个股趋势跟踪主力：ADX≥20 趋势强度过滤 + 资金流内置确认（v2.0）
+- [x] 降级 `money_flow`：取消独立注册，能力并入趋势跟踪过滤层（类保留供回测兼容）
+- [x] 修复 `vol_price_breakout`：突破前缩量蓄力确认 + ATR标准化 + SELL语义明确（scan_sell 控制）（v2.0）
+- [x] 优化 `macd_rsi`：RSI阈值放宽至40 + RSI底背离判断 + 强制超卖/背离确认（v2.0）
+- [x] 优化 `etf_momentum`：绝对动量过滤（跑不赢无风险利率不发WATCH信号）（v2.0）
+
+**配置仓质量优化（保持 3 个，对标业界）：**
+- [x] `fundamental_value`（B1，v3）：PE历史分位过滤（≤60分位）+ 固定阈值兜底
+- [x] `deep_value`（B2，v2）：金融/地产行业排除 + 股息率验证 + 连续2季盈利
+- [x] `growth_pick`（B3，v2）：净资产增长双验证 + PEG≤1.5控估值
+
+**上层选择联动：**
+- [x] `profile()` 补 `position_type` 字段返回（按 time_horizon 推导）
+- [ ] `select_strategies()` 校验：精简/降级后确认画像匹配仍能正确激活正交子集（待 L2 联调）
+
+### 工程支撑
+
+- [x] 回测支持 ETF（`Backtester.run(asset_type="etf")`）
+- [x] 回测基准对比（沪深300 alpha/beta/超额收益）
 - [ ] 回测图表：权益曲线可视化
+- [ ] backtest CLI 暴露 `--asset-type` 参数
 
-### 低优先级
+### 远期（低优先级）
+- [ ] L3-C 事件驱动策略（C1 高股息/回购、C2 业绩超预期），依赖 E2/E3 数据
 - [ ] `signal` 字段改为枚举类型，避免拼写错误
-- [x] 策略元数据扩展：`market_condition` 字段（趋势/震荡/高波动），供 Agent 做策略选择 — 已实现（base.py + strategy_agent）
-- [ ] 网格交易策略（低波动宽基 ETF）
 - [ ] 跨资产轮动策略（股票 ETF + 债券 ETF）

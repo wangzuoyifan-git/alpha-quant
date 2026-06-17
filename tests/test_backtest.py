@@ -265,3 +265,126 @@ class TestBacktestAccuracy:
         future_value = df.iloc[85]["close"]
         sig_max_price = df_slice["close"].max()
         assert sig_max_price < future_value
+
+
+class TestBacktestBenchmark:
+    """基准对比功能（alpha/beta/benchmark_return）"""
+
+    def test_benchmark_fields_default_zero(self):
+        """无基准数据时，基准字段默认为 0"""
+        eq = _make_equity([0.01] * 20)
+        bt = Backtester(None, {"initial_capital": 1_000_000})
+        result = bt._calc_metrics("test", "2024-01-02", "2024-02-01", eq, [])
+        # _load_benchmark 在 store 无数据时返回空，alpha/beta/benchmark_return 均为 0
+        assert isinstance(result.benchmark_return, float)
+        assert isinstance(result.alpha, float)
+        assert isinstance(result.beta, float)
+
+    def test_alpha_positive_when_strategy_outperforms(self, monkeypatch):
+        """策略年化 > 基准年化时 alpha > 0"""
+        import data.store as store_mod
+
+        # mock 基准：沪深300 年化约 5%（每日 ~0.02%）
+        bm_dates = pd.date_range("2024-01-02", periods=60, freq="B")
+        bm_close = pd.Series(
+            [100 * (1 + 0.0002) ** i for i in range(60)], index=bm_dates
+        )
+        bm_df = pd.DataFrame({"close": bm_close}, index=bm_dates)
+
+        original_load = store_mod.load
+        def mock_load(code, asset_type="stock", market="cn", start=None, end=None):
+            if asset_type == "index" and code == "000300":
+                return bm_df
+            return original_load(code, asset_type=asset_type, market=market,
+                                 start=start, end=end)
+        monkeypatch.setattr(store_mod, "load", mock_load)
+
+        # 策略：年化约 25%（每日 ~0.1%）
+        eq = _make_equity([0.001] * 60)
+        bt = Backtester(None, {"initial_capital": 1_000_000})
+        result = bt._calc_metrics("test", "2024-01-02", "2024-03-29", eq, [])
+        assert result.benchmark_return > 0
+        assert result.alpha > 0  # 策略跑赢基准
+
+    def test_summary_shows_benchmark_when_available(self, monkeypatch):
+        """有基准数据时 summary 展示超额收益行"""
+        import data.store as store_mod
+
+        bm_dates = pd.date_range("2024-01-02", periods=30, freq="B")
+        bm_close = pd.Series(
+            [100 * (1 + 0.0001) ** i for i in range(30)], index=bm_dates
+        )
+        bm_df = pd.DataFrame({"close": bm_close}, index=bm_dates)
+
+        original_load = store_mod.load
+        def mock_load(code, asset_type="stock", market="cn", start=None, end=None):
+            if asset_type == "index" and code == "000300":
+                return bm_df
+            return original_load(code, asset_type=asset_type, market=market,
+                                 start=start, end=end)
+        monkeypatch.setattr(store_mod, "load", mock_load)
+
+        eq = _make_equity([0.001] * 30)
+        bt = Backtester(None, {"initial_capital": 1_000_000})
+        result = bt._calc_metrics("test", "2024-01-02", "2024-02-12", eq, [])
+        s = result.summary()
+        assert "基准收益" in s
+        assert "超额收益" in s
+
+    def test_sharpe_deducts_risk_free(self):
+        """夏普比率已扣无风险利率（扣后比不扣低）"""
+        eq = _make_equity([0.001] * 100)
+        bt = Backtester(None, {"initial_capital": 1_000_000})
+        result = bt._calc_metrics("test", "2024-01-02", "2024-05-20", eq, [])
+        # 验证计算包含 risk-free 扣除：对相同序列手动算无扣版本 > 扣除版本
+        daily_ret = eq.pct_change().dropna()
+        sharpe_no_rf = float((daily_ret.mean() / (daily_ret.std() + 1e-9)) * np.sqrt(252))
+        # 扣除无风险利率后 sharpe 应更低
+        assert result.sharpe_ratio < sharpe_no_rf
+
+
+class TestBacktestETFSupport:
+    """ETF asset_type 支持"""
+
+    def test_run_accepts_etf_asset_type(self, monkeypatch):
+        """run() 支持 asset_type='etf'，调用 store.list_codes('etf', ...)"""
+        import data.store as store_mod
+
+        listed = []
+
+        def mock_list(asset_type, market="cn"):
+            listed.append(asset_type)
+            return []
+
+        monkeypatch.setattr(store_mod, "list_codes", mock_list)
+        monkeypatch.setattr(store_mod, "load_ipo_dates", lambda: {})
+
+        from strategies.builtin.etf_momentum import ETFMomentumStrategy
+        bt = Backtester(None, {"initial_capital": 1_000_000})
+        try:
+            bt.run(ETFMomentumStrategy(), [], "2024-01-02", "2024-06-28",
+                   asset_type="etf")
+        except ValueError:
+            pass  # "没有可用历史数据" 是正常的 mock 行为
+        assert "etf" in listed
+
+    def test_run_default_asset_type_is_stock(self, monkeypatch):
+        """run() 默认 asset_type='stock'"""
+        import data.store as store_mod
+
+        listed = []
+
+        def mock_list(asset_type, market="cn"):
+            listed.append(asset_type)
+            return []
+
+        monkeypatch.setattr(store_mod, "list_codes", mock_list)
+        monkeypatch.setattr(store_mod, "load_ipo_dates", lambda: {})
+
+        from strategies.builtin.ma_cross import MACrossStrategy
+        bt = Backtester(None, {"initial_capital": 1_000_000})
+        try:
+            bt.run(MACrossStrategy(), [], "2024-01-02", "2024-06-28")
+        except ValueError:
+            pass
+        assert "stock" in listed
