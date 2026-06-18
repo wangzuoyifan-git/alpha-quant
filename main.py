@@ -897,6 +897,14 @@ def cmd_portfolio(date: str | None = None,
         console.print("[yellow]持仓文件为空[/yellow]")
         return
 
+    # 按代码去重（保留最后一条），提醒重复
+    seen_codes = {}
+    for h in holdings:
+        if h["code"] in seen_codes:
+            console.print(f"[yellow]提示: {h['code']} 在持仓文件中重复，保留最后一条[/yellow]")
+        seen_codes[h["code"]] = h
+    holdings = list(seen_codes.values())
+
     codes = [h["code"] for h in holdings]
     cost_map = {h["code"]: float(h["cost"]) for h in holdings}
     shares_map = {h["code"]: int(h["shares"]) for h in holdings}
@@ -930,21 +938,29 @@ def cmd_portfolio(date: str | None = None,
 
         name = ipo_dates.get(f"cn:{code}", {}).get("name", code)
         hfq_price = float(df.iloc[-1]["close"])
+        local_last_date = df.index.max().strftime("%Y%m%d")  # 本地数据最新日期
         cost = cost_map[code]
         shares = shares_map[code]
 
         # hfq 现价换算回不复权口径（与用户填写的 cost 对齐）
-        # 方法：从 Tushare 拉不复权当日收盘，算出复权因子，转换历史 hfq 序列
+        # 用本地数据最新日期±10天区间拉不复权价，取与本地同日的收盘算复权因子
+        # （不用"今天"，避免非交易日/盘中拉不到数据时降级失败）
         try:
             from config.settings import DATA_SOURCE as _DS
             import tushare as _ts
+            from datetime import datetime as _dt, timedelta as _td
             _pro = _ts.pro_api(_DS["tushare_token"])
             _tsc = code + (".SH" if code.startswith("6") or code.startswith("9") else ".SZ")
-            _raw = _pro.daily(ts_code=_tsc,
-                              start_date=end.replace("-", ""),
-                              end_date=end.replace("-", ""))
+            _start = (_dt.strptime(local_last_date, "%Y%m%d") - _td(days=10)).strftime("%Y%m%d")
+            _raw = _pro.daily(ts_code=_tsc, start_date=_start, end_date=local_last_date)
             if _raw is not None and not _raw.empty:
-                real_price = float(_raw.iloc[0]["close"])
+                # 优先取与本地最新日期同日的不复权价；取不到则用区间最后一条
+                _same = _raw[_raw["trade_date"] == local_last_date]
+                if not _same.empty:
+                    real_price = float(_same.iloc[0]["close"])
+                else:
+                    _raw = _raw.sort_values("trade_date")
+                    real_price = float(_raw.iloc[-1]["close"])
                 adj_factor = hfq_price / real_price   # hfq = real * factor
             else:
                 real_price = hfq_price
@@ -1022,6 +1038,7 @@ def cmd_portfolio(date: str | None = None,
             "bid_price": bid_price, "ask_price": ask_price,
             "buy_signals": len(buy_sigs), "sell_signals": len(sell_sigs),
             "event_warnings": [],
+            "price_unadjusted": abs(adj_factor - 1.0) > 0.01,  # 是否成功换算为不复权价
         })
 
     # ── 输出（卡片式，每只股票一块）────────────────────────────
