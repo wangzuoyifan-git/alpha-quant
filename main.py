@@ -217,6 +217,47 @@ def cmd_scan(date: str | None = None, asset_types: list | None = None,
         console.print("[yellow]无触发信号[/yellow]")
         return
 
+    # 为 BUY/WATCH 信号附加操作建议（委托价 + 建议股数）
+    from strategies.position_manager import calc_position_size, calc_r_ratio
+    from data.portfolio import load_portfolio
+    _pf = load_portfolio()
+    _capital = _pf.get("total_capital") or RISK_CONTROL.get("default_capital", 2_000_000)
+    _risk = RISK_CONTROL.get("risk_per_trade", 0.01)
+    _max_pos = RISK_CONTROL.get("max_single_position", 0.10)
+    _min_r = RISK_CONTROL.get("min_r_ratio", 1.5)
+
+    # 有 df 的情况下（--codes 模式）预先计算 exit_levels
+    _exit_cache: dict = {}  # code -> ExitLevels
+    if codes and "df_cache" in dir():
+        pass  # df_cache 不存在，下面用 store 单独读
+    if codes:
+        import data.store as _store2
+        _ipo2 = _store2.load_ipo_dates()
+        for _sig in signals:
+            if _sig.signal not in ("BUY", "WATCH") or _sig.code in _exit_cache:
+                continue
+            try:
+                from datetime import datetime as _dt2, timedelta as _td2
+                _max_b = max(s.requires_bars() for s in engine.strategies.values())
+                _end2 = date or _dt2.now().strftime("%Y-%m-%d")
+                _start2 = (_dt2.strptime(_end2, "%Y-%m-%d") - _td2(days=int(_max_b * 1.5))).strftime("%Y-%m-%d")
+                _df2 = _store2.load(_sig.code, asset_type="stock", market="cn", start=_start2, end=_end2)
+                if _df2 is not None and not _df2.empty:
+                    # 找认领策略（产出该信号的策略）
+                    _strat_inst = next(iter(engine.strategies.values()))
+                    for _k, _st in engine.strategies.items():
+                        _allowed = getattr(_st, "applicable_asset_types", [])
+                        if _allowed and "stock" not in _allowed:
+                            continue
+                        _test_sigs = _st.generate_signals(_df2.reset_index(), _sig.code, _sig.name)
+                        if any(ts.signal == _sig.signal for ts in _test_sigs):
+                            _strat_inst = _st
+                            break
+                    _el = _strat_inst.compute_exit_levels(_df2.reset_index(), entry_price=float(_df2.iloc[-1]["close"]))
+                    _exit_cache[_sig.code] = _el
+            except Exception:
+                pass
+
     # 按信号类型分组展示
     buy_sigs  = [s for s in signals if s.signal == "BUY"]
     sell_sigs = [s for s in signals if s.signal == "SELL"]
@@ -225,6 +266,7 @@ def cmd_scan(date: str | None = None, asset_types: list | None = None,
     def _render_table(sigs, title, color):
         if not sigs:
             return
+        show_ops = sigs[0].signal in ("BUY", "WATCH")
         t = Table(title=title, show_lines=True)
         t.add_column("代码", style="cyan", width=8)
         t.add_column("名称", width=12)
@@ -232,17 +274,44 @@ def cmd_scan(date: str | None = None, asset_types: list | None = None,
         t.add_column("评分", justify="right", width=6)
         t.add_column("持仓类型", width=8)
         t.add_column("触发原因")
+        if show_ops:
+            t.add_column("委托参考价", justify="right", width=10)
+            t.add_column("建议股数", justify="right", width=9)
+            t.add_column("止损价", justify="right", width=8)
         t.add_column("事件警告", style="yellow")
         for s in sigs:
             warnings = ", ".join(s.extra.get("event_warnings", []))
-            t.add_row(
+            row = [
                 s.code, s.name,
                 f"¥{s.price:.2f}",
                 f"[{color}]{s.score:.0f}[/{color}]",
                 s.position_type,
                 s.reason,
-                warnings or "-",
-            )
+            ]
+            if show_ops:
+                bid = round(s.price * 1.005, 2)
+                el = _exit_cache.get(s.code)
+                if el and el.stop_loss > 0:
+                    # 精确计算（有 exit_levels）
+                    stop = el.stop_loss
+                    shares = calc_position_size(s.price, stop, _capital, _risk, _max_pos)
+                    r = calc_r_ratio(s.price, stop, el.take_profit)
+                    r_tag = f" R={r:.1f}" if r > 0 else ""
+                    shares_str = f"{shares}股{r_tag}"
+                    stop_str = f"¥{stop:.2f}"
+                elif el and el.stop_loss == 0:
+                    # 配置仓无价格止损
+                    shares_str = "配置仓"
+                    stop_str = "基本面"
+                else:
+                    # 估算（全市场扫描模式无 df）
+                    est_stop = round(s.price * (1 - RISK_CONTROL.get("stop_loss_ratio", 0.07)), 2)
+                    shares = calc_position_size(s.price, est_stop, _capital, _risk, _max_pos)
+                    shares_str = f"~{shares}股(估)"
+                    stop_str = f"¥{est_stop:.2f}(估)"
+                row += [f"¥{bid:.2f}", shares_str, stop_str]
+            row.append(warnings or "-")
+            t.add_row(*row)
         console.print(t)
 
     _render_table(buy_sigs,   f"BUY 信号（{len(buy_sigs)} 个）",   "red")
