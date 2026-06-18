@@ -84,7 +84,7 @@ class FundamentalValueStrategy(BaseStrategy):
                     return []  # 当前 PE 处于历史偏贵区间
 
         price = float(last["close"])
-        if price <= 2 or price > 500:
+        if price <= 0:
             return []
 
         reasons = [f"ROE{roe*100:.1f}%", f"PE{pe:.1f}", f"PB{pb:.1f}"]

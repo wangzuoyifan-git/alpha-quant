@@ -70,7 +70,7 @@ class GrowthPickStrategy(BaseStrategy):
 
         last = df.iloc[-1]
         price = float(last["close"])
-        if price <= 2 or price > 500:
+        if price <= 0:
             return []
 
         # PEG 控制估值（pe_ttm 来自 K 线 df）

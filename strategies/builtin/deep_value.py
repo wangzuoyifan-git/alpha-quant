@@ -100,7 +100,7 @@ class DeepValueStrategy(BaseStrategy):
             return []
 
         price = float(last["close"])
-        if price <= 2 or price > 500:
+        if price <= 0:
             return []
 
         reasons = [f"PB{pb:.2f}", f"PE{pe:.1f}"]
