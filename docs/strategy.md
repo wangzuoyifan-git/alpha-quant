@@ -486,6 +486,19 @@ print(result.summary())
 - [x] `profile()` 补 `position_type` 字段返回（按 time_horizon 推导）
 - [ ] `select_strategies()` 校验：精简/降级后确认画像匹配仍能正确激活正交子集（待 L2 联调）
 
+### 持仓管理（✅ 2026-06-18 完成）
+
+- [x] `ExitLevels` / `ScaleLevel` 数据结构（`strategies/base.py`）
+- [x] `BaseStrategy.compute_exit_levels()`：默认 ATR 实现，子策略可重写
+- [x] `strategies/position_manager.py`：ATR/Supertrend/布林带/摆动位、仓位计算、R倍数、出场触发（OCA）、移动止损
+- [x] 7 个策略各自特化出场逻辑：ma_cross→trail_supertrend / macd_rsi→bollinger_lower / vol_price_breakout→swing_low / etf_momentum→momentum_relative / B1/B2/B3→fundamental（无价格止损）
+- [x] `portfolio` 命令：展示分级操作表，进场/出场逻辑解耦，三层降级选出场逻辑
+- [x] `exit-levels` / `position-size` 两个 CLI 命令
+- [x] `trader/assistant.py`：优先读 `Signal.extra["exit_levels"]`，固定百分比降级兜底
+- [x] `backtest/engine.py`：建仓时计算出场框架，每日 `check_exit_triggered` + 移动止损，分批出场
+- [x] scan 输出含委托参考价/建议股数/止损价
+- [x] `calc_entry_bid()`：按信号类型智能计算委托参考价（涨停/突破/均值回归/配置仓分别处理）
+
 ### 工程支撑
 
 - [x] 回测支持 ETF（`Backtester.run(asset_type="etf")`）
@@ -497,3 +510,4 @@ print(result.summary())
 - [ ] L3-C 事件驱动策略（C1 高股息/回购、C2 业绩超预期），依赖 E2/E3 数据
 - [ ] `signal` 字段改为枚举类型，避免拼写错误
 - [ ] 跨资产轮动策略（股票 ETF + 债券 ETF）
+- [ ] `generate_signals` 末尾自动写入 `Signal.extra["exit_levels"]`（方案B，扫描带完整出场框架）

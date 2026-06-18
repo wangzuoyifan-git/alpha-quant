@@ -1,9 +1,10 @@
 # Alpha量化 — 运维手册
 
 > CLI 速查、定时脚本、环境变量配置、Git 规范。
-> 最后更新：2026-06-18（portfolio 价格换算修复：用本地最新日期换算不复权价，非交易日正确）
+> 最后更新：2026-06-18（持仓管理模块：策略级出场框架 + 基于风险的仓位 + 分级操作表；新增 exit-levels / position-size 命令；scan 输出含委托价/建议股数；委托价按信号类型智能计算）
 >
 > **项目基础信息见 `docs/project.md`**
+> **持仓管理设计详见 `docs/position_management.md`**
 
 ---
 
@@ -144,6 +145,17 @@ python3 main.py scan --codes 招商银行 贵州茅台 宁德时代
 python3 main.py scan --strategy ma_cross --codes 600519 000858
                                                   # 单策略 + 指定股票（代码或名称均可）
 python3 main.py scan --industries 电子 医药生物   # 多行业（L1，名称自动解析）
+```
+
+scan 输出（BUY/WATCH 信号含操作建议列）：
+
+| 列 | 说明 |
+|---|---|
+| 委托参考价 | 按信号类型智能计算（见委托价规则），附说明文字 |
+| 建议股数 | `--codes` 模式：精确计算（含R倍数）；全市场模式：用7%止损估算（标注"估"） |
+| 止损价 | `--codes` 模式：策略出场框架的 hard_stop；全市场模式：7%估算 |
+
+配置仓 WATCH 信号：建议股数显示"配置仓"，止损价显示"基本面"。
 
 # 参数说明
 # --strategy: 策略 key（ma_cross/macd_rsi/vol_price_breakout/etf_momentum/
@@ -170,28 +182,76 @@ python3 main.py cancel <order_id>                 # 取消指令单
 
 ### 持仓评估
 
-持仓文件 `data/portfolio.json`（填不复权买入均价，与交易软件一致）：
+持仓文件 `data/portfolio.json`（新格式，兼容旧格式纯列表）：
 
 ```json
-[
-  {"code": "600519", "name": "贵州茅台", "cost": 9800.0, "shares": 100},
-  {"code": "000876", "name": "新希望",   "cost": 11.40,  "shares": 2000}
-]
+{
+  "total_capital": 2000000,
+  "holdings": [
+    {"code": "600519", "name": "贵州茅台", "cost": 1520.0, "shares": 100,
+     "position_type": "trading", "style": "momentum"},
+    {"code": "601899", "name": "紫金矿业", "cost": 28.55, "shares": 5000,
+     "position_type": "config", "style": "value"}
+  ]
+}
 ```
 
+新增字段（均可选，不填时自动推断）：
+- `total_capital`：账户总资金，用于仓位计算；不填默认 200 万（`RISK_CONTROL.default_capital`）
+- `position_type`：`trading`（交易仓）/ `config`（配置仓）；不填按 style 推断
+- `style`：`momentum/reversal/breakout/quality/value/growth`，用于选出场逻辑路径
+
 ```bash
-python3 main.py portfolio                         # 评估今日持仓
+python3 main.py portfolio                         # 评估今日持仓（分级操作表）
 python3 main.py portfolio --date 2026-06-16       # 指定日期
 python3 main.py portfolio --file my_pf.json       # 指定持仓文件
 ```
 
-输出内容：现价（不复权）/ 盈亏% / 加仓-观望-止盈-止损建议 / 止损价 / 止盈价 / 委托参考价  
-建议逻辑：有SELL信号→减仓，跌破成本-7%→触发止损，涨超成本+20%→考虑止盈，有BUY信号→持有/可加仓
+输出内容（改造后）：
+- 每只持仓：现价/盈亏% + 出场逻辑类型 + R倍数 + 建议加仓股数
+- **分级操作表**（技术仓）：take_1 / take_2 / soft_stop / hard_stop 四档价位，含仓位变化%和依据
+- **基本面出场条件**（配置仓）：PE历史分位阈值 + 基本面恶化触发条件，无价格止损
+- 委托参考价：按信号类型智能计算（见下方说明）
+- 进场信号附加参考（与出场逻辑独立）
 
-> **价格口径说明**：本地 K 线为后复权（hfq），策略计算用 hfq（连续性好）；但展示现价时
-> 换算回不复权口径（与交易软件、用户填写的 cost 一致）。换算方式：用本地数据最新日期去
-> Tushare 拉同日不复权价算复权因子（不依赖"今天"，非交易日/盘中也正确）。
-> 持仓文件按代码去重（重复时保留最后一条并提示）。
+出场逻辑三层降级：
+1. `position_type`+`style` 显式声明 → 对应策略的 `compute_exit_levels`
+2. 策略认领（反向扫描信号最高分策略）
+3. ATR 兜底（无认领时）
+
+> **价格口径**：策略用 hfq 计算，展示换算回不复权（进场价用当前 hfq，不用成本推算，避免历史因子错位）。换算方式：用本地数据最新日期去 Tushare 拉同日不复权价算复权因子。
+
+### 持仓管理工具
+
+```bash
+# 查看任意股票的出场框架（分级操作表）—— 不需要在持仓里
+python3 main.py exit-levels 600519                        # 全部策略，用当前价
+python3 main.py exit-levels 600519 --entry 1520           # 指定进场价
+python3 main.py exit-levels 600519 --strategy ma_cross    # 只看趋势跟踪策略
+
+# 仓位计算器（基于风险法）
+python3 main.py position-size --entry 1680 --stop 1560
+python3 main.py position-size --entry 30 --stop 27 --capital 3000000
+
+# position-size 计算逻辑：
+#   建议股数 = (total_capital × risk_per_trade) / (entry - stop) / 100 × 100
+#   risk_per_trade 默认 1%（RISK_CONTROL.risk_per_trade），同时受单笔10%上限约束
+```
+
+### 委托参考价计算规则
+
+scan 和 portfolio 均按以下规则给出买入委托参考价：
+
+| 场景 | 委托价 | 说明 |
+|---|---|---|
+| 配置仓 WATCH | 昨收 × 0.998 | 分批建仓不追 |
+| 涨停（当日涨幅≥9.8%） | 昨收 × 1.10 | 涨停排队价 |
+| 强突破/趋势（score≥75） | 昨收 × 1.01 | 优先成交 |
+| 均值回归（bollinger） | 昨收 × 0.997 | 限价等回调 |
+| ETF 轮动 | 昨收 × 1.003 | 流动性好轻微溢价 |
+| 普通信号 | 昨收 × 1.005 | 默认竞价 |
+
+卖出委托参考价：昨收 × 0.995（统一）
 
 ### 数据状态
 

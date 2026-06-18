@@ -1,7 +1,7 @@
 # Alpha量化 — 项目总览
 
 > 所有 Session 的共同基础参考。专项内容见各模块文档。
-> 最后更新：2026-06-17（L3策略正交化 / 回测基准对比 / scan-L3验证 / RC7质押过滤 / portfolio持仓评估 / data-status）
+> 最后更新：2026-06-18（持仓管理模块：策略级出场框架/基于风险的仓位/分级操作表；scan输出含委托价/建议股数；exit-levels/position-size命令）
 
 ---
 
@@ -234,7 +234,8 @@ alpha量化/
 │   └── engine.py                # 历史回测引擎
 │
 ├── strategies/
-│   ├── base.py                  # BaseStrategy + Signal
+│   ├── base.py                  # BaseStrategy + Signal + ExitLevels + ScaleLevel
+│   ├── position_manager.py      # 持仓管理计算器（ATR/Supertrend/仓位/出场触发/移动止损）
 │   ├── builtin/                 # 内置策略 + 注册表
 │   └── custom/                  # 自定义策略
 │
@@ -311,6 +312,7 @@ chore:    构建/依赖/配置等杂项
 | `docs/traceability.md` | 需求与测试追溯矩阵：需求编号↔测试用例双向映射、覆盖缺口分析 |
 | `docs/data.md` | 数据层：各域结构、store/downloader 接口、数据源、待办缺口 |
 | `docs/strategy.md` | 策略层：BaseStrategy 接口、内置策略、开发指南 |
+| `docs/position_management.md` | 持仓管理：出场框架设计、仓位管理、分级操作表、回测改造 |
 | `docs/agent.md` | Agent 层：架构设计、Tool Layer 规范、LLM 接入、阶段规划 |
 | `docs/testing.md` | 测试分层策略、覆盖缺口、运行规范 |
 | `docs/ops.md` | CLI 速查、定时脚本、环境变量配置 |
