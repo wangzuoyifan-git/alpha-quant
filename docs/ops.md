@@ -1,7 +1,7 @@
 # Alpha量化 — 运维手册
 
 > CLI 速查、定时脚本、环境变量配置、Git 规范。
-> 最后更新：2026-06-18（持仓管理模块：策略级出场框架 + 基于风险的仓位 + 分级操作表；新增 exit-levels / position-size 命令；scan 输出含委托价/建议股数；委托价按信号类型智能计算）
+> 最后更新：2026-06-18（持仓管理模块：策略级出场框架 + 基于风险的仓位 + 分级操作表；新增 exit-levels / position-size 命令；scan 输出含委托价/建议股数；委托价按信号类型智能计算；ETF持仓管理：自动探测资产类型+三条出场路径）
 >
 > **项目基础信息见 `docs/project.md`**
 > **持仓管理设计详见 `docs/position_management.md`**
@@ -188,18 +188,38 @@ python3 main.py cancel <order_id>                 # 取消指令单
 {
   "total_capital": 2000000,
   "holdings": [
-    {"code": "600519", "name": "贵州茅台", "cost": 1520.0, "shares": 100,
+    {"code": "600519", "cost": 1520.0, "shares": 100,
      "position_type": "trading", "style": "momentum"},
-    {"code": "601899", "name": "紫金矿业", "cost": 28.55, "shares": 5000,
-     "position_type": "config", "style": "value"}
+    {"code": "601899", "cost": 28.55, "shares": 5000,
+     "position_type": "config", "style": "value"},
+    {"code": "512480", "cost": 2.10, "shares": 30000,
+     "position_type": "trading", "style": "momentum"},
+    {"code": "510300", "cost": 3.92, "shares": 20000,
+     "position_type": "config", "style": "macro_allocation"},
+    {"code": "512010", "cost": 1.65, "shares": 50000,
+     "position_type": "config", "style": "industry_allocation",
+     "industry": "801150.SI"}
   ]
 }
 ```
 
-新增字段（均可选，不填时自动推断）：
-- `total_capital`：账户总资金，用于仓位计算；不填默认 200 万（`RISK_CONTROL.default_capital`）
-- `position_type`：`trading`（交易仓）/ `config`（配置仓）；不填按 style 推断
-- `style`：`momentum/reversal/breakout/quality/value/growth`，用于选出场逻辑路径
+可选字段说明：
+
+| 字段 | 取值 | 说明 |
+|---|---|---|
+| `total_capital` | float | 账户总资金，用于仓位计算；不填默认 200 万 |
+| `position_type` | trading/config | 不填按 style 推断 |
+| `style` | 见下表 | 决定出场逻辑路径 |
+| `asset_type` | stock/etf | 不填自动探测（先试 stock，再试 etf） |
+| `industry` | 申万L1代码如 801150.SI | `industry_allocation` ETF 必填，用于读 L2 行业评分 |
+
+ETF style 出场路径：
+
+| style | 出场逻辑 | 数据来源 |
+|---|---|---|
+| `momentum` | ATR 技术止损 + 动量轮出 | etf_momentum 策略 |
+| `industry_allocation` | L2 行业三维评分（景气/估值/资金流） | industry_agent.get_industry_score() |
+| `macro_allocation` | L1 宏观 regime（crisis/risk_off 提示减仓） | strategy_agent.evaluate_market_condition() |
 
 ```bash
 python3 main.py portfolio                         # 评估今日持仓（分级操作表）
