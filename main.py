@@ -1033,11 +1033,22 @@ def cmd_portfolio(date: str | None = None,
         cost = float(h["cost"])
         shares = int(h["shares"])
         pos_type = h.get("position_type", "")  # 可能为空，后续推断
+        style = h.get("style", "")
 
-        df = store.load(code, asset_type="stock", market="cn", start=start, end=end)
+        # ── 自动探测 asset_type（先试 stock，再试 etf）──────────
+        declared_asset = h.get("asset_type", "")
+        df = None
+        detected_asset = declared_asset
+        if not declared_asset or declared_asset == "stock":
+            df = store.load(code, asset_type="stock", market="cn", start=start, end=end)
+        if (df is None or df.empty) and declared_asset != "stock":
+            df = store.load(code, asset_type="etf", market="cn", start=start, end=end)
+            if df is not None and not df.empty:
+                detected_asset = "etf"
         if df is None or df.empty:
             console.print(Panel(f"[red]{code}: 无本地数据[/red]", expand=False))
             continue
+        is_etf = (detected_asset == "etf")
 
         name = ipo_dates.get(f"cn:{code}", {}).get("name", code)
         hfq_price = float(df.iloc[-1]["close"])
@@ -1052,50 +1063,109 @@ def cmd_portfolio(date: str | None = None,
         # 三层降级：显式声明 → 策略认领 → ATR兜底
         el = None
         used_strategy = None
+        etf_exit_note = ""  # ETF 专属出场说明
 
         # 层1：position_type + style 显式声明
-        style = h.get("style", "")
         if not pos_type and style in ("value", "quality", "growth"):
             pos_type = "config"
         elif not pos_type and style in ("momentum", "reversal", "breakout"):
             pos_type = "trading"
 
-        # 层2：运行所有策略，找认领策略（同时收集进场信号）
-        buy_sigs, sell_sigs, watch_sigs = [], [], []
-        strategy_exit_candidates = []
-        for key, cls in BUILTIN_STRATEGIES.items():
-            strat = cls()
-            if getattr(strat, "applicable_asset_types", []) == ["etf"]:
-                continue
-            sigs = strat.generate_signals(df_r, code, name)
-            for s in sigs:
-                if s.signal == "BUY":
-                    buy_sigs.append((key, s))
-                    if el is None:
-                        strategy_exit_candidates.append((key, strat, "trading"))
-                elif s.signal == "SELL":
-                    sell_sigs.append((key, s))
-                elif s.signal == "WATCH":
-                    watch_sigs.append((key, s))
-                    if el is None:
-                        strategy_exit_candidates.append((key, strat, "config"))
+        # ── ETF 专属出场路径（三条，按 style 分流）─────────────
+        if is_etf:
+            pos_type = pos_type or "config"
+            if style == "industry_allocation":
+                # L2 行业评分：读行业三维评分判断是否应减配
+                industry_code = h.get("industry", "")
+                try:
+                    from agents.industry_agent import get_industry_score
+                    score_info = get_industry_score(industry_code) if industry_code else None
+                except Exception:
+                    score_info = None
 
-        # 用得分最高的认领策略计算出场框架
-        # entry_price 用当前 hfq 价（不用成本换算，避免历史复权因子错位）
-        if strategy_exit_candidates:
-            best_key, best_strat, inferred_type = strategy_exit_candidates[0]
-            if not pos_type:
-                pos_type = inferred_type
-            el = best_strat.compute_exit_levels(df_r, entry_price=hfq_price)
-            used_strategy = best_key
+                from strategies.builtin.etf_momentum import ETFMomentumStrategy
+                el = ETFMomentumStrategy().compute_exit_levels(df_r, entry_price=hfq_price)
+                used_strategy = "L2行业评分"
+                if score_info:
+                    pct = score_info["percentile"]
+                    score_val = score_info["score"]
+                    if pct <= 0.25:
+                        etf_exit_note = (f"[red]行业评分偏低({score_val:.0f}分，分位{pct*100:.0f}%)，"
+                                         f"建议减配[/red]")
+                    elif pct <= 0.50:
+                        etf_exit_note = f"[yellow]行业评分中等({score_val:.0f}分，分位{pct*100:.0f}%)[/yellow]"
+                    else:
+                        etf_exit_note = f"[green]行业评分良好({score_val:.0f}分，分位{pct*100:.0f}%)[/green]"
+                else:
+                    etf_exit_note = f"[dim]行业评分数据不可用（industry 字段: {industry_code or '未填'}）[/dim]"
 
-        # 层3：ATR兜底（无任何策略认领）
+            elif style == "macro_allocation":
+                # L1 宏观 regime：crisis/risk_off 建议减仓
+                try:
+                    from agents.strategy_agent import evaluate_market_condition
+                    env = evaluate_market_condition()
+                    regime = env.get("regime") or env.get("risk_mode")
+                except Exception:
+                    regime = None
+                from strategies.builtin.etf_momentum import ETFMomentumStrategy
+                el = ETFMomentumStrategy().compute_exit_levels(df_r, entry_price=hfq_price)
+                used_strategy = "L1宏观Regime"
+                if regime in ("crisis",):
+                    etf_exit_note = f"[red]宏观 regime={regime}，建议大幅减仓宽基ETF[/red]"
+                elif regime in ("risk_off",):
+                    etf_exit_note = f"[yellow]宏观 regime={regime}，建议适当降低宽基配置[/yellow]"
+                elif regime:
+                    etf_exit_note = f"[green]宏观 regime={regime}，宽基ETF可持有[/green]"
+                else:
+                    etf_exit_note = "[dim]宏观 regime 数据不可用，按 ATR 技术止损[/dim]"
+
+            else:
+                # style=momentum 或未声明：走 etf_momentum 策略出场逻辑
+                from strategies.builtin.etf_momentum import ETFMomentumStrategy
+                el = ETFMomentumStrategy().compute_exit_levels(df_r, entry_price=hfq_price)
+                used_strategy = "etf_momentum"
+                etf_exit_note = "[dim]动量轮动：相对排名跌出 Top N 时轮出[/dim]"
+
+        else:
+            # ── 股票出场路径（原有逻辑）──────────────────────────
+            # 层2：运行所有策略，找认领策略（同时收集进场信号）
+            buy_sigs, sell_sigs, watch_sigs = [], [], []
+            strategy_exit_candidates = []
+            for key, cls in BUILTIN_STRATEGIES.items():
+                strat = cls()
+                if getattr(strat, "applicable_asset_types", []) == ["etf"]:
+                    continue
+                sigs = strat.generate_signals(df_r, code, name)
+                for s in sigs:
+                    if s.signal == "BUY":
+                        buy_sigs.append((key, s))
+                        if el is None:
+                            strategy_exit_candidates.append((key, strat, "trading"))
+                    elif s.signal == "SELL":
+                        sell_sigs.append((key, s))
+                    elif s.signal == "WATCH":
+                        watch_sigs.append((key, s))
+                        if el is None:
+                            strategy_exit_candidates.append((key, strat, "config"))
+
+            if strategy_exit_candidates:
+                best_key, best_strat, inferred_type = strategy_exit_candidates[0]
+                if not pos_type:
+                    pos_type = inferred_type
+                el = best_strat.compute_exit_levels(df_r, entry_price=hfq_price)
+                used_strategy = best_key
+
+        # 层3：ATR兜底（ETF/股票均适用）
         if el is None:
             from strategies.builtin.ma_cross import MACrossStrategy
             el = MACrossStrategy().compute_exit_levels(df_r, entry_price=hfq_price)
             used_strategy = "ATR兜底"
             if not pos_type:
                 pos_type = "trading"
+
+        # ETF 无基本面信号，置空
+        if is_etf:
+            buy_sigs, sell_sigs, watch_sigs = [], [], []
 
         # 将 hfq 出场价换算回不复权口径（与 cost 口径对齐）
         def _to_real(p):
@@ -1142,11 +1212,13 @@ def cmd_portfolio(date: str | None = None,
         ask = round(current_price * 0.995, 2)
 
         # ── 输出卡片 ────────────────────────────────────────
+        asset_tag = "[dim]ETF[/dim]  " if is_etf else ""
         header = (
-            f"[bold]{code}  {name}[/bold]\n"
+            f"[bold]{code}  {name}[/bold]  {asset_tag}\n"
             f"  现价: ¥{current_price:.2f}   成本: ¥{cost:.2f}   "
             f"盈亏: [{pnl_color}]{pnl_pct:+.1f}%[/{pnl_color}]  ({shares}股)\n"
             f"  建议: {action}  |  出场逻辑: [cyan]{el.exit_logic}[/cyan]（{used_strategy}）\n"
+            + (f"  {etf_exit_note}\n" if etf_exit_note else "")
             + (f"  进场信号参考: {'  '.join(sig_summary)}\n" if sig_summary else "")
             + (f"  R={r:.2f}" + ("[yellow]⚠[/yellow]" if 0 < r < min_r else "") if r > 0 else "  配置仓（无价格止损）")
             + (f"  | 按当前成本计算建议{rec_shares}股/批\n" if rec_shares > 0 else "\n")

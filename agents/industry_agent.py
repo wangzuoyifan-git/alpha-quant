@@ -470,3 +470,41 @@ def _fallback(risk_mode: str, error: str = None) -> dict:
     if error:
         out["error"] = error
     return out
+
+
+def get_industry_score(industry_code: str, level: str = "L1", date: str = None) -> dict:
+    """
+    轻量接口：返回单个行业当前的三维评分（复用已有缓存，不触发全量重算）。
+
+    portfolio 命令用此接口判断 industry_allocation ETF 是否应减配，
+    无需调用完整 evaluate_industry_rotation。
+
+    返回：
+      {"score": float(0~100), "prosperity": float|None, "valuation": float|None,
+       "moneyflow": float|None, "percentile": float(0~1，在所有行业中的分位)}
+      数据不足时返回 None。
+    """
+    try:
+        _, code_to_ind = _load_member_map(level)
+        if not code_to_ind:
+            return None
+        raw_mf, raw_pros, raw_val = _aggregate_raw_dims_cached(code_to_ind, level, date)
+        dim_mf  = _normalize_to_100(raw_mf)
+        dim_pros = _normalize_to_100(raw_pros)
+        dim_val  = _normalize_to_100(raw_val)
+        dims = {"prosperity": dim_pros, "valuation": dim_val, "moneyflow": dim_mf}
+        combined = _combine_dims(dims, dict(_DEFAULT_WEIGHTS))
+        if industry_code not in combined:
+            return None
+        score = combined[industry_code]
+        all_scores = sorted(combined.values())
+        pct = sum(1 for s in all_scores if s <= score) / len(all_scores) if all_scores else 0.5
+        return {
+            "score": round(score, 1),
+            "prosperity": dim_pros.get(industry_code),
+            "valuation": dim_val.get(industry_code),
+            "moneyflow": dim_mf.get(industry_code),
+            "percentile": round(pct, 2),
+        }
+    except Exception:
+        return None
