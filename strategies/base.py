@@ -4,13 +4,66 @@
 """
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 import pandas as pd
 
 
 # AC5：市场环境枚举（@deprecated，用 applicable_regimes 替代）
 MARKET_CONDITIONS = ("bull", "bear", "range", "volatile")
+
+
+@dataclass
+class ScaleLevel:
+    """分级操作表单条记录"""
+    price: float
+    level_type: str   # hard_stop / soft_stop / take_1 / take_2 / trail
+    action: str       # stop_loss / reduce / take_profit / trail_stop
+    size_pct: float   # 仓位变化比例，负数=减仓（-1.0=清仓）
+    reason: str
+    cancels_group: str = ""   # "stop" 或 ""；触发时取消同组其他档位
+
+
+@dataclass
+class ExitLevels:
+    """
+    策略出场价位框架，由 compute_exit_levels() 返回，序列化写入 Signal.extra["exit_levels"]。
+
+    必填字段（任何策略都必须提供）：
+      stop_loss   : 硬止损价；配置仓无价格止损时填 0.0
+      take_profit : 主要止盈目标价
+      atr         : 当日 ATR(14)，供 position_manager 计算仓位
+
+    配置仓专用字段（技术仓留默认值）：
+      pe_exit_pct       : PE历史分位超过此值开始减仓（0.0=不使用）
+      fundamental_exit  : 基本面出场条件描述（供展示）
+    """
+    stop_loss: float
+    take_profit: float
+    atr: float
+    support: float = 0.0
+    resistance: float = 0.0
+    exit_logic: str = "atr"
+    scale_levels: List[ScaleLevel] = field(default_factory=list)
+    pe_exit_pct: float = 0.0
+    fundamental_exit: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "stop_loss": self.stop_loss,
+            "take_profit": self.take_profit,
+            "atr": self.atr,
+            "support": self.support,
+            "resistance": self.resistance,
+            "exit_logic": self.exit_logic,
+            "scale_levels": [
+                {"price": l.price, "level_type": l.level_type, "action": l.action,
+                 "size_pct": l.size_pct, "reason": l.reason, "cancels_group": l.cancels_group}
+                for l in self.scale_levels
+            ],
+            "pe_exit_pct": self.pe_exit_pct,
+            "fundamental_exit": self.fundamental_exit,
+        }
 
 
 def ttm_sum(series: pd.Series, periods: int = 4) -> float:
@@ -113,3 +166,52 @@ class BaseStrategy(ABC):
     def requires_bars(self) -> int:
         """策略需要的最少K线数量"""
         return 60
+
+    def compute_exit_levels(
+        self,
+        df: pd.DataFrame,
+        entry_price: float,
+        fundamental_data: Optional[dict] = None,
+    ) -> "ExitLevels":
+        """
+        计算持仓出场价位框架。默认：ATR 动态止损 + R=2 止盈。
+        各策略可重写以提供更精确的出场逻辑。
+
+        :param df: 同 generate_signals 的 df（date 为普通列，已 reset_index）
+        :param entry_price: 进场价（不复权口径）
+        :param fundamental_data: 配置仓策略可用，由调用方从 store 传入（避免重复IO）
+        """
+        from strategies.position_manager import (
+            calc_atr, calc_swing_low, calc_swing_high, build_scale_levels,
+        )
+        from config.settings import RISK_CONTROL
+
+        atr = calc_atr(df)
+        mult = self.params.get(
+            "atr_stop_multiplier", RISK_CONTROL.get("atr_stop_multiplier", 2.5)
+        )
+        stop_loss   = round(entry_price - atr * mult, 2)
+        take_profit = round(entry_price + atr * mult * 2, 2)
+        support     = calc_swing_low(df, n=20)
+        resistance  = calc_swing_high(df, n=20)
+
+        scale_cfg = RISK_CONTROL.get("scale_out", {})
+        levels_raw = build_scale_levels(
+            entry_price, stop_loss, take_profit, support, resistance, atr, scale_cfg
+        )
+        levels = [
+            ScaleLevel(
+                price=l["price"], level_type=l["level_type"], action=l["action"],
+                size_pct=l["size_pct"], reason=l["reason"], cancels_group=l["cancels_group"],
+            )
+            for l in levels_raw
+        ]
+        return ExitLevels(
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            atr=atr,
+            support=support,
+            resistance=resistance,
+            exit_logic="atr",
+            scale_levels=levels,
+        )

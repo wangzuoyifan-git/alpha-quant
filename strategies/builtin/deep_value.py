@@ -117,3 +117,18 @@ class DeepValueStrategy(BaseStrategy):
             price=price, reason="，".join(reasons), score=score,
             position_type="config", time_horizon="long",
         )]
+
+    def compute_exit_levels(self, df, entry_price, fundamental_data=None):
+        """深度价值出场：PB>2.0或PE历史分位>80%减仓，无价格止损"""
+        from strategies.base import ExitLevels
+        pe_exit_pct = self.params.get("pe_exit_pct", 0.80)
+        exit_desc = (f"PE历史分位>{pe_exit_pct*100:.0f}%或PB>2.0开始减仓；"
+                     "连续亏损2季或股息取消触发清仓")
+        return ExitLevels(
+            stop_loss=0.0,
+            take_profit=entry_price * 1.5,
+            atr=0.0,
+            exit_logic="fundamental",
+            pe_exit_pct=pe_exit_pct,
+            fundamental_exit=exit_desc,
+        )

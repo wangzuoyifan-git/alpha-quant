@@ -95,3 +95,18 @@ class GrowthPickStrategy(BaseStrategy):
             price=price, reason="，".join(reasons), score=score,
             position_type="config", time_horizon="medium",
         )]
+
+    def compute_exit_levels(self, df, entry_price, fundamental_data=None):
+        """成长策略出场：PEG>2.0或PE历史分位>75%减仓，净利增速转负清仓"""
+        from strategies.base import ExitLevels
+        pe_exit_pct = self.params.get("pe_exit_pct", 0.75)
+        exit_desc = (f"PE历史分位>{pe_exit_pct*100:.0f}%或PEG>2.0开始减仓；"
+                     "净利润同比增速转负或低于15%触发清仓")
+        return ExitLevels(
+            stop_loss=0.0,
+            take_profit=entry_price * 2.0,  # 成长股目标更高
+            atr=0.0,
+            exit_logic="fundamental",
+            pe_exit_pct=pe_exit_pct,
+            fundamental_exit=exit_desc,
+        )

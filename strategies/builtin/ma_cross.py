@@ -164,3 +164,37 @@ class MACrossStrategy(BaseStrategy):
             reason="，".join(reasons),
             score=min(score, 100.0),
         )]
+
+    def compute_exit_levels(self, df, entry_price, fundamental_data=None):
+        """趋势跟踪出场：Supertrend 移动止损 + 摆动高点止盈"""
+        from strategies.position_manager import (
+            calc_atr, calc_swing_high, calc_supertrend, build_scale_levels,
+        )
+        from strategies.base import ExitLevels, ScaleLevel
+        from config.settings import RISK_CONTROL
+
+        atr = calc_atr(df)
+        _, st_lower = calc_supertrend(df, period=10, multiplier=3.0)
+        stop_loss = round(min(st_lower, entry_price - atr * 2.0), 2)  # Supertrend或2×ATR取较高（较保守）
+        stop_loss = max(stop_loss, entry_price - atr * 3.0)           # 不超过3×ATR
+
+        resistance = calc_swing_high(df, n=20)
+        take_profit = resistance if resistance > entry_price else round(entry_price + atr * 4.0, 2)
+
+        scale_cfg = RISK_CONTROL.get("scale_out", {})
+        levels_raw = build_scale_levels(entry_price, stop_loss, take_profit,
+                                        support=round(st_lower, 2),
+                                        resistance=resistance, atr=atr,
+                                        scale_cfg=scale_cfg)
+        # 修改 hard_stop reason 为策略专属描述
+        for l in levels_raw:
+            if l["level_type"] == "hard_stop":
+                l["reason"] = f"Supertrend下轨/2×ATR止损"
+            elif l["level_type"] == "soft_stop":
+                l["reason"] = "跌破Supertrend下轨减仓"
+        levels = [ScaleLevel(**l) for l in levels_raw]
+        return ExitLevels(
+            stop_loss=stop_loss, take_profit=take_profit, atr=atr,
+            support=round(st_lower, 2), resistance=resistance,
+            exit_logic="trail_supertrend", scale_levels=levels,
+        )

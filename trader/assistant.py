@@ -30,11 +30,21 @@ class TradeOrder:
         self.status = "PENDING"  # PENDING / CONFIRMED / CANCELLED / EXECUTED
         self.order_id = f"{signal.code}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
 
-        # O1 止损止盈
-        self.stop_loss_ratio = stop_loss_ratio
-        self.stop_loss_price = round(signal.price * (1 - stop_loss_ratio), 2)
-        self.take_profit_ratio = take_profit_ratio
-        self.take_profit_price = round(signal.price * (1 + take_profit_ratio), 2)
+        # O1 止损止盈：优先读策略给的 ExitLevels，固定百分比降级为兜底
+        el = signal.extra.get("exit_levels") if signal.extra else None
+        if el and el.get("stop_loss", 0) > 0:
+            self.stop_loss_price = round(float(el["stop_loss"]), 2)
+            self.stop_loss_ratio = round(1 - self.stop_loss_price / signal.price, 4)
+        else:
+            self.stop_loss_ratio = stop_loss_ratio
+            self.stop_loss_price = round(signal.price * (1 - stop_loss_ratio), 2)
+
+        if el and el.get("take_profit", 0) > 0:
+            self.take_profit_price = round(float(el["take_profit"]), 2)
+            self.take_profit_ratio = round(self.take_profit_price / signal.price - 1, 4)
+        else:
+            self.take_profit_ratio = take_profit_ratio
+            self.take_profit_price = round(signal.price * (1 + take_profit_ratio), 2)
 
         # RC 风控标签
         self.risk_flags: List[str] = []

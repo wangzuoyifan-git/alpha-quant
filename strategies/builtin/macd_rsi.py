@@ -135,3 +135,38 @@ class MACDRSIStrategy(BaseStrategy):
             ))
 
         return signals
+
+    def compute_exit_levels(self, df, entry_price, fundamental_data=None):
+        """均值回归出场：布林带下轨止损 + 布林带中轨/前高止盈"""
+        from strategies.position_manager import (
+            calc_atr, calc_swing_high, calc_bollinger, build_scale_levels,
+        )
+        from strategies.base import ExitLevels, ScaleLevel
+        from config.settings import RISK_CONTROL
+
+        atr = calc_atr(df)
+        _, bb_mid, bb_lower = calc_bollinger(df)
+        resistance = calc_swing_high(df, n=20)
+
+        # 止损：布林带下轨（超跌反弹策略，价格跌破下轨说明反弹失败）
+        stop_loss = round(min(bb_lower, entry_price - atr * 2.0), 2)
+        # 止盈：布林带中轨（均值回归目标）或前高取较低者
+        take_profit = round(min(bb_mid, resistance) if resistance > entry_price else bb_mid, 2)
+        take_profit = max(take_profit, round(entry_price + atr * 1.5, 2))  # 至少 1.5×ATR
+
+        scale_cfg = RISK_CONTROL.get("scale_out", {})
+        levels_raw = build_scale_levels(entry_price, stop_loss, take_profit,
+                                        support=round(bb_lower, 2),
+                                        resistance=round(bb_mid, 2), atr=atr,
+                                        scale_cfg=scale_cfg)
+        for l in levels_raw:
+            if l["level_type"] == "hard_stop":
+                l["reason"] = "跌破布林带下轨（反弹失败）"
+            elif l["level_type"] == "take_1":
+                l["reason"] = "达到布林带中轨（均值回归目标）"
+        levels = [ScaleLevel(**l) for l in levels_raw]
+        return ExitLevels(
+            stop_loss=stop_loss, take_profit=take_profit, atr=atr,
+            support=round(bb_lower, 2), resistance=round(bb_mid, 2),
+            exit_logic="bollinger_lower", scale_levels=levels,
+        )

@@ -134,3 +134,41 @@ class VolPriceBreakoutStrategy(BaseStrategy):
                 ))
 
         return signals
+
+    def compute_exit_levels(self, df, entry_price, fundamental_data=None):
+        """突破出场：突破点下方1×ATR紧止损 + 箱体高度目标止盈"""
+        from strategies.position_manager import (
+            calc_atr, calc_swing_low, calc_swing_high, build_scale_levels,
+        )
+        from strategies.base import ExitLevels, ScaleLevel
+        from config.settings import RISK_CONTROL
+
+        lookback = self.params.get("lookback", 20)
+        atr = calc_atr(df)
+        # 止损：突破前的近期低点（swing_low of lookback window）下方 0.5×ATR
+        # 假突破要快出，止损比趋势策略更紧
+        swing_lo = calc_swing_low(df, n=lookback)
+        stop_loss = round(swing_lo - atr * 0.5, 2)
+        stop_loss = max(stop_loss, entry_price - atr * 2.0)  # 上限 2×ATR
+
+        # 止盈：箱体高度上移（突破目标 = 突破位 + 突破前箱体高度）
+        swing_hi = calc_swing_high(df, n=lookback)
+        box_height = swing_hi - swing_lo
+        take_profit = round(entry_price + box_height, 2)
+        resistance = calc_swing_high(df, n=5)  # 近期压力（5日高点）
+
+        scale_cfg = RISK_CONTROL.get("scale_out", {})
+        levels_raw = build_scale_levels(entry_price, stop_loss, take_profit,
+                                        support=swing_lo, resistance=resistance,
+                                        atr=atr, scale_cfg=scale_cfg)
+        for l in levels_raw:
+            if l["level_type"] == "hard_stop":
+                l["reason"] = f"突破失败，跌回箱体（swing_low-0.5×ATR）"
+            elif l["level_type"] == "take_1":
+                l["reason"] = f"箱体高度目标（+{box_height:.2f}）"
+        levels = [ScaleLevel(**l) for l in levels_raw]
+        return ExitLevels(
+            stop_loss=stop_loss, take_profit=take_profit, atr=atr,
+            support=swing_lo, resistance=resistance,
+            exit_logic="swing_low", scale_levels=levels,
+        )

@@ -872,210 +872,401 @@ def cmd_inspect(subtype: str, target: str = "",
         print("可用子类型: kline / mf / ind / macro")
 
 
+def _get_adj_factor(code: str, local_last_date: str, hfq_price: float):
+    """
+    hfq现价换算回不复权口径，返回 (real_price, adj_factor)。
+    用本地数据最新日期区间拉不复权价，避免非交易日/盘中失败。
+    """
+    try:
+        from config.settings import DATA_SOURCE as _DS
+        import tushare as _ts
+        from datetime import datetime as _dt, timedelta as _td
+        _pro = _ts.pro_api(_DS["tushare_token"])
+        _tsc = code + (".SH" if code.startswith("6") or code.startswith("9") else ".SZ")
+        _start = (_dt.strptime(local_last_date, "%Y%m%d") - _td(days=10)).strftime("%Y%m%d")
+        _raw = _pro.daily(ts_code=_tsc, start_date=_start, end_date=local_last_date)
+        if _raw is not None and not _raw.empty:
+            _same = _raw[_raw["trade_date"] == local_last_date]
+            if not _same.empty:
+                real_price = float(_same.iloc[0]["close"])
+            else:
+                real_price = float(_raw.sort_values("trade_date").iloc[-1]["close"])
+            return real_price, hfq_price / real_price
+    except Exception:
+        pass
+    return hfq_price, 1.0
+
+
 def cmd_portfolio(date: str | None = None,
                   portfolio_file: str = "data/portfolio.json"):
     """
-    持仓评估：对持仓股运行全部交易策略，输出加仓/减仓/止损建议、止盈止损点、委托参考价。
-    持仓文件格式：[{"code":"600519","name":"贵州茅台","cost":1500.0,"shares":100}, ...]
+    持仓评估：对持仓股运行出场框架计算，输出分级操作表 + 委托参考价。
+    持仓文件格式：[{"code":"600519","name":"贵州茅台","cost":1500.0,"shares":100}]
+    新增字段（可选）：position_type（trading/config）、style、total_capital
     """
-    import json
     from rich.console import Console
     from rich.table import Table
     from rich.panel import Panel
+    from data.portfolio import load_portfolio
+    from strategies.position_manager import calc_position_size, calc_r_ratio
 
     console = Console()
 
     # ── 读持仓文件 ─────────────────────────────────────────────
-    pf_path = Path(portfolio_file)
-    if not pf_path.exists():
-        console.print(f"[red]持仓文件不存在: {portfolio_file}[/red]")
-        console.print("请创建 data/portfolio.json，格式：")
-        console.print('[{"code":"600519","name":"贵州茅台","cost":1500.0,"shares":100}]')
-        return
-    holdings = json.loads(pf_path.read_text(encoding="utf-8"))
+    pf = load_portfolio(portfolio_file)
+    holdings = pf.get("holdings", pf) if isinstance(pf, dict) else pf
+    if not holdings:
+        # 兼容旧格式（纯列表）
+        from pathlib import Path as _P
+        import json as _json
+        _p = _P(portfolio_file)
+        if not _p.exists():
+            console.print(f"[red]持仓文件不存在: {portfolio_file}[/red]")
+            console.print('[{"code":"600519","name":"贵州茅台","cost":1500.0,"shares":100}]')
+            return
+        holdings = _json.loads(_p.read_text(encoding="utf-8"))
+        if isinstance(holdings, dict):
+            holdings = holdings.get("holdings", [])
     if not holdings:
         console.print("[yellow]持仓文件为空[/yellow]")
         return
 
-    # 按代码去重（保留最后一条），提醒重复
-    seen_codes = {}
+    # 去重
+    seen = {}
     for h in holdings:
-        if h["code"] in seen_codes:
-            console.print(f"[yellow]提示: {h['code']} 在持仓文件中重复，保留最后一条[/yellow]")
-        seen_codes[h["code"]] = h
-    holdings = list(seen_codes.values())
+        if h["code"] in seen:
+            console.print(f"[yellow]提示: {h['code']} 重复，保留最后一条[/yellow]")
+        seen[h["code"]] = h
+    holdings = list(seen.values())
 
-    codes = [h["code"] for h in holdings]
-    cost_map = {h["code"]: float(h["cost"]) for h in holdings}
-    shares_map = {h["code"]: int(h["shares"]) for h in holdings}
+    total_capital = pf.get("total_capital") or RISK_CONTROL.get("default_capital", 2_000_000) if isinstance(pf, dict) else RISK_CONTROL.get("default_capital", 2_000_000)
+    risk_per_trade = RISK_CONTROL.get("risk_per_trade", 0.01)
+    min_r = RISK_CONTROL.get("min_r_ratio", 1.5)
 
-    console.print(Panel(
-        f"[bold cyan]Alpha量化 - 持仓评估[/bold cyan]\n"
-        f"持仓: [yellow]{len(holdings)}只[/yellow]  "
-        f"日期: [yellow]{date or '今日'}[/yellow]",
-        expand=False
-    ))
-
-    # ── 加载 K 线数据并运行所有策略 ────────────────────────────
     import data.store as store
     from datetime import datetime, timedelta
     end = date or datetime.now().strftime("%Y-%m-%d")
     max_bars = max(s().requires_bars() for s in BUILTIN_STRATEGIES.values())
-    start = (datetime.strptime(end, "%Y-%m-%d") -
-             timedelta(days=int(max_bars * 1.5))).strftime("%Y-%m-%d")
-
+    start = (datetime.strptime(end, "%Y-%m-%d") - timedelta(days=int(max_bars * 1.5))).strftime("%Y-%m-%d")
     ipo_dates = store.load_ipo_dates()
-    stop_loss_r = RISK_CONTROL.get("stop_loss_ratio", 0.07)
-    take_profit_r = RISK_CONTROL.get("take_profit_ratio", 0.20)
 
-    # 每只持仓的评估结果
-    results = []
-    for code in codes:
+    console.print(Panel(
+        f"[bold cyan]Alpha量化 - 持仓评估[/bold cyan]\n"
+        f"持仓: [yellow]{len(holdings)}只[/yellow]  "
+        f"日期: [yellow]{date or '今日'}[/yellow]  "
+        f"总资金: [yellow]¥{total_capital:,.0f}[/yellow]",
+        expand=False
+    ))
+
+    for h in holdings:
+        code = h["code"]
+        cost = float(h["cost"])
+        shares = int(h["shares"])
+        pos_type = h.get("position_type", "")  # 可能为空，后续推断
+
         df = store.load(code, asset_type="stock", market="cn", start=start, end=end)
         if df is None or df.empty:
-            results.append({"code": code, "error": "无本地数据"})
+            console.print(Panel(f"[red]{code}: 无本地数据[/red]", expand=False))
             continue
 
         name = ipo_dates.get(f"cn:{code}", {}).get("name", code)
         hfq_price = float(df.iloc[-1]["close"])
-        local_last_date = df.index.max().strftime("%Y%m%d")  # 本地数据最新日期
-        cost = cost_map[code]
-        shares = shares_map[code]
-
-        # hfq 现价换算回不复权口径（与用户填写的 cost 对齐）
-        # 用本地数据最新日期±10天区间拉不复权价，取与本地同日的收盘算复权因子
-        # （不用"今天"，避免非交易日/盘中拉不到数据时降级失败）
-        try:
-            from config.settings import DATA_SOURCE as _DS
-            import tushare as _ts
-            from datetime import datetime as _dt, timedelta as _td
-            _pro = _ts.pro_api(_DS["tushare_token"])
-            _tsc = code + (".SH" if code.startswith("6") or code.startswith("9") else ".SZ")
-            _start = (_dt.strptime(local_last_date, "%Y%m%d") - _td(days=10)).strftime("%Y%m%d")
-            _raw = _pro.daily(ts_code=_tsc, start_date=_start, end_date=local_last_date)
-            if _raw is not None and not _raw.empty:
-                # 优先取与本地最新日期同日的不复权价；取不到则用区间最后一条
-                _same = _raw[_raw["trade_date"] == local_last_date]
-                if not _same.empty:
-                    real_price = float(_same.iloc[0]["close"])
-                else:
-                    _raw = _raw.sort_values("trade_date")
-                    real_price = float(_raw.iloc[-1]["close"])
-                adj_factor = hfq_price / real_price   # hfq = real * factor
-            else:
-                real_price = hfq_price
-                adj_factor = 1.0
-        except Exception:
-            real_price = hfq_price
-            adj_factor = 1.0
-
-        current_price = real_price  # 展示用不复权价
+        local_last_date = df.index.max().strftime("%Y%m%d")
+        real_price, adj_factor = _get_adj_factor(code, local_last_date, hfq_price)
+        current_price = real_price
         pnl_pct = (current_price - cost) / cost * 100
 
-        # 运行所有适用于 stock 的策略
         df_r = df.reset_index()
+
+        # ── 出场框架（独立于进场信号）──────────────────────────
+        # 三层降级：显式声明 → 策略认领 → ATR兜底
+        el = None
+        used_strategy = None
+
+        # 层1：position_type + style 显式声明
+        style = h.get("style", "")
+        if not pos_type and style in ("value", "quality", "growth"):
+            pos_type = "config"
+        elif not pos_type and style in ("momentum", "reversal", "breakout"):
+            pos_type = "trading"
+
+        # 层2：运行所有策略，找认领策略（同时收集进场信号）
         buy_sigs, sell_sigs, watch_sigs = [], [], []
+        strategy_exit_candidates = []
         for key, cls in BUILTIN_STRATEGIES.items():
             strat = cls()
-            allowed = getattr(strat, "applicable_asset_types", [])
-            if allowed and "stock" not in allowed:
+            if getattr(strat, "applicable_asset_types", []) == ["etf"]:
                 continue
-            for s in strat.generate_signals(df_r, code, name):
+            sigs = strat.generate_signals(df_r, code, name)
+            for s in sigs:
                 if s.signal == "BUY":
-                    buy_sigs.append(s)
+                    buy_sigs.append((key, s))
+                    if el is None:
+                        strategy_exit_candidates.append((key, strat, "trading"))
                 elif s.signal == "SELL":
-                    sell_sigs.append(s)
+                    sell_sigs.append((key, s))
                 elif s.signal == "WATCH":
-                    watch_sigs.append(s)
+                    watch_sigs.append((key, s))
+                    if el is None:
+                        strategy_exit_candidates.append((key, strat, "config"))
 
-        # ── 建议逻辑 ─────────────────────────────────────────
-        # 有 SELL 信号 → 减仓/止损
-        # 有 BUY 信号且盈利 → 持有/可加仓
-        # 有 BUY 信号且亏损超止损线 → 止损
-        # 无信号 → 观望
-        hit_stop = current_price <= cost * (1 - stop_loss_r)
-        hit_take = current_price >= cost * (1 + take_profit_r)
+        # 用得分最高的认领策略计算出场框架
+        # entry_price 用当前 hfq 价（不用成本换算，避免历史复权因子错位）
+        if strategy_exit_candidates:
+            best_key, best_strat, inferred_type = strategy_exit_candidates[0]
+            if not pos_type:
+                pos_type = inferred_type
+            el = best_strat.compute_exit_levels(df_r, entry_price=hfq_price)
+            used_strategy = best_key
 
+        # 层3：ATR兜底（无任何策略认领）
+        if el is None:
+            from strategies.builtin.ma_cross import MACrossStrategy
+            el = MACrossStrategy().compute_exit_levels(df_r, entry_price=hfq_price)
+            used_strategy = "ATR兜底"
+            if not pos_type:
+                pos_type = "trading"
+
+        # 将 hfq 出场价换算回不复权口径（与 cost 口径对齐）
+        def _to_real(p):
+            return round(p / adj_factor, 2) if p and p > 0 and adj_factor > 0 else 0.0
+
+        stop_real = _to_real(el.stop_loss)
+        tp_real = _to_real(el.take_profit)
+        levels_real = [
+            {**lv.__dict__, "price": _to_real(lv.price)}
+            for lv in el.scale_levels
+        ] if el.scale_levels else []
+
+        # ── 进场信号参考（附加信息，不决定出场逻辑）──────────────
+        sig_summary = []
+        if buy_sigs:
+            sig_summary.append(f"[green]BUY×{len(buy_sigs)}[/green] {buy_sigs[0][1].reason[:30]}")
         if sell_sigs:
-            action = "🔴 减仓/止损"
-            action_reason = sell_sigs[0].reason[:40]
-        elif hit_stop:
-            action = "🔴 触发止损"
-            action_reason = f"跌破成本止损线 ¥{cost*(1-stop_loss_r):.2f}"
-        elif hit_take:
-            action = "🟡 考虑止盈"
-            action_reason = f"已达止盈目标 ¥{cost*(1+take_profit_r):.2f}"
+            sig_summary.append(f"[red]SELL×{len(sell_sigs)}[/red] {sell_sigs[0][1].reason[:30]}")
+        if watch_sigs:
+            sig_summary.append(f"[blue]WATCH×{len(watch_sigs)}[/blue]")
+
+        # ── 主要建议（基于出场框架，而非进场信号）──────────────
+        if stop_real > 0 and current_price <= stop_real:
+            action = "[red]硬止损触发[/red]"
+        elif stop_real > 0 and current_price <= cost * 0.95:
+            action = "[red]考虑减仓[/red]"
+        elif tp_real > 0 and current_price >= tp_real:
+            action = "[yellow]止盈目标已到[/yellow]"
+        elif sell_sigs:
+            action = "[red]策略SELL信号[/red]"
         elif buy_sigs:
-            action = "🟢 持有/可加仓"
-            action_reason = buy_sigs[0].reason[:40]
-        elif watch_sigs:
-            action = "🔵 配置仓持有"
-            action_reason = watch_sigs[0].reason[:40]
+            action = "[green]持有/可加仓[/green]"
         else:
-            action = "⚪ 观望"
-            action_reason = "无明确信号"
+            action = "[white]观望[/white]"
 
-        # ── 价格参考 ─────────────────────────────────────────
-        # 止损价：成本价下方 stop_loss_r（硬性），或当前价下方（更保守取两者较高）
-        stop_loss_from_cost = cost * (1 - stop_loss_r)
-        stop_loss_from_current = current_price * (1 - stop_loss_r)
-        stop_loss_price = max(stop_loss_from_cost, stop_loss_from_current)
+        # ── R倍数和仓位建议 ──────────────────────────────────
+        r = calc_r_ratio(cost, stop_real, tp_real) if stop_real > 0 else 0.0
+        rec_shares = calc_position_size(cost, stop_real, total_capital,
+                                        risk_per_trade, RISK_CONTROL.get("max_single_position", 0.10)) if stop_real > 0 else 0
+        pnl_color = "green" if pnl_pct >= 0 else "red"
+        bid = round(current_price * 1.005, 2)
+        ask = round(current_price * 0.995, 2)
 
-        # 止盈价：成本价上方 take_profit_r
-        take_profit_price = cost * (1 + take_profit_r)
-
-        # 委托参考价：买入用昨收+0.5%（次日竞价参考），卖出用昨收-0.5%
-        bid_price = round(current_price * 1.005, 2)    # 买入委托参考（略高于收盘）
-        ask_price = round(current_price * 0.995, 2)    # 卖出委托参考（略低于收盘）
-
-        results.append({
-            "code": code, "name": name,
-            "current": current_price, "cost": cost, "shares": shares,
-            "pnl_pct": pnl_pct,
-            "action": action, "action_reason": action_reason,
-            "stop_loss": stop_loss_price,
-            "take_profit": take_profit_price,
-            "bid_price": bid_price, "ask_price": ask_price,
-            "buy_signals": len(buy_sigs), "sell_signals": len(sell_sigs),
-            "event_warnings": [],
-            "price_unadjusted": abs(adj_factor - 1.0) > 0.01,  # 是否成功换算为不复权价
-        })
-
-    # ── 输出（卡片式，每只股票一块）────────────────────────────
-    for r in results:
-        if "error" in r:
-            console.print(Panel(f"[red]{r['code']}: {r['error']}[/red]", expand=False))
-            continue
-        pnl = r["pnl_pct"]
-        pnl_color = "green" if pnl >= 0 else "red"
-        action = r["action"]
-        if "减仓" in action or "止损" in action:
-            order_ref = f"卖出委托参考: ¥{r['ask_price']:.2f}（昨收-0.5%）"
-        elif "加仓" in action:
-            order_ref = f"买入委托参考: ¥{r['bid_price']:.2f}（昨收+0.5%）"
-        elif "止盈" in action:
-            order_ref = f"卖出委托参考: ¥{r['ask_price']:.2f}（昨收-0.5%）"
-        else:
-            order_ref = "委托: 观望暂不操作"
-
-        text = (
-            f"[bold]{r['code']}  {r['name']}[/bold]\n"
-            f"  现价: ¥{r['current']:.2f}   成本: ¥{r['cost']:.2f}   "
-            f"持仓盈亏: [{pnl_color}]{pnl:+.1f}%[/{pnl_color}]  ({r['shares']}股)\n"
-            f"  建议: {action}\n"
-            f"  原因: {r['action_reason']}\n"
-            f"  ──────────────────────────────\n"
-            f"  🛡  止损价: ¥{r['stop_loss']:.2f}   "
-            f"🎯 止盈价: ¥{r['take_profit']:.2f}\n"
-            f"  📋 {order_ref}"
+        # ── 输出卡片 ────────────────────────────────────────
+        header = (
+            f"[bold]{code}  {name}[/bold]\n"
+            f"  现价: ¥{current_price:.2f}   成本: ¥{cost:.2f}   "
+            f"盈亏: [{pnl_color}]{pnl_pct:+.1f}%[/{pnl_color}]  ({shares}股)\n"
+            f"  建议: {action}  |  出场逻辑: [cyan]{el.exit_logic}[/cyan]（{used_strategy}）\n"
+            + (f"  进场信号参考: {'  '.join(sig_summary)}\n" if sig_summary else "")
+            + (f"  R={r:.2f}" + ("[yellow]⚠[/yellow]" if 0 < r < min_r else "") if r > 0 else "  配置仓（无价格止损）")
+            + (f"  | 按当前成本计算建议{rec_shares}股/批\n" if rec_shares > 0 else "\n")
         )
+
         border = "red" if "止损" in action or "减仓" in action else \
                  "yellow" if "止盈" in action else \
                  "green" if "加仓" in action or "持有" in action else "white"
-        console.print(Panel(text, border_style=border, expand=False))
+        console.print(Panel(header.rstrip(), border_style=border, expand=False))
 
-    console.print(f"[dim]止损基准: 成本/当日收盘较高者下方 {stop_loss_r*100:.0f}%  "
-                  f"止盈目标: 成本上方 {take_profit_r*100:.0f}%[/dim]")
+        if el.exit_logic == "fundamental":
+            console.print(f"  [dim]基本面出场: {el.fundamental_exit}[/dim]")
+        elif levels_real:
+            # 过滤掉价格为0的档位（配置仓兜底时stop_loss=0会产生¥0.00的档位）
+            valid_levels = [lv for lv in levels_real if lv.get("price", 0) > 0]
+            if valid_levels:
+                tbl = Table(show_header=True, header_style="bold dim", box=None, padding=(0, 1))
+                tbl.add_column("价位", style="bold")
+                tbl.add_column("类型")
+                tbl.add_column("操作")
+                tbl.add_column("仓位")
+                tbl.add_column("依据")
+                for lv in valid_levels:
+                    is_stop = "stop" in lv.get("level_type", "")
+                    color = "red" if is_stop else "green"
+                    tbl.add_row(
+                        f"[{color}]¥{lv['price']:.2f}[/{color}]",
+                        lv.get("level_type", ""),
+                        lv.get("action", ""),
+                        f"{lv.get('size_pct', 0)*100:.0f}%",
+                        lv.get("reason", ""),
+                    )
+                console.print(tbl)
+
+        console.print(f"  [dim]委托参考 → 买入¥{bid:.2f}（昨收+0.5%）  卖出¥{ask:.2f}（昨收-0.5%）[/dim]\n")
+
+
+def cmd_exit_levels(code: str, entry: float | None = None, strategy: str | None = None):
+    """
+    查看指定股票的出场价位框架（分级操作表）。
+    对每个适用策略运行 compute_exit_levels，展示止损/止盈档位和仓位建议。
+    """
+    from rich.console import Console
+    from rich.table import Table
+    from rich.panel import Panel
+    import data.store as store
+    from strategies.position_manager import calc_position_size, calc_r_ratio
+    from config.settings import RISK_CONTROL
+    from data.portfolio import load_portfolio
+
+    console = Console()
+
+    from datetime import datetime as _dt, timedelta as _td
+    _end = _dt.now().strftime("%Y-%m-%d")
+    _max_bars = max(s().requires_bars() for s in BUILTIN_STRATEGIES.values())
+    _start = (_dt.now() - _td(days=int(_max_bars * 1.5))).strftime("%Y-%m-%d")
+    df = store.load(code, asset_type="stock", market="cn", start=_start, end=_end)
+    if df is None or df.empty:
+        console.print(f"[red]无本地数据: {code}[/red]")
+        return
+    df = df.reset_index()
+
+    ipo_dates = store.load_ipo_dates()
+    name = ipo_dates.get(f"cn:{code}", {}).get("name", code)
+    hfq_price = float(df.iloc[-1]["close"])
+    local_last_date = df["date"].iloc[-1]
+    if hasattr(local_last_date, "strftime"):
+        local_last_date = local_last_date.strftime("%Y%m%d")
+    else:
+        local_last_date = str(local_last_date).replace("-", "")[:8]
+
+    real_price, adj_factor = _get_adj_factor(code, local_last_date, hfq_price)
+    # adj_factor = hfq / real（如 10473 / 1240 ≈ 8.45）
+    # entry_display 是用户输入的不复权价，策略计算需要 hfq 口径
+    entry_hfq = entry * adj_factor if entry else hfq_price
+    entry_display = entry if entry else real_price  # 展示用不复权
+
+    # 读 total_capital
+    pf = load_portfolio()
+    capital = pf.get("total_capital") or RISK_CONTROL.get("default_capital", 2_000_000)
+    risk_per_trade = RISK_CONTROL.get("risk_per_trade", 0.01)
+    min_r = RISK_CONTROL.get("min_r_ratio", 1.5)
+
+    console.print(Panel(
+        f"[bold cyan]{code}  {name}[/bold cyan]  "
+        f"现价¥{real_price:.2f}  进场价¥{entry_display:.2f}  总资金¥{capital:,.0f}",
+        expand=False
+    ))
+
+    strategies_to_run = {}
+    for k, cls in BUILTIN_STRATEGIES.items():
+        if strategy and k != strategy:
+            continue
+        inst = cls()
+        if getattr(inst, "applicable_asset_types", []) == ["etf"]:
+            continue
+        strategies_to_run[k] = inst
+
+    if not strategies_to_run:
+        console.print(f"[red]策略不存在: {strategy}[/red]")
+        return
+
+    for key, inst in strategies_to_run.items():
+        # 策略计算用 hfq 口径，展示换算回不复权：real = hfq / adj_factor
+        el = inst.compute_exit_levels(df, entry_price=entry_hfq)
+        def _to_real(p): return round(p / adj_factor, 2) if p and p > 0 and adj_factor > 0 else 0.0
+        stop_r  = _to_real(el.stop_loss)
+        tp_r    = _to_real(el.take_profit)
+
+        r = calc_r_ratio(entry_display, stop_r, tp_r)
+        r_color = "green" if r >= min_r else "yellow" if r > 0 else "dim"
+        r_str = f"[{r_color}]R={r:.2f}[/{r_color}]" if r > 0 else "[dim]R=N/A（配置仓）[/dim]"
+
+        if stop_r > 0:
+            shares = calc_position_size(
+                entry_display, stop_r, capital,
+                risk_per_trade, RISK_CONTROL.get("max_single_position", 0.10)
+            )
+            max_loss = (entry_display - stop_r) * shares
+            size_str = f"建议{shares}股（最大亏损¥{max_loss:,.0f}，占{max_loss/capital*100:.1f}%）"
+        else:
+            size_str = "无价格止损（配置仓，按固定比例建仓）"
+
+        header = (f"[bold]{key}[/bold]（{inst.name}）  "
+                  f"出场逻辑: [cyan]{el.exit_logic}[/cyan]  {r_str}\n  {size_str}")
+
+        if el.exit_logic == "fundamental":
+            body = f"  PE分位出场: >{el.pe_exit_pct*100:.0f}%开始减仓\n  基本面出场: {el.fundamental_exit or '基本面恶化'}"
+            console.print(Panel(header + "\n" + body, expand=False))
+        else:
+            tbl = Table(show_header=True, header_style="bold", box=None, padding=(0, 1))
+            tbl.add_column("价位", style="bold")
+            tbl.add_column("类型")
+            tbl.add_column("操作")
+            tbl.add_column("仓位")
+            tbl.add_column("依据")
+            for lv in el.scale_levels:
+                price_r = _to_real(lv.price)
+                if price_r <= 0:
+                    continue
+                color = "red" if "stop" in lv.level_type else "green"
+                tbl.add_row(
+                    f"[{color}]¥{price_r:.2f}[/{color}]",
+                    lv.level_type, lv.action,
+                    f"{lv.size_pct*100:.0f}%",
+                    lv.reason,
+                )
+            console.print(Panel(header, expand=False))
+            console.print(tbl)
+            console.print()
+
+
+def cmd_position_size(entry: float, stop: float, capital: float | None = None):
+    """仓位计算器：给定进场价和止损价，输出基于风险的建议股数和R倍数。"""
+    from rich.console import Console
+    from rich.panel import Panel
+    from strategies.position_manager import calc_position_size, calc_r_ratio
+    from config.settings import RISK_CONTROL
+    from data.portfolio import load_portfolio
+
+    console = Console()
+
+    if stop >= entry:
+        console.print("[red]错误: 止损价必须低于进场价[/red]")
+        return
+
+    pf = load_portfolio()
+    cap = capital or pf.get("total_capital") or RISK_CONTROL.get("default_capital", 2_000_000)
+    risk_per_trade = RISK_CONTROL.get("risk_per_trade", 0.01)
+    max_pos = RISK_CONTROL.get("max_single_position", 0.10)
+    min_r = RISK_CONTROL.get("min_r_ratio", 1.5)
+
+    shares = calc_position_size(entry, stop, cap, risk_per_trade, max_pos)
+    risk_dist = entry - stop
+    max_loss = risk_dist * shares
+    position_pct = entry * shares / cap * 100 if shares > 0 else 0
+
+    # 默认 R=2 止盈目标
+    default_tp = round(entry + risk_dist * 2, 2)
+    r = calc_r_ratio(entry, stop, default_tp)
+    r_color = "green" if r >= min_r else "yellow"
+
+    text = (
+        f"进场价: ¥{entry:.2f}   止损价: ¥{stop:.2f}   风险距: ¥{risk_dist:.2f}/股\n"
+        f"总资金: ¥{cap:,.0f}   单笔风险: {risk_per_trade*100:.1f}%（¥{cap*risk_per_trade:,.0f}）\n"
+        f"\n"
+        f"建议股数:  [bold]{shares}股[/bold]   仓位: {position_pct:.1f}%   "
+        f"最大亏损: ¥{max_loss:,.0f}\n"
+        f"R=2止盈目标: ¥{default_tp:.2f}   [{r_color}]R={r:.2f}[/{r_color}]"
+        + (f"   [yellow]⚠ R<{min_r}，信号质量偏低[/yellow]" if r < min_r else "")
+    )
+    console.print(Panel(text, title="[bold]仓位计算（基于风险）[/bold]", expand=False))
 
 
 def cmd_dbstats():
@@ -1427,6 +1618,18 @@ if __name__ == "__main__":
     # schedule
     sub.add_parser("schedule", help="启动定时任务")
 
+    # exit-levels
+    p_el = sub.add_parser("exit-levels", help="查看股票出场价位框架（分级操作表）")
+    p_el.add_argument("code", help="股票代码，如 600519")
+    p_el.add_argument("--entry", type=float, default=None, help="进场价（不填则用当前收盘价）")
+    p_el.add_argument("--strategy", default=None, help="只看指定策略，如 ma_cross")
+
+    # position-size
+    p_ps = sub.add_parser("position-size", help="基于风险的仓位计算（固定风险法）")
+    p_ps.add_argument("--entry", type=float, required=True, help="进场价")
+    p_ps.add_argument("--stop", type=float, required=True, help="止损价")
+    p_ps.add_argument("--capital", type=float, default=None, help="总资金（不填则用 portfolio.json 或默认值）")
+
     args = parser.parse_args()
 
     if args.command == "init":
@@ -1493,5 +1696,9 @@ if __name__ == "__main__":
                     start=args.start, end=args.end,
                     codes=args.codes, metric=args.metric,
                     all_items=args.all_items)
+    elif args.command == "exit-levels":
+        cmd_exit_levels(code=args.code, entry=args.entry, strategy=args.strategy)
+    elif args.command == "position-size":
+        cmd_position_size(entry=args.entry, stop=args.stop, capital=args.capital)
     else:
         parser.print_help()

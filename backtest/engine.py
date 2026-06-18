@@ -160,9 +160,11 @@ class Backtester:
         ))
 
         capital = float(self.initial_capital)
-        positions: dict[str, dict] = {}   # code -> {shares, entry_price, entry_date}
+        positions: dict[str, dict] = {}   # code -> {shares, entry_price, entry_date, cost, exit_levels}
         trades: list[Trade] = []
         equity = []
+
+        from strategies.position_manager import check_exit_triggered, update_trail_stop
 
         for date in all_dates:
             date_str = str(date)[:10]
@@ -172,29 +174,67 @@ class Backtester:
                 if code not in data or date not in data[code].index:
                     continue
                 pos = positions[code]
+                price = float(data[code].loc[date, "close"])
                 df_slice = data[code].loc[:date]
-                sigs = strategy.generate_signals(
-                    df_slice.reset_index(), code, code
-                )
-                sell_sigs = [s for s in sigs if s.signal == "SELL"]
-                if sell_sigs:
-                    price = float(data[code].loc[date, "close"]) * (1 - self.slippage)
-                    shares = pos["shares"]
-                    proceeds = shares * price * (1 - self.commission)
-                    capital += proceeds
-                    trade = Trade(
-                        code=code, name=code,
-                        entry_date=pos["entry_date"],
-                        entry_price=pos["entry_price"],
-                        exit_date=date_str,
-                        exit_price=price,
-                        shares=shares,
-                        pnl=proceeds - pos["cost"],
-                        pnl_pct=(price / pos["entry_price"] - 1) * 100,
-                        reason_out=sell_sigs[0].reason,
-                    )
-                    trades.append(trade)
-                    del positions[code]
+                el_dict = pos.get("exit_levels")
+                sold = False
+
+                # 优先用策略出场框架检查触发
+                if el_dict and el_dict.get("scale_levels"):
+                    trig = check_exit_triggered(price, el_dict, pos.get("triggered_groups", set()))
+                    if trig:
+                        size_pct = abs(trig.get("size_pct", 1.0))
+                        shares_out = max(int(pos["shares"] * size_pct / 100) * 100, 100)
+                        shares_out = min(shares_out, pos["shares"])
+                        sell_price = price * (1 - self.slippage)
+                        proceeds = shares_out * sell_price * (1 - self.commission)
+                        capital += proceeds
+                        entry_alloc = pos["cost"] * (shares_out / pos["shares"])
+                        trade = Trade(
+                            code=code, name=code,
+                            entry_date=pos["entry_date"], entry_price=pos["entry_price"],
+                            exit_date=date_str, exit_price=sell_price,
+                            shares=shares_out,
+                            pnl=proceeds - entry_alloc,
+                            pnl_pct=(sell_price / pos["entry_price"] - 1) * 100,
+                            reason_out=trig.get("reason", trig.get("action", "")),
+                        )
+                        trades.append(trade)
+                        grp = trig.get("cancels_group", "")
+                        if grp:
+                            pos.setdefault("triggered_groups", set()).add(grp)
+                        pos["shares"] -= shares_out
+                        pos["cost"] -= entry_alloc
+                        if pos["shares"] <= 0:
+                            del positions[code]
+                            sold = True
+                        continue
+
+                # 降级：SELL 信号出场（无 exit_levels 或未触发时）
+                if not sold:
+                    sigs = strategy.generate_signals(df_slice.reset_index(), code, code)
+                    sell_sigs = [s for s in sigs if s.signal == "SELL"]
+                    if sell_sigs:
+                        sell_price = price * (1 - self.slippage)
+                        shares = pos["shares"]
+                        proceeds = shares * sell_price * (1 - self.commission)
+                        capital += proceeds
+                        trade = Trade(
+                            code=code, name=code,
+                            entry_date=pos["entry_date"], entry_price=pos["entry_price"],
+                            exit_date=date_str, exit_price=sell_price,
+                            shares=shares,
+                            pnl=proceeds - pos["cost"],
+                            pnl_pct=(sell_price / pos["entry_price"] - 1) * 100,
+                            reason_out=sell_sigs[0].reason,
+                        )
+                        trades.append(trade)
+                        del positions[code]
+                        sold = True
+
+                # 移动止损更新（trail_* 逻辑，每日收盘后更新）
+                if not sold and el_dict and el_dict.get("exit_logic", "").startswith("trail_"):
+                    positions[code]["exit_levels"] = update_trail_stop(el_dict, df_slice.reset_index())
 
             # 扫描买入信号（最多同时持仓 10 只）
             if len(positions) < 10:
@@ -218,11 +258,19 @@ class Backtester:
                         if cost > capital:
                             continue
                         capital -= cost
+                        # 建仓时计算出场框架
+                        try:
+                            el = strategy.compute_exit_levels(df_slice.reset_index(), entry_price=price)
+                            el_dict = el.to_dict()
+                        except Exception:
+                            el_dict = None
                         positions[code] = {
                             "shares": shares,
                             "entry_price": price,
                             "entry_date": date_str,
                             "cost": cost,
+                            "exit_levels": el_dict,
+                            "triggered_groups": set(),
                         }
 
             # 计算当日总资产

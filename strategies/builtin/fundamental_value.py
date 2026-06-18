@@ -99,3 +99,31 @@ class FundamentalValueStrategy(BaseStrategy):
             price=price, reason="，".join(reasons), score=score,
             position_type="config", time_horizon="medium",
         )]
+
+    def compute_exit_levels(self, df, entry_price, fundamental_data=None):
+        """配置仓出场：PE历史分位>75%减仓，无价格止损"""
+        from strategies.base import ExitLevels, ScaleLevel
+        pe_exit_pct = self.params.get("pe_exit_pct", 0.75)
+
+        # 计算当前PE分位（供展示）
+        pe_pct_current = None
+        if "pe_ttm" in df.columns and len(df) >= 20:
+            import pandas as pd
+            last_pe = float(df.iloc[-1].get("pe_ttm", 0))
+            hist_pe = pd.to_numeric(df["pe_ttm"], errors="coerce").dropna()
+            hist_pe = hist_pe[hist_pe > 0]
+            if len(hist_pe) >= 20 and last_pe > 0:
+                pe_pct_current = round(float((hist_pe < last_pe).sum() / len(hist_pe)), 2)
+
+        pe_str = f"当前PE分位:{pe_pct_current*100:.0f}%" if pe_pct_current is not None else ""
+        exit_desc = (f"PE历史分位>{pe_exit_pct*100:.0f}%开始减仓（{pe_str}）；"
+                     "ROE连续2季下降>20%或净利润转负触发清仓")
+
+        return ExitLevels(
+            stop_loss=0.0,            # 配置仓无价格止损
+            take_profit=entry_price * 1.5,  # 占位，不用于决策
+            atr=0.0,
+            exit_logic="fundamental",
+            pe_exit_pct=pe_exit_pct,
+            fundamental_exit=exit_desc,
+        )

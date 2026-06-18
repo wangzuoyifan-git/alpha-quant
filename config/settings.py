@@ -142,10 +142,25 @@ RISK_CONTROL = {
         "index_drop_threshold": 0.03,
         "pause_new_orders": True,
     },
-    # 止盈比例
+    # 止盈比例（兜底，策略给了 ExitLevels 时以策略为准）
     "take_profit_ratio": 0.20,
     # 风控启用开关（Phase 1 半自动，人工最终决策）
     "enforce": True,
+
+    # ── 持仓管理参数（position_manager 使用）──────────────────
+    # 基于风险的仓位管理
+    "risk_per_trade": 0.01,          # 单笔最大亏损占总资金比例（1%）
+    "default_capital": 2_000_000,    # portfolio.json 未填 total_capital 时的默认值
+    # R 倍数警告阈值
+    "min_r_ratio": 1.5,              # R < 此值时展示警告
+    # 分批出场比例
+    "scale_out": {
+        "take_1_pct": 0.33,          # 第一止盈减仓比例
+        "take_2_pct": 0.50,          # 第二止盈减仓比例
+        "soft_stop_pct": 0.50,       # 近支撑止损减仓比例
+    },
+    # ATR 止损/止盈倍数（策略 params 可覆盖）
+    "atr_stop_multiplier": 2.5,      # 止损距 = ATR × 此值
 }
 
 # ============================================================

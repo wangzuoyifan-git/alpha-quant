@@ -118,3 +118,31 @@ class ETFMomentumStrategy(BaseStrategy):
             code=code, name=name, signal="WATCH",
             price=last_close, reason=reason, score=score,
         )]
+
+    def compute_exit_levels(self, df, entry_price, fundamental_data=None):
+        """ETF轮动出场：ATR宽止损（ETF波动小）+ 相对动量出场逻辑标注"""
+        from strategies.position_manager import (
+            calc_atr, calc_swing_low, calc_swing_high, build_scale_levels,
+        )
+        from strategies.base import ExitLevels, ScaleLevel
+        from config.settings import RISK_CONTROL
+
+        atr = calc_atr(df)
+        # ETF波动小，用 2.5×ATR
+        stop_loss = round(entry_price - atr * 2.5, 2)
+        support = calc_swing_low(df, n=20)
+        resistance = calc_swing_high(df, n=20)
+        # 止盈：ETF轮动以相对动量为主，价格止盈设宽（3×ATR）
+        take_profit = round(entry_price + atr * 5.0, 2)
+
+        scale_cfg = RISK_CONTROL.get("scale_out", {})
+        levels_raw = build_scale_levels(entry_price, stop_loss, take_profit,
+                                        support=support, resistance=resistance,
+                                        atr=atr, scale_cfg=scale_cfg)
+        levels = [ScaleLevel(**l) for l in levels_raw]
+        return ExitLevels(
+            stop_loss=stop_loss, take_profit=take_profit, atr=atr,
+            support=support, resistance=resistance,
+            exit_logic="momentum_relative", scale_levels=levels,
+            fundamental_exit="相对动量排名跌出 Top N 时轮出（需扫描时重新评估）",
+        )
