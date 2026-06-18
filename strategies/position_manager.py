@@ -4,6 +4,7 @@
 提供：
   底层价位计算：calc_atr / calc_swing_low / calc_swing_high / calc_supertrend
   仓位管理：calc_position_size / calc_r_ratio
+  委托价建议：calc_entry_bid
   分级操作表构建：build_scale_levels
   出场触发检查：check_exit_triggered（供回测引擎逐根K线调用）
   移动止损更新：update_trail_stop
@@ -244,3 +245,52 @@ def update_trail_stop(
             lv["price"] = round(new_stop, 2)
             break
     return el
+
+
+# ══════════════════════════════════════════════════════════════
+# 委托价建议
+# ══════════════════════════════════════════════════════════════
+
+def calc_entry_bid(
+    price: float,
+    exit_logic: str = "atr",
+    score: float = 60.0,
+    pct_chg: float = 0.0,
+    position_type: str = "trading",
+    limit_up_pct: float = 0.10,
+) -> tuple[float, str]:
+    """
+    根据信号类型和当日价格状态计算买入委托参考价。
+
+    参数：
+        price       : 信号价（收盘价，不复权）
+        exit_logic  : 策略出场逻辑类型（反映策略性格）
+        score       : 信号评分 0~100
+        pct_chg     : 信号当日涨幅（百分比，如 9.8 表示涨了9.8%）
+        position_type: "trading" 或 "config"
+        limit_up_pct: 普通股涨停幅度（默认10%；科创板/创业板20%需调用方传入）
+
+    返回：(建议委托价, 说明)
+    """
+    # 配置仓（中长期）：不追板，给分批参考价（挂略低于收盘的限价）
+    if position_type == "config":
+        return round(price * 0.998, 2), "配置仓限价-0.2%（分批建仓，不追）"
+
+    # 涨停判断（pct_chg 达到涨停幅度的 98% 视为涨停）
+    if pct_chg >= limit_up_pct * 100 * 0.98:
+        return round(price * (1 + limit_up_pct), 2), f"涨停排队价（+{limit_up_pct*100:.0f}%）"
+
+    # 突破信号 + 强评分：愿意付溢价优先成交
+    if exit_logic in ("swing_low", "trail_supertrend") and score >= 75:
+        return round(price * 1.01, 2), "强突破/趋势+1%（优先成交）"
+
+    # 均值回归（超跌抄底）：不追，挂限价等回调
+    if exit_logic == "bollinger_lower":
+        return round(price * 0.997, 2), "均值回归限价-0.3%（等回调）"
+
+    # ETF轮动：轻微溢价，流动性好无需太激进
+    if exit_logic == "momentum_relative":
+        return round(price * 1.003, 2), "ETF竞价+0.3%"
+
+    # 普通信号（趋势确认/一般突破）
+    return round(price * 1.005, 2), "普通竞价+0.5%"

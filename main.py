@@ -289,10 +289,13 @@ def cmd_scan(date: str | None = None, asset_types: list | None = None,
                 s.reason,
             ]
             if show_ops:
-                bid = round(s.price * 1.005, 2)
+                from strategies.position_manager import calc_entry_bid
                 el = _exit_cache.get(s.code)
+                _exit_logic = el.exit_logic if el else "atr"
+                _pct = float(s.extra.get("pct_chg", 0.0))
+                bid, bid_note = calc_entry_bid(s.price, _exit_logic, s.score,
+                                               _pct, s.position_type)
                 if el and el.stop_loss > 0:
-                    # 精确计算（有 exit_levels）
                     stop = el.stop_loss
                     shares = calc_position_size(s.price, stop, _capital, _risk, _max_pos)
                     r = calc_r_ratio(s.price, stop, el.take_profit)
@@ -300,16 +303,14 @@ def cmd_scan(date: str | None = None, asset_types: list | None = None,
                     shares_str = f"{shares}股{r_tag}"
                     stop_str = f"¥{stop:.2f}"
                 elif el and el.stop_loss == 0:
-                    # 配置仓无价格止损
                     shares_str = "配置仓"
                     stop_str = "基本面"
                 else:
-                    # 估算（全市场扫描模式无 df）
                     est_stop = round(s.price * (1 - RISK_CONTROL.get("stop_loss_ratio", 0.07)), 2)
                     shares = calc_position_size(s.price, est_stop, _capital, _risk, _max_pos)
                     shares_str = f"~{shares}股(估)"
                     stop_str = f"¥{est_stop:.2f}(估)"
-                row += [f"¥{bid:.2f}", shares_str, stop_str]
+                row += [f"¥{bid:.2f}\n[dim]{bid_note}[/dim]", shares_str, stop_str]
             row.append(warnings or "-")
             t.add_row(*row)
         console.print(t)
@@ -1135,7 +1136,9 @@ def cmd_portfolio(date: str | None = None,
         rec_shares = calc_position_size(cost, stop_real, total_capital,
                                         risk_per_trade, RISK_CONTROL.get("max_single_position", 0.10)) if stop_real > 0 else 0
         pnl_color = "green" if pnl_pct >= 0 else "red"
-        bid = round(current_price * 1.005, 2)
+        from strategies.position_manager import calc_entry_bid
+        _pct = float(df_r.iloc[-1].get("pct_chg", 0.0)) if "pct_chg" in df_r.columns else 0.0
+        bid, bid_note = calc_entry_bid(current_price, el.exit_logic, 70.0, _pct, pos_type)
         ask = round(current_price * 0.995, 2)
 
         # ── 输出卡片 ────────────────────────────────────────
@@ -1178,7 +1181,7 @@ def cmd_portfolio(date: str | None = None,
                     )
                 console.print(tbl)
 
-        console.print(f"  [dim]委托参考 → 买入¥{bid:.2f}（昨收+0.5%）  卖出¥{ask:.2f}（昨收-0.5%）[/dim]\n")
+        console.print(f"  [dim]委托参考 → 买入¥{bid:.2f}（{bid_note}）  卖出¥{ask:.2f}（昨收-0.5%）[/dim]\n")
 
 
 def cmd_exit_levels(code: str, entry: float | None = None, strategy: str | None = None):
