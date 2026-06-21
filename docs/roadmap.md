@@ -76,14 +76,14 @@
 - [x] A-4 统一 `check_data` 新鲜度采样逻辑：采样前 5 只取最新日期（与 scanner 一致），避免单只未更新误报
 - [x] A-5 补 GAP-04 等对应测试并运行（全量回归通过）
 
-### 阶段 B — Agent 契约对齐
+### 阶段 B — Agent 契约对齐 ✅ 部分完成（2026-06-21）
 
-里程碑：Tool 层返回结构符合 agent.md 契约，编排补全。
+里程碑：Tool 层返回结构符合 agent.md 契约。B-1/B-2 已落地；B-3/B-4 经核实为误报，撤回。
 
-- [ ] B-1 `generate_orders` 返回补 `total_amount`；TradeOrder 加 `broker_order_id` 预留字段（GAP-29）
-- [ ] B-2 `list_strategies` 改返回 `version/requires_bars`，去 `market_condition`
-- [ ] B-3 修复 `select_strategies` 对配置仓 horizon 的误杀
-- [ ] B-4 接入 `evaluate` 节点 + `compare_strategies` 到 workflow
+- [x] B-1 `generate_orders` 返回补 `total_amount`；TradeOrder 加 `broker_order_id / filled_price / filled_qty / filled_at` 券商预留字段（GAP-29，初值 None）
+- [x] B-2 `list_strategies` 改返回 `version/requires_bars`，去废弃 `market_condition`
+- [~] B-3 ~~修复 `select_strategies` 对配置仓 horizon 的误杀~~ **撤回**：horizon 是有意设计的选择维度（`test_medium_horizon_selects_b1_b3_not_b2` 等测试明确编码 medium→B1/B3、long→B2）；`["short"]` 仅在"有景气数据且偏低+高资金流"的纯动量行业触发，此时不选长期配置仓策略是正确行为；且 `select_strategies` 第 180 行有筛空回退全集兜底。非 bug。
+- [~] B-4 ~~接入 `evaluate` 节点 + `compare_strategies` 到 workflow~~ **撤回**：`compare_strategies`/`run_backtest` 是回测研究能力，不属于收盘后实盘扫描的日常工作流；回测较慢，塞入关键路径拖慢信号时效；绩效驱动策略选择本就规划在阶段五（GAP-48），届时再以正确方式接入。当前接入是无消费方的过早抽象。
 
 ### 阶段 C — A2 辅助分析（核心可用性）
 

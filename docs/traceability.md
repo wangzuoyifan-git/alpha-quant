@@ -430,7 +430,7 @@
 | GAP-26 | I1-推送失败重试 | 失败时重试一次不影响其他渠道 | L1 | mock 推送失败，验证重试和渠道隔离 |
 | GAP-27 | F2-策略汇总 | 交易记录按策略分类汇总 | L2 | 验证汇总统计的正确性 |
 | GAP-28 | AC1-Tool封装 | agent_tools 返回结构化 dict | L1 | ✅ 已覆盖（UT-AT-01~09，`tests/test_agent_tools.py` 接口契约测试） |
-| GAP-29 | AC6-预留API字段 | 交易记录预留券商API字段 | L1 | 验证数据结构包含预留字段 |
+| ✅ GAP-29 | AC6-预留API字段 | 交易记录预留券商API字段 | L1 | ✅ 已补充（TradeOrder 含 broker_order_id/filled_price/filled_qty/filled_at；`tests/test_agent_tools.py::TestRealTradeOrderBrokerFields`） |
 | GAP-30 | AC8-双价格存储 | 同时保留原始价和复权价 | L1 | 验证 store 存储结构包含两列 |
 
 ### 4.3 不需要自动化测试的需求
