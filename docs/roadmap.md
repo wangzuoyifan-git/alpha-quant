@@ -85,13 +85,16 @@
 - [~] B-3 ~~修复 `select_strategies` 对配置仓 horizon 的误杀~~ **撤回**：horizon 是有意设计的选择维度（`test_medium_horizon_selects_b1_b3_not_b2` 等测试明确编码 medium→B1/B3、long→B2）；`["short"]` 仅在"有景气数据且偏低+高资金流"的纯动量行业触发，此时不选长期配置仓策略是正确行为；且 `select_strategies` 第 180 行有筛空回退全集兜底。非 bug。
 - [~] B-4 ~~接入 `evaluate` 节点 + `compare_strategies` 到 workflow~~ **撤回**：`compare_strategies`/`run_backtest` 是回测研究能力，不属于收盘后实盘扫描的日常工作流；回测较慢，塞入关键路径拖慢信号时效；绩效驱动策略选择本就规划在阶段五（GAP-48），届时再以正确方式接入。当前接入是无消费方的过早抽象。
 
-### 阶段 C — A2 辅助分析（核心可用性）
+### 阶段 C — A2 辅助分析（核心可用性）✅ 已完成（2026-06-21）
 
-里程碑：每条信号附带 P0 辅助分析，推送与看板同步展示。
+里程碑：每条信号附带 P0 辅助分析，推送与看板同步展示。全量回归 515 passed / 2 skipped。
 
-- [ ] C-1 信号聚合技术面/资金流近5日净流入/基本面 ROE 等 P0 摘要
-- [ ] C-2 推送（`notifier/push.py`）与 Web 看板同步展示
-- [ ] C-3 补 GAP-14（情绪因子计算）等测试
+- [x] C-1 信号聚合 P0 辅助分析（`agent_tools/analysis.py`）：技术面（涨跌幅/量比/换手/近20日区间）、资金流（近5日主力净流入）、基本面（ROE-TTM/净利同比/毛利率/资产负债率/PE/PB）、北向背景；遵循 A3 数据缺失标注 `available=False`
+- [x] C-2 推送（`notifier/push.py` 文本+HTML）与 Web 看板（`/signals` 辅助分析列）同步展示；信号经 `enrich_signal_objects` 写入 `extra.analysis` 随 `save_signals` 持久化
+- [x] C-3 新增 `tests/test_analysis.py`（14 项，含量比 IT-AA-04、主力净流入 IT-AA-05、ROE-TTM、A3 缺失标注、推送/看板格式化）
+- 备注：GAP-14（融资余额情绪因子，P1）属 A2 P1 范畴，本阶段聚焦 P0，留待 P1 批次（margin 数据源已具备，见 traceability GAP-12/13）
+
+> 运维提示：跑全量测试统一加 `--timeout=30`（pytest-timeout），避免无超时盲等。
 
 ### 阶段 D — 阶段五预备：绩效驱动（GAP-48）
 

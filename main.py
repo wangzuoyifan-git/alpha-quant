@@ -323,6 +323,9 @@ def cmd_scan(date: str | None = None, asset_types: list | None = None,
 
     # 非指定股票模式才推送/持久化
     if not codes:
+        # A2：为信号附加 P0 辅助分析（技术面/资金流/基本面），写入 extra 随信号持久化
+        from agent_tools.analysis import enrich_signal_objects
+        enrich_signal_objects(signals, date=date)
         notifier.send_signals(signals)
         from signals.manager import save_signals
         save_signals(signals, date=date)
@@ -516,6 +519,36 @@ def cmd_workflow(date: str | None = None,
         console.print(f"  [dim]{line}[/dim]")
 
 
+def _build_aux_summary(extra: dict) -> str:
+    """从持久化的 extra.analysis 构建 A2 辅助分析精简摘要（Web 看板用）。"""
+    aux = (extra or {}).get("analysis")
+    if not aux:
+        return ""
+    parts = []
+    tech = aux.get("technical", {})
+    if tech.get("available"):
+        if tech.get("pct_chg") is not None:
+            parts.append(f"涨跌{tech['pct_chg']:+.1f}%")
+        if tech.get("volume_ratio") is not None:
+            parts.append(f"量比{tech['volume_ratio']:.2f}")
+        if tech.get("turnover") is not None:
+            parts.append(f"换手{tech['turnover']:.1f}%")
+    mf = aux.get("moneyflow", {})
+    if mf.get("available") and mf.get("main_net_inflow_5d") is not None:
+        parts.append(f"主力5日{mf['main_net_inflow_5d']/10000:+.2f}亿")
+    fund = aux.get("fundamental", {})
+    if fund.get("available"):
+        if fund.get("roe_ttm") is not None:
+            parts.append(f"ROE{fund['roe_ttm']:.1f}%")
+        if fund.get("net_profit_yoy") is not None:
+            parts.append(f"净利同比{fund['net_profit_yoy']:+.1f}%")
+        if fund.get("pe_ttm") is not None:
+            parts.append(f"PE{fund['pe_ttm']:.1f}")
+        if fund.get("pb_mrq") is not None:
+            parts.append(f"PB{fund['pb_mrq']:.2f}")
+    return " | ".join(parts)
+
+
 def cmd_web():
     """启动 Web 看板"""
     try:
@@ -619,7 +652,7 @@ def cmd_web():
         {% if signals %}
         <p class="page-info">共 {{ signals|length }} 条信号（按评分降序）</p>
         <table id="sigTable">
-          <tr><th>#</th><th>代码</th><th>名称</th><th>信号</th><th>价格</th><th>评分</th><th>原因</th><th>时间</th></tr>
+          <tr><th>#</th><th>代码</th><th>名称</th><th>信号</th><th>价格</th><th>评分</th><th>原因</th><th>辅助分析(P0)</th><th>时间</th></tr>
           {% for s in signals %}
           <tr data-sig="{{ s.signal }}">
             <td class="muted">{{ loop.index }}</td>
@@ -629,6 +662,7 @@ def cmd_web():
             <td>¥{{ "%.3f"|format(s.price) }}</td>
             <td class="score">{{ "%.1f"|format(s.score) }}</td>
             <td>{{ s.reason }}</td>
+            <td class="muted" style="font-size:12px">{{ s.aux_summary or "数据不可用" }}</td>
             <td class="muted">{{ s.generated_at[:16] if s.generated_at else "" }}</td>
           </tr>
           {% endfor %}
@@ -680,6 +714,10 @@ def cmd_web():
             raw = load_signals(date)
             # 按评分降序
             raw.sort(key=lambda x: x.get("score", 0), reverse=True)
+
+            # A2：从 extra.analysis 构建辅助分析精简摘要
+            for s in raw:
+                s["aux_summary"] = _build_aux_summary(s.get("extra", {}))
 
             return render_template_string(
                 HTML_SIGNALS,

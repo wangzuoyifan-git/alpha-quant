@@ -94,6 +94,30 @@ class Notifier:
 
     MAX_PUSH_CHARS = 2000  # I1：推送内容 ≤ 2000 字符
 
+    @staticmethod
+    def _format_aux_line(s: Signal) -> str:
+        """从 signal.extra["analysis"] 提取 A2 精简版（推送用单行摘要）。"""
+        aux = (s.extra or {}).get("analysis") if s.extra else None
+        if not aux:
+            return ""
+        parts = []
+        tech = aux.get("technical", {})
+        if tech.get("available"):
+            if tech.get("pct_chg") is not None:
+                parts.append(f"涨跌{tech['pct_chg']:+.1f}%")
+            if tech.get("volume_ratio") is not None:
+                parts.append(f"量比{tech['volume_ratio']:.2f}")
+        mf = aux.get("moneyflow", {})
+        if mf.get("available") and mf.get("main_net_inflow_5d") is not None:
+            parts.append(f"主力5日{mf['main_net_inflow_5d']/10000:+.2f}亿")
+        fund = aux.get("fundamental", {})
+        if fund.get("available"):
+            if fund.get("roe_ttm") is not None:
+                parts.append(f"ROE{fund['roe_ttm']:.1f}%")
+            if fund.get("pe_ttm") is not None:
+                parts.append(f"PE{fund['pe_ttm']:.1f}")
+        return " | ".join(parts)
+
     def _format_signals(self, signals: List[Signal]) -> str:
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
         lines = [f"【Alpha量化】 {now}  共 {len(signals)} 个信号\n"]
@@ -104,6 +128,9 @@ class Notifier:
                 f"评分:{s.score:.0f}\n"
                 f"   {s.reason}"
             )
+            aux = self._format_aux_line(s)
+            if aux:
+                line += f"\n   {aux}"
             lines.append(line)
         result = "\n".join(lines)
         if len(result) > self.MAX_PUSH_CHARS:
@@ -120,13 +147,15 @@ class Notifier:
         rows = ""
         for s in signals:
             color = "#d9534f" if s.signal == "BUY" else "#5cb85c" if s.signal == "SELL" else "#5bc0de"
+            aux = self._format_aux_line(s)
+            aux_html = f"<br><span style='color:#888;font-size:12px'>{aux}</span>" if aux else ""
             rows += (
                 f"<tr>"
                 f"<td>{s.code}</td><td>{s.name}</td>"
                 f"<td style='color:{color};font-weight:bold'>{s.signal}</td>"
                 f"<td>¥{s.price:.2f}</td>"
                 f"<td>{s.score:.0f}</td>"
-                f"<td>{s.reason}</td>"
+                f"<td>{s.reason}{aux_html}</td>"
                 f"</tr>"
             )
         return f"""
