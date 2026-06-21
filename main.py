@@ -1077,15 +1077,16 @@ def cmd_portfolio(date: str | None = None,
             if style == "industry_allocation":
                 # L2 行业评分：读行业三维评分判断是否应减配
                 industry_code = h.get("industry", "")
+                ind_level = h.get("industry_level", "L2")  # 默认L2粒度
                 try:
                     from agents.industry_agent import get_industry_score
-                    score_info = get_industry_score(industry_code) if industry_code else None
+                    score_info = get_industry_score(industry_code, level=ind_level) if industry_code else None
                 except Exception:
                     score_info = None
 
                 from strategies.builtin.etf_momentum import ETFMomentumStrategy
                 el = ETFMomentumStrategy().compute_exit_levels(df_r, entry_price=hfq_price)
-                used_strategy = "L2行业评分"
+                used_strategy = f"{ind_level}行业评分"
                 if score_info:
                     pct = score_info["percentile"]
                     score_val = score_info["score"]

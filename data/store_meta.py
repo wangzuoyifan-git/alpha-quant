@@ -173,6 +173,61 @@ def list_industry_codes(level: str = "L1") -> list:
     return sel[["index_code", "industry_name"]].to_dict("records")
 
 
+def map_to_l1(industry_codes: list[str], level: str = "L2") -> list[str]:
+    """
+    将 L2/L3 申万行业代码（index_code，如 "801081.SI"）映射到其 L1 父级代码。
+
+    用途：L2/L3 粒度的行业池选出后，仍需映射到 L1 行业ETF白名单
+    （SW_L1_ETF_MAP 按 L1 键）。基于 industry_classify 树的 parent_code 链。
+
+    L1 直接原样返回（去重）。数据缺失或无法映射的代码被跳过。
+
+    :param industry_codes: 子级行业代码列表（带/不带 .SI 后缀均可）
+    :param level: 输入代码的层级 L2/L3
+    :return: 去重的 L1 行业代码列表（带 .SI 后缀，如 ["801080.SI"]）
+    """
+    if level == "L1":
+        # 规范化为带 .SI 后缀
+        seen, out = set(), []
+        for c in industry_codes:
+            k = c if c.endswith(".SI") else c.split(".")[0] + ".SI"
+            if k not in seen:
+                seen.add(k); out.append(k)
+        return out
+
+    df = load("industry_classify")
+    if df is None or df.empty or "parent_code" not in df.columns:
+        return []
+
+    # index_code(801xxx.SI) → industry_code(6位) 与反向映射
+    code6_by_index = dict(zip(df["index_code"].astype(str),
+                              df["industry_code"].astype(str)))
+    index_by_code6 = dict(zip(df["industry_code"].astype(str),
+                              df["index_code"].astype(str)))
+    parent_by_code6 = dict(zip(df["industry_code"].astype(str),
+                               df["parent_code"].astype(str)))
+    level_by_code6 = dict(zip(df["industry_code"].astype(str),
+                              df["level"].astype(str)))
+
+    seen, out = set(), []
+    for raw in industry_codes:
+        idx = raw if raw.endswith(".SI") else raw.split(".")[0] + ".SI"
+        code6 = code6_by_index.get(idx)
+        if code6 is None:
+            continue
+        # 沿 parent_code 链上溯到 L1
+        guard = 0
+        while code6 and level_by_code6.get(code6) != "L1" and guard < 5:
+            code6 = parent_by_code6.get(code6)
+            guard += 1
+        if not code6 or level_by_code6.get(code6) != "L1":
+            continue
+        l1_idx = index_by_code6.get(code6)
+        if l1_idx and l1_idx not in seen:
+            seen.add(l1_idx); out.append(l1_idx)
+    return out
+
+
 # ─── 申万L1行业 → 代表性行业ETF 映射表 ───────────────────────────────────────
 # 每个行业选 1~3 只流动性较好的代表性行业ETF（优先老牌主流产品）。
 # 用途：L2 行业池选出后，映射出对应ETF白名单，供 L3 etf_momentum 在白名单内择时。

@@ -170,3 +170,50 @@ class TestMetaSaveLoad:
         store_meta.save("calendar", None)
         store_meta.save("calendar", pd.DataFrame())
         assert store_meta.load("calendar") is None
+
+
+class TestMapToL1:
+    """map_to_l1：L2/L3 申万行业代码 → L1 父级桥接（ETF白名单用）"""
+
+    @pytest.fixture
+    def tmp_classify(self, tmp_path, monkeypatch):
+        """构造小型分类树：L1=电子(801080) → L2=半导体(801081) → L3(801084)"""
+        original = store_meta.BASE_DIR
+        store_meta.BASE_DIR = tmp_path / "meta"
+        store_meta.BASE_DIR.mkdir(parents=True, exist_ok=True)
+        df = pd.DataFrame([
+            {"index_code": "801080.SI", "industry_name": "电子",
+             "level": "L1", "industry_code": "270000", "parent_code": "0"},
+            {"index_code": "801081.SI", "industry_name": "半导体",
+             "level": "L2", "industry_code": "270100", "parent_code": "270000"},
+            {"index_code": "801084.SI", "industry_name": "集成电路",
+             "level": "L3", "industry_code": "270101", "parent_code": "270100"},
+            {"index_code": "801780.SI", "industry_name": "银行",
+             "level": "L1", "industry_code": "480000", "parent_code": "0"},
+            {"index_code": "801782.SI", "industry_name": "股份制银行Ⅱ",
+             "level": "L2", "industry_code": "480200", "parent_code": "480000"},
+        ])
+        store_meta.save("industry_classify", df)
+        yield
+        store_meta.BASE_DIR = original
+
+    def test_l2_maps_to_l1(self, tmp_classify):
+        assert store_meta.map_to_l1(["801081.SI"], level="L2") == ["801080.SI"]
+
+    def test_l3_maps_to_l1(self, tmp_classify):
+        assert store_meta.map_to_l1(["801084.SI"], level="L3") == ["801080.SI"]
+
+    def test_l1_passthrough_dedup(self, tmp_classify):
+        out = store_meta.map_to_l1(["801080.SI", "801080", "801780.SI"], level="L1")
+        assert out == ["801080.SI", "801780.SI"]
+
+    def test_multiple_l2_dedup_to_same_l1(self, tmp_classify):
+        # 半导体(L2) 与 集成电路按代码都归电子；股份制银行归银行
+        out = store_meta.map_to_l1(["801081.SI", "801782.SI"], level="L2")
+        assert set(out) == {"801080.SI", "801780.SI"}
+
+    def test_unknown_code_skipped(self, tmp_classify):
+        assert store_meta.map_to_l1(["999999.SI"], level="L2") == []
+
+    def test_no_suffix_input(self, tmp_classify):
+        assert store_meta.map_to_l1(["801081"], level="L2") == ["801080.SI"]

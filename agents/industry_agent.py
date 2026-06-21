@@ -428,9 +428,11 @@ def evaluate_industry_rotation(risk_mode: str = "balanced",
 
         # 行业 → 行业ETF 映射（L3 etf_momentum 白名单）
         import data.store as _store
-        from data.store_meta import get_industry_etfs
+        from data.store_meta import get_industry_etfs, map_to_l1
         available_etfs = set(_store.list_codes("etf", market="cn"))
-        etf_candidates = get_industry_etfs(allowed, available_codes=available_etfs)
+        # L2/L3 行业池需先桥接到 L1（SW_L1_ETF_MAP 按 L1 键）
+        l1_for_etf = map_to_l1(allowed, level=level) if level != "L1" else allowed
+        etf_candidates = get_industry_etfs(l1_for_etf, available_codes=available_etfs)
         logger.info(f"L2 行业ETF白名单: {len(etf_candidates)} 只 ETF")
 
         return {
