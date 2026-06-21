@@ -61,11 +61,10 @@ class DeepValueStrategy(BaseStrategy):
         if df is None or df.empty or "close" not in df.columns:
             return []
 
-        # 行业排除：金融/地产（通过 extra 传入 industry_code，扫描引擎注入）
+        # 行业排除：金融/地产（通过 meta 域反查申万一级行业，code→L1）
         if exclude_finance:
-            ind = str(df.attrs.get("industry_code", "")) or str(
-                df.iloc[-1].get("industry_code", "") if "industry_code" in df.columns else ""
-            )
+            from data.store_meta import get_stock_l1_industry
+            ind = get_stock_l1_industry(code)
             if ind in _EXCLUDED_INDUSTRIES:
                 return []
 

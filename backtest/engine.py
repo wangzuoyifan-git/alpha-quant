@@ -105,6 +105,7 @@ class Backtester:
         self.commission = config.get("commission_rate", 0.0003)
         self.slippage = config.get("slippage", 0.001)
         self.position_size = config.get("position_size", 0.1)
+        self.max_positions = config.get("max_positions", 10)
 
     def run(self, strategy: BaseStrategy, stock_codes: list[str],
             start: str, end: str, asset_type: str = "stock") -> BacktestResult:
@@ -236,8 +237,8 @@ class Backtester:
                 if not sold and el_dict and el_dict.get("exit_logic", "").startswith("trail_"):
                     positions[code]["exit_levels"] = update_trail_stop(el_dict, df_slice.reset_index())
 
-            # 扫描买入信号（最多同时持仓 10 只）
-            if len(positions) < 10:
+            # 扫描买入信号（最多同时持仓 max_positions 只）
+            if len(positions) < self.max_positions:
                 for code, df in data.items():
                     if code in positions or date not in df.index:
                         continue
@@ -248,7 +249,7 @@ class Backtester:
                         df_slice.reset_index(), code, code
                     )
                     buy_sigs = [s for s in sigs if s.signal == "BUY"]
-                    if buy_sigs and len(positions) < 10:
+                    if buy_sigs and len(positions) < self.max_positions:
                         price = float(df.loc[date, "close"]) * (1 + self.slippage)
                         alloc = capital * self.position_size
                         shares = int(alloc / price / 100) * 100

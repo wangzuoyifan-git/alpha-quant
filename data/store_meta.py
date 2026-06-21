@@ -164,6 +164,30 @@ def get_member_stocks(industry_codes: list, level: str = "L1") -> list:
     return sorted({str(c).split(".")[0] for c in sel["ts_code"]})
 
 
+_STOCK_L1_CACHE: Optional[dict] = None
+
+
+def get_stock_l1_industry(code: str) -> Optional[str]:
+    """
+    反查股票所属申万一级行业代码（6位，无后缀）。
+
+    :param code: 股票代码（带/不带后缀均可，如 "600519" 或 "600519.SH"）
+    :return: L1 行业代码（6位，如 "801780"）；数据缺失或未匹配返回 None
+    """
+    global _STOCK_L1_CACHE
+    if _STOCK_L1_CACHE is None:
+        df = load("industry_member")
+        if df is None or df.empty or "ts_code" not in df.columns or "l1_code" not in df.columns:
+            _STOCK_L1_CACHE = {}
+        else:
+            _STOCK_L1_CACHE = {
+                str(ts).split(".")[0]: str(l1).split(".")[0]
+                for ts, l1 in zip(df["ts_code"], df["l1_code"])
+            }
+    code6 = str(code).split(".")[0]
+    return _STOCK_L1_CACHE.get(code6)
+
+
 def list_industry_codes(level: str = "L1") -> list:
     """返回指定层级的所有申万行业代码（含名称），用于校验和展示。"""
     df = load("industry_classify")

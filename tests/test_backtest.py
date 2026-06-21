@@ -388,3 +388,15 @@ class TestBacktestETFSupport:
         except ValueError:
             pass
         assert "stock" in listed
+
+
+class TestBacktestMaxPositions:
+    """RC2 对齐：同时持仓上限从配置读取，不硬编码"""
+
+    def test_max_positions_from_config(self):
+        bt = Backtester(None, {"max_positions": 5})
+        assert bt.max_positions == 5
+
+    def test_max_positions_default(self):
+        bt = Backtester(None, {})
+        assert bt.max_positions == 10

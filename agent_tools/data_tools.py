@@ -38,7 +38,10 @@ def check_data_freshness() -> dict:
 
     codes = store.list_codes("stock")
     if codes:
-        ld = store.last_date(codes[0])
+        # 与扫描引擎一致：采样多只取最新日期，避免单只未更新导致误报
+        sample = codes[:5]
+        dates = [d for d in (store.last_date(c) for c in sample) if d]
+        ld = max(dates) if dates else None
         result["domains"]["market/stock"] = ld or "N/A"
         if ld and ld < last_trading:
             result["stale"].append("market/stock")

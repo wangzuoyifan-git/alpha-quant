@@ -76,6 +76,9 @@ def patch_fund(monkeypatch):
     monkeypatch.setattr(b1, "load_fund", fake_load)
     monkeypatch.setattr(b2, "load_fund", fake_load)
     monkeypatch.setattr(b3, "load_fund", fake_load)
+    # deep_value 行业排除依赖 meta 反查；默认 mock 为非金融地产行业（食品饮料 801120）
+    import data.store_meta as meta
+    monkeypatch.setattr(meta, "get_stock_l1_industry", lambda code: "801120")
     return store
 
 
@@ -153,11 +156,26 @@ class TestB2DeepValue:
         """低PB + 低PE + 盈利为正 + 负债可控 → WATCH/config/long"""
         s = DeepValueStrategy()
         df = make_kline(pe=10.0, pb=1.2)
-        sigs = s.generate_signals(df, "601398", "工商银行")
+        sigs = s.generate_signals(df, "600519", "贵州茅台")
         assert len(sigs) == 1
         assert sigs[0].signal == "WATCH"
         assert sigs[0].position_type == "config"
         assert sigs[0].time_horizon == "long"
+
+    def test_finance_industry_excluded(self, patch_fund, monkeypatch):
+        """金融/地产行业即便低PB低PE也应被排除（防伪低估）"""
+        import data.store_meta as meta
+        monkeypatch.setattr(meta, "get_stock_l1_industry", lambda code: "801780")  # 银行
+        s = DeepValueStrategy()
+        assert s.generate_signals(make_kline(pe=8.0, pb=0.8), "601398", "工商银行") == []
+
+    def test_exclude_finance_disabled(self, patch_fund, monkeypatch):
+        """exclude_finance=False 时金融股不被行业排除"""
+        import data.store_meta as meta
+        monkeypatch.setattr(meta, "get_stock_l1_industry", lambda code: "801780")
+        s = DeepValueStrategy({"exclude_finance": False})
+        sigs = s.generate_signals(make_kline(pe=8.0, pb=0.8), "601398", "工商银行")
+        assert len(sigs) == 1
 
     def test_high_pb_rejected(self, patch_fund):
         s = DeepValueStrategy()

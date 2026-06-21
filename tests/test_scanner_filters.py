@@ -132,3 +132,62 @@ class TestSTFilter:
         codes = result["code"].tolist()
         assert "000002" not in codes
         assert "000001" in codes
+
+
+def _make_df(amount: float, n: int = 40):
+    """构造 n 根 K 线，最后一根成交额为 amount。"""
+    import numpy as np
+    dates = pd.date_range("2024-01-01", periods=n, freq="D")
+    df = pd.DataFrame({
+        "open": 10.0, "high": 10.5, "low": 9.5, "close": 10.0,
+        "volume": 5_000_000, "amount": amount,
+        "trade_status": "1",
+    }, index=dates)
+    df.index.name = "date"
+    return df
+
+
+class TestAmountFilter:
+    """GAP-04: 成交额低于阈值的标的不参与扫描（流动性过滤）"""
+
+    def _scanner_with_amount_filter(self, min_amount, with_strategy=False):
+        from engine.scanner import ScanEngine
+        from strategies.base import Signal
+        cfg = {
+            "min_volume": 0, "min_price": 2.0, "max_price": 500.0,
+            "min_amount": min_amount, "top_n": 20,
+        }
+        scanner = ScanEngine(MagicMock(), cfg)
+        if with_strategy:
+            fake = MagicMock()
+            fake.name = "fake"
+            fake.applicable_asset_types = []
+            fake.generate_signals = lambda df, code, name: [
+                Signal(code=code, name=name, signal="BUY", price=10.0,
+                       reason="test", score=80.0)
+            ]
+            scanner.strategies = {"fake": fake}
+        else:
+            scanner.strategies = {}
+        return scanner
+
+    def test_low_amount_excluded(self, monkeypatch):
+        scanner = self._scanner_with_amount_filter(30_000_000, with_strategy=True)
+        # 成交额 1000 万 < 阈值 3000 万 → 应在成交额步被拦截
+        monkeypatch.setattr("data.store.load", lambda *a, **k: _make_df(10_000_000))
+        result = scanner._scan_single("000001", "测试股", "2024-01-01", "2024-02-09")
+        assert result == [], "成交额低于阈值应被过滤，不进入策略循环"
+
+    def test_high_amount_passes_filter(self, monkeypatch):
+        scanner = self._scanner_with_amount_filter(30_000_000, with_strategy=True)
+        # 成交额 5 亿 > 阈值 → 通过过滤，策略产出信号
+        monkeypatch.setattr("data.store.load", lambda *a, **k: _make_df(500_000_000))
+        result = scanner._scan_single("000001", "测试股", "2024-01-01", "2024-02-09")
+        assert len(result) == 1, "成交额高于阈值应通过过滤并产出信号"
+
+    def test_zero_min_amount_disables_filter(self, monkeypatch):
+        scanner = self._scanner_with_amount_filter(0, with_strategy=True)
+        # min_amount=0 时即便成交额极低也不拦
+        monkeypatch.setattr("data.store.load", lambda *a, **k: _make_df(1.0))
+        result = scanner._scan_single("000001", "测试股", "2024-01-01", "2024-02-09")
+        assert len(result) == 1, "min_amount=0 关闭过滤，信号正常产出"

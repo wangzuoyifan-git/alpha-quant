@@ -372,7 +372,7 @@
 | ✅ GAP-01 | RC5 | 总账户回撤超限时暂停新开仓 | L1 | ✅ 已补充（`tests/test_risk_control.py` TestRC5TotalDrawdown） |
 | ✅ GAP-02 | S4-北交所过滤 | 北交所标的不参与扫描 | L1+L2 | ✅ 已补充（`tests/test_scanner_filters.py` TestNorthExchangeFilter） |
 | ✅ GAP-03 | S4-新股过滤 | 上市不足60日不参与扫描 | L1+L2 | ✅ 已补充（`tests/test_scanner_filters.py` TestNewStockFilter） |
-| GAP-04 | S4-成交额过滤 | 成交额低于阈值不参与扫描 | L1+L2 | ⏳ scanner 当前按 min_volume 过滤，成交额（amount）过滤逻辑待实现 |
+| ✅ GAP-04 | S4-成交额过滤 | 成交额低于阈值不参与扫描 | L1+L2 | ✅ 已补充（scanner `min_amount` 按 `amount`/元 过滤；`tests/test_scanner_filters.py::TestAmountFilter`） |
 | ✅ GAP-05 | F1-预期价记录 | 确认指令单后记录预期买入价 | L1 | ✅ 已补充（`tests/test_risk_control.py` TestF1ExpectedPrice） |
 | ✅ GAP-06 | F1-实际成交录入 | 支持手动录入实际成交价/数量 | L1+L2 | ✅ 已补充（`tests/test_risk_control.py` TestF1F2Execution） |
 | GAP-07 | F2-持仓盈亏更新 | 每日更新持仓盈亏 | L2 | ⏳ 依赖本地行情数据，待补充 |

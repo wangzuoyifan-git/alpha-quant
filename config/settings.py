@@ -37,6 +37,7 @@ SCAN = {
     "exclude_st": True,          # 排除ST股票
     "exclude_new": True,         # 排除上市不足60天新股
     "min_volume": 1_000_000,     # 最低成交量（手）
+    "min_amount": 30_000_000,    # 最低成交额（元，S4 流动性过滤；0 表示不过滤）
     "min_price": 2.0,            # 最低股价（元）
     "max_price": 500.0,          # 最高股价（元）
     "top_n": 20,                 # 每次推送最多选股数量
@@ -50,6 +51,7 @@ BACKTEST = {
     "commission_rate": 0.0003,       # 手续费率（买+卖）
     "slippage": 0.001,               # 滑点
     "position_size": 0.1,            # 单只股票仓位上限（占总资金比例）
+    "max_positions": 10,             # 同时持仓上限（对齐 RC2）
     "benchmark": "000300.SH",        # 基准指数（沪深300）
 }
 

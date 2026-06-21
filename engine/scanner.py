@@ -198,9 +198,13 @@ class ScanEngine:
         min_price  = self.cfg.get("min_price", 0)
         max_price  = self.cfg.get("max_price", float("inf"))
         min_volume = self.cfg.get("min_volume", 0)
+        min_amount = self.cfg.get("min_amount", 0)
         if not (min_price <= float(last["close"]) <= max_price):
             return []
         if float(last.get("volume", 0)) < min_volume:
+            return []
+        # S4：成交额过滤（流动性不足，按真实成交额/元过滤，可配置）
+        if min_amount and float(last.get("amount", 0)) < min_amount:
             return []
 
         df_reset = df.reset_index()
