@@ -3,6 +3,8 @@
 > 数据层接口、各域结构、数据源说明、待办缺口。
 > 最后更新：2026-06-17（K线主源切换为 Tushare；新增 inspect 数据直查工具）
 >
+> 2026-06-21 补充：新增 store_meta.map_to_l1 接口；记录 ETF 估值 Tushare 权限缺口（sw_daily/fund_portfolio）与过渡方案；新增 data/etf_config.json 说明。
+>
 > **项目基础信息见 `docs/project.md`**
 > **数据需求详细定义（D1~D7 含需求来源、字段要求、时效要求）见 `docs/requirements.md` 第二章**
 
@@ -67,6 +69,9 @@ data/events/
   calendar.json          E1 定期事件日历
   corporate/             E2 企业事件（按code分片）
   market_shock/          E3 突发事件归档
+
+data/etf_config.json     ← ETF 元数据与政策配置（手工维护，可进 git）
+                            名称/跟踪指数/sw_l2_codes映射/政策展望/标签，供 etf_agent 三维评分
 ```
 
 **行业资金流双体系说明：**
@@ -118,8 +123,11 @@ store_meta.exists(data_type, code=None) -> bool
 store_meta.last_date(data_type) -> Optional[str]
 store_meta.get_member_stocks(industry_codes, level="L1") -> list[str]
 store_meta.get_industry_etfs(industry_codes, available_codes=None) -> list[str]
+store_meta.map_to_l1(industry_codes, level="L2") -> list[str]
 # get_industry_etfs：根据申万L1行业代码列表，返回对应代表性行业ETF代码列表
 # SW_L1_ETF_MAP：模块级常量，31个申万L1行业→代表性行业ETF映射表（供L2输出etf_candidates用）
+# map_to_l1：沿 industry_classify.parent_code 链将 L2/L3 行业代码上溯到 L1 父级
+#            （ETF白名单 SW_L1_ETF_MAP 按 L1 键，L2/L3 行业池需先桥接）
 ```
 
 `data_type` 取值：`industry_csrc` / `industry_sw` / `sw_index` / `calendar`
@@ -410,6 +418,13 @@ factor 域 `moneyflow`（AKShare 近60天）/ `moneyflow_sector`；tushare 域 `
 | 十大流通股东 | tushare/holders | Tushare `top10_floatholders` | P2 | 季频，机构持仓变化 |
 | 股东人数 | tushare/holders | Tushare `stk_holdernumber` | P2 | 筹码集中度判断 |
 | E3 突发事件自动识别（D8c） | events/market_shock | Phase 2 新闻 API + LLM | P2 | Phase 1 结构已建，内容人工补录 |
+| 申万行业 PE/PB | meta/sw_daily | Tushare `sw_daily` | P2 | **Tushare 当前账号无权限**；ETF/L2 估值现用成员股 pe_ttm 聚合代理（见下） |
+| ETF 成分股权重 | — | Tushare `fund_portfolio` | P2 | **Tushare 当前账号无权限**；ETF 估值现用 sw_l2_codes 映射代理（见下） |
+
+**ETF 估值数据过渡方案（2026-06-21，决策C）：**
+- 细分主题 ETF 三维评分的"估值维度"暂用 **ETF→申万L2 映射聚合代理**：`data/etf_config.json` 的 `sw_l2_codes` 字段把 ETF 映射到申万 L2 行业，复用 L2 三维评分的估值维度（成员股 `pe_ttm` 历史分位中位数）。
+- 这是过渡方案，对细分主题不够精确。后续若升级 Tushare 积分解锁 `sw_daily`（官方行业 PE/PB）+ `fund_portfolio`（真实成分股加权），可替换 `agents/etf_agent.py:_valuation_score` 内部实现，接口不变。
+- ETF 元数据/政策配置见 `data/etf_config.json`（可进 git，非个人持仓数据）。
 
 ### 已知设计问题
 
