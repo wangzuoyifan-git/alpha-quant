@@ -1,7 +1,7 @@
 # Alpha量化 — Agent 层文档
 
 > Agent 层架构设计、Tool Layer 规范、LLM 接入方案、阶段规划。
-> 最后更新：2026-06-21（L2行业评分升级申万L2/131个细分行业；新增 ETF Agent 独立三维评分体系 4.6；L3联动强势主题ETF补入选股池）
+> 最后更新：2026-06-21（L2行业评分升级申万L2/131个细分行业；新增 ETF Agent 独立三维评分体系 4.6；L3联动强势主题ETF补入选股池；Tool 契约对齐 list_strategies/generate_orders；A2 辅助分析模块 agent_tools/analysis.py）
 >
 > **项目基础信息见 `docs/project.md`**
 > **架构兼容性约束完整定义（AC1~AC9+AC14~17）见 `docs/requirements.md` 第七/八章**
@@ -316,7 +316,7 @@ graph.add_conditional_edges("check_data", route_after_check, {...})
 职责：市场环境评估、策略选择。
 
 - `evaluate_market_condition()`：读宏观指标（国债利差/PMI/M2/VIX），按阈值规则判断 bull/bear/range/volatile
-- `select_strategies(market_condition)`：按策略的 `market_condition` 元数据（AC5）筛选适用策略组合
+- `select_strategies(decision_context)`：按策略 6 维画像（regime/style/time_horizon）匹配选择策略组合；兼容旧签名 `select_strategies(market_condition=...)`（@deprecated）
 - `recommend_daily_plan()`：评估环境 → 选策略 → 给出扫描参数建议
 
 > Phase 2 计划：升级为基于历史回测绩效动态选择 + 参数优化（当前为静态阈值规则）。

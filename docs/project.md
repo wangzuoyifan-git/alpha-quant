@@ -1,7 +1,7 @@
 # Alpha量化 — 项目总览
 
 > 所有 Session 的共同基础参考。专项内容见各模块文档。
-> 最后更新：2026-06-21（L2行业评分升级到申万L2/131个细分行业；ETF独立三维评分体系 agents/etf_agent.py + data/etf_config.json；portfolio theme_etf 出场路径；L3联动强势主题ETF补入选股池）
+> 最后更新：2026-06-21（L2行业评分升级到申万L2/131个细分行业；ETF独立三维评分体系 agents/etf_agent.py + data/etf_config.json；portfolio theme_etf 出场路径；L3联动强势主题ETF补入选股池；阶段A~D：成交额过滤/行业排除修复/Tool契约对齐/A2辅助分析 agent_tools/analysis.py）
 
 ---
 
@@ -70,7 +70,7 @@
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                    应用层 / CLI                          │
-│              main.py（argparse 分发，18个子命令）         │
+│              main.py（argparse 分发，24个子命令）         │
 │              web/（Flask 看板）                          │
 └──────────────────────┬──────────────────────────────────┘
                        │
@@ -242,7 +242,8 @@ alpha量化/
 ├── agent_tools/                 # Tool Layer（已完成，18个工具）
 │   ├── data_tools.py            # 数据相关 Tools
 │   ├── strategy_tools.py        # 策略/回测 Tools
-│   └── trade_tools.py           # 交易/风控 Tools
+│   ├── trade_tools.py           # 交易/风控 Tools
+│   └── analysis.py              # A2 辅助分析聚合（技术面/资金流/基本面 P0 摘要）
 │
 ├── agents/                      # Agent 实现（已建设，规则版）
 │   ├── orchestrator.py          # Orchestrator（LangGraph）

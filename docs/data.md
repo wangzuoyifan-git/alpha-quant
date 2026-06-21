@@ -122,8 +122,11 @@ store_meta.load(data_type, code=None, start=None, end=None) -> Optional[DataFram
 store_meta.exists(data_type, code=None) -> bool
 store_meta.last_date(data_type) -> Optional[str]
 store_meta.get_member_stocks(industry_codes, level="L1") -> list[str]
+store_meta.get_stock_l1_industry(code) -> Optional[str]
 store_meta.get_industry_etfs(industry_codes, available_codes=None) -> list[str]
 store_meta.map_to_l1(industry_codes, level="L2") -> list[str]
+# get_member_stocks：行业代码 → 成员股列表（正向）
+# get_stock_l1_industry：股票代码 → 申万L1行业代码（反向，带模块级缓存；deep_value 金融/地产排除用）
 # get_industry_etfs：根据申万L1行业代码列表，返回对应代表性行业ETF代码列表
 # SW_L1_ETF_MAP：模块级常量，31个申万L1行业→代表性行业ETF映射表（供L2输出etf_candidates用）
 # map_to_l1：沿 industry_classify.parent_code 链将 L2/L3 行业代码上溯到 L1 父级

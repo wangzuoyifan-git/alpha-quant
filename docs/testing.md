@@ -1,7 +1,7 @@
 # Alpha量化 — 测试与验证
 
 > 测试分层定义、当前测试文件、关键测试用例模板、运行规范。
-> 最后更新：2026-06-11（新增：分层决策测试覆盖）
+> 最后更新：2026-06-21（阶段A~D：新增 test_analysis/scanner_filters 测试，补 GAP-04/07/08/09 覆盖；全量 522 passed/2 skipped，运行须加 --timeout=30）
 >
 > **项目基础信息见 `docs/project.md`**
 > **需求与测试追溯矩阵（含完整 GAP 编号覆盖缺口）见 `docs/traceability.md`**
@@ -54,6 +54,8 @@
 | **`tests/test_industry_rotation.py`** | **L2 行业轮动层 + scanner 行业约束穿透（阶段二新增）** | **✅ 8 passed** |
 | **`tests/test_checkpoint_recovery.py`** | **L3 阶段三 Checkpoint 断点续跑（OB-R4/AC14/AC15）** | **✅ 9 passed** |
 | **`tests/test_decision_log_enhanced.py`** | **L3 阶段三决策日志增强 + 节点审计（OB-R1/OB-R5）** | **✅ 9 passed** |
+| **`tests/test_analysis.py`** | **A2 辅助分析聚合（技术面/资金流/基本面 P0 + 推送/看板格式化，阶段C新增）** | **✅ 14 passed** |
+| **`tests/test_scanner_filters.py`** | **S4 扫描过滤（北交所/新股/ST/成交额 GAP-02/03/04）** | **✅ 9 passed** |
 
 ### 2.1 分层决策测试覆盖（2026-06-11 新增）
 
@@ -147,8 +149,8 @@
 
 **engine/scanner.py**
 - 信号合并逻辑（同标的同方向取最高分、原因拼接）→ 对应 UT-MG-01~03
-- `_get_filtered_stock_list` 北交所/新股过滤 → 对应 GAP-02/GAP-03
-- 成交额低于阈值过滤 → 对应 GAP-04
+- `_get_filtered_stock_list` 北交所/新股过滤 → 对应 GAP-02/GAP-03 ✅
+- 成交额低于阈值过滤 → 对应 GAP-04 ✅（`tests/test_scanner_filters.py::TestAmountFilter`）
 
 **signals/manager.py**
 - 同一天多次 `save_signals` 的行为需明确（覆盖 vs 追加）
@@ -176,10 +178,11 @@
 **agent_tools/strategy_tools.py**
 - `run_scan` 返回结构与 Signal 字段一致性
 - `run_backtest` 参数透传正确性
+- `list_strategies` 契约（key/name/description/version/requires_bars，无 market_condition）→ `TestListStrategiesContract` ✅
 
 **agent_tools/trade_tools.py**
 - `filter_signals_by_risk` 过滤逻辑
-- `generate_orders` 金额计算、预留字段存在性 → 对应 GAP-29
+- `generate_orders` 金额计算、`total_amount` 返回、券商预留字段（broker_order_id/filled_*）→ 对应 GAP-29 ✅（`TestGenerateOrdersContract`/`TestRealTradeOrderBrokerFields`）
 - `get_pending_orders` / `cancel_order` / `confirm_order` 生命周期封装
 
 ---
