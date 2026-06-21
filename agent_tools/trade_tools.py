@@ -54,9 +54,12 @@ def generate_orders(signals: list, current_capital: float = None,
         sig_objs = [Signal(**s) for s in signals]
         orders = ta.generate_orders(sig_objs, current_capital=current_capital,
                                     allocation=allocation, max_position=max_position)
+        order_dicts = [o.to_dict() for o in orders]
+        total_amount = round(sum(o.get("amount", 0) for o in order_dicts), 2)
         return {
             "success": True,
-            "orders": [o.to_dict() for o in orders],
+            "orders": order_dicts,
+            "total_amount": total_amount,
             "count": len(orders),
         }
     except Exception as e:

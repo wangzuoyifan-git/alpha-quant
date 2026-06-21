@@ -56,6 +56,12 @@ class TradeOrder:
         self.actual_quantity: Optional[int] = None
         self.executed_at: Optional[str] = None
 
+        # AC6 券商 API 预留字段（Phase 2 接入时填充，避免重构存储结构）
+        self.broker_order_id: Optional[str] = None
+        self.filled_price: Optional[float] = None
+        self.filled_qty: Optional[int] = None
+        self.filled_at: Optional[str] = None
+
     def to_dict(self) -> dict:
         return {
             "order_id": self.order_id,
@@ -81,6 +87,11 @@ class TradeOrder:
             "actual_price": self.actual_price,
             "actual_quantity": self.actual_quantity,
             "executed_at": self.executed_at,
+            # AC6 券商 API 预留字段（Phase 2 填充）
+            "broker_order_id": self.broker_order_id,
+            "filled_price": self.filled_price,
+            "filled_qty": self.filled_qty,
+            "filled_at": self.filled_at,
         }
 
     def __str__(self):

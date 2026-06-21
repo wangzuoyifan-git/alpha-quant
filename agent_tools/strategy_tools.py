@@ -96,19 +96,21 @@ def run_backtest(strategy_key: str, start: str = "2024-01-01",
 
 
 def list_strategies() -> dict:
-    """返回可用策略列表及元数据"""
-    return {
-        "success": True,
-        "strategies": [
-            {
-                "key": key,
-                "name": cls.name,
-                "description": cls.description,
-                "market_condition": getattr(cls, "market_condition", ""),
-            }
-            for key, cls in BUILTIN_STRATEGIES.items()
-        ],
-    }
+    """返回可用策略列表及元数据（符合 agent.md 3.3 契约）"""
+    strategies = []
+    for key, cls in BUILTIN_STRATEGIES.items():
+        try:
+            requires_bars = cls().requires_bars()
+        except Exception:
+            requires_bars = None
+        strategies.append({
+            "key": key,
+            "name": cls.name,
+            "description": cls.description,
+            "version": getattr(cls, "version", "1.0.0"),
+            "requires_bars": requires_bars,
+        })
+    return {"success": True, "strategies": strategies}
 
 
 def notify_signals(signals: list[dict], title: str = None) -> dict:

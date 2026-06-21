@@ -24,6 +24,8 @@ from agent_tools import (
     get_pending_orders,
     cancel_order,
     confirm_order,
+    generate_orders,
+    list_strategies,
 )
 
 
@@ -254,3 +256,65 @@ class TestTradeOrderTools:
             r = confirm_order("nope")
         assert r["success"] is False
         assert r["order_id"] == "nope"
+
+
+class TestGenerateOrdersContract:
+    """B-1: generate_orders 返回契约（total_amount）+ AC6 券商预留字段"""
+
+    def _fake_order(self, amount):
+        """构造一个最小 TradeOrder 替身，仅实现 to_dict"""
+        class _O:
+            def to_dict(self_inner):
+                return {
+                    "order_id": "T1", "code": "600519", "amount": amount,
+                    "broker_order_id": None, "filled_price": None,
+                    "filled_qty": None, "filled_at": None,
+                }
+        return _O()
+
+    def test_returns_total_amount(self):
+        with mock.patch("agent_tools.trade_tools.ta.generate_orders",
+                        return_value=[self._fake_order(10000.0), self._fake_order(5000.0)]):
+            r = generate_orders([{"code": "600519", "name": "x", "signal": "BUY",
+                                  "price": 100.0, "reason": "t", "score": 80.0}])
+        assert r["success"] is True
+        assert r["total_amount"] == 15000.0
+        assert r["count"] == 2
+
+    def test_order_has_broker_fields(self):
+        """AC6/GAP-29: order_dict 含券商 API 预留字段"""
+        with mock.patch("agent_tools.trade_tools.ta.generate_orders",
+                        return_value=[self._fake_order(10000.0)]):
+            r = generate_orders([{"code": "600519", "name": "x", "signal": "BUY",
+                                  "price": 100.0, "reason": "t", "score": 80.0}])
+        order = r["orders"][0]
+        for f in ("broker_order_id", "filled_price", "filled_qty", "filled_at"):
+            assert f in order, f"缺少券商预留字段 {f}"
+
+
+class TestRealTradeOrderBrokerFields:
+    """B-1: 真实 TradeOrder.to_dict 含 AC6 预留字段且初值为 None"""
+
+    def test_to_dict_broker_fields_none(self):
+        from trader.assistant import TradeOrder
+        from strategies.base import Signal
+        sig = Signal(code="600519", name="贵州茅台", signal="BUY",
+                     price=100.0, reason="t", score=80.0)
+        d = TradeOrder(sig, quantity=100, capital=1_000_000).to_dict()
+        assert d["broker_order_id"] is None
+        assert d["filled_price"] is None
+        assert d["filled_qty"] is None
+        assert d["filled_at"] is None
+
+
+class TestListStrategiesContract:
+    """B-2: list_strategies 返回 version/requires_bars，去 market_condition"""
+
+    def test_fields_match_contract(self):
+        r = list_strategies()
+        assert r["success"] is True
+        assert len(r["strategies"]) > 0
+        for s in r["strategies"]:
+            assert set(s.keys()) == {"key", "name", "description", "version", "requires_bars"}
+            assert "market_condition" not in s
+            assert isinstance(s["version"], str)
