@@ -375,9 +375,9 @@
 | ✅ GAP-04 | S4-成交额过滤 | 成交额低于阈值不参与扫描 | L1+L2 | ✅ 已补充（scanner `min_amount` 按 `amount`/元 过滤；`tests/test_scanner_filters.py::TestAmountFilter`） |
 | ✅ GAP-05 | F1-预期价记录 | 确认指令单后记录预期买入价 | L1 | ✅ 已补充（`tests/test_risk_control.py` TestF1ExpectedPrice） |
 | ✅ GAP-06 | F1-实际成交录入 | 支持手动录入实际成交价/数量 | L1+L2 | ✅ 已补充（`tests/test_risk_control.py` TestF1F2Execution） |
-| GAP-07 | F2-持仓盈亏更新 | 每日更新持仓盈亏 | L2 | ⏳ 依赖本地行情数据，待补充 |
-| GAP-08 | F2-平仓记录 | 平仓后记录完整交易记录 | L1+L2 | 验证交易记录字段完整性和持久化 |
-| GAP-09 | B3-结果持久化 | 回测结果持久化供胜率展示 | L1+L2 | 验证持久化文件格式和读取一致性 |
+| ✅ GAP-07 | F2-持仓盈亏更新 | 已成交单按策略汇总盈亏 | L1+L2 | ✅ 已补充（`get_pnl_summary`/`list_executed_orders`；`tests/test_trader.py::TestF2PnlSummary`） |
+| ✅ GAP-08 | F2-平仓记录 | 平仓后记录完整交易记录 | L1+L2 | ✅ 已补充（成交记录字段完整性+持久化往返；`tests/test_trader.py::TestExecutedOrderRecordIntegrity`） |
+| ✅ GAP-09 | B3-结果持久化 | 回测结果持久化供胜率展示 | L1+L2 | ✅ 已补充（`Backtester.save_result` 格式/字段/读取一致性；`tests/test_backtest.py::TestBacktestResultPersistence`） |
 | GAP-10 | AC3-接口可调用 | 指令单确认流程可被程序调用 | L1 | ✅ 已覆盖（UT-AT-09，confirm_order 返回结构化 dict + confirmed_at） |
 | GAP-11 | D7-时效 | 融资融券数据收盘后当日可用 | L2 | 依赖本地已有 tushare/margin 数据，验证 last_date |
 | GAP-12 | D7-个股字段 | 融资余额/融资买入额/融券余量字段完整 | L1+L2 | store 接口 save/load 往返一致性；IT-AA 补充情绪因子字段验证 |

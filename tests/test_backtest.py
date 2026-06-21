@@ -400,3 +400,48 @@ class TestBacktestMaxPositions:
     def test_max_positions_default(self):
         bt = Backtester(None, {})
         assert bt.max_positions == 10
+
+
+class TestBacktestResultPersistence:
+    """GAP-09: 回测结果持久化文件格式与读取一致性"""
+
+    def test_save_result_roundtrip(self, tmp_path, monkeypatch):
+        import json
+        import backtest.engine as engine_mod
+
+        # 重定向输出目录到临时路径
+        monkeypatch.setattr(engine_mod, "__file__", str(tmp_path / "engine.py"))
+
+        bt = Backtester(None, {"initial_capital": 1_000_000})
+        eq = _make_equity([0.02, -0.01, 0.03, 0.01])
+        trades = _make_trades(wins=3, losses=2)
+        result = bt._calc_metrics("test_strategy", "2024-01-02", "2024-03-01", eq, trades)
+
+        path = bt.save_result(result)
+        assert Path(path).exists()
+
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+
+        # 字段完整性
+        for field in ("strategy", "start", "end", "initial_capital", "final_capital",
+                      "total_return", "annual_return", "max_drawdown", "sharpe_ratio",
+                      "win_rate", "profit_factor", "total_trades", "coverage_rate",
+                      "reliability", "benchmark_return", "alpha", "beta", "generated_at"):
+            assert field in data, f"持久化结果缺字段 {field}"
+
+        # 读取一致性：关键数值与内存对象一致
+        assert data["strategy"] == "test_strategy"
+        assert data["total_return"] == pytest.approx(round(result.total_return, 6))
+        assert data["win_rate"] == pytest.approx(round(result.win_rate, 4))
+        assert data["total_trades"] == result.total_trades
+
+    def test_save_result_filename_contains_strategy(self, tmp_path, monkeypatch):
+        import backtest.engine as engine_mod
+        monkeypatch.setattr(engine_mod, "__file__", str(tmp_path / "engine.py"))
+        bt = Backtester(None, {"initial_capital": 1_000_000})
+        eq = _make_equity([0.01, 0.01])
+        result = bt._calc_metrics("ma_cross", "2024-01-02", "2024-02-01", eq, [])
+        path = bt.save_result(result)
+        assert "ma_cross" in Path(path).name
+        assert Path(path).name.startswith("backtest_")

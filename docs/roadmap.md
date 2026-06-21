@@ -94,16 +94,18 @@
 - [x] C-3 新增 `tests/test_analysis.py`（14 项，含量比 IT-AA-04、主力净流入 IT-AA-05、ROE-TTM、A3 缺失标注、推送/看板格式化）
 - 备注：GAP-14（融资余额情绪因子，P1）属 A2 P1 范畴，本阶段聚焦 P0，留待 P1 批次（margin 数据源已具备，见 traceability GAP-12/13）
 
+### 阶段 D — 交易闭环测试补齐（GAP-07/08/09）✅ 已完成（2026-06-21）
+
+里程碑：F2 盈亏汇总/平仓记录/回测持久化的核心能力（此前已实现）补齐测试覆盖。全量回归 522 passed / 2 skipped。
+
+> 范围决策（经确认）：D-4（OB-R2/R3 收益回填 + 绩效驱动 select_strategies）被 `requirements.md`/`agent.md` 明确归为**阶段五（P2）**，是独立大特性（决策日志回读 + 收益/alpha 计算 + 反思生成 + 绩效驱动选择）。本阶段不提前进入，只为已实现的 D-1/D-2/D-3 补齐测试与边沿。
+
+- [x] D-1 F2 持仓盈亏汇总（GAP-07）：`get_pnl_summary`/`list_executed_orders` 已实现，新增 `tests/test_trader.py::TestF2PnlSummary`（空汇总/按策略聚合/盈亏计数/仅 EXECUTED 状态）
+- [x] D-2 平仓/成交记录完整性（GAP-08）：新增 `TestExecutedOrderRecordIntegrity`，验证成交记录字段完整性 + 持久化往返一致 + price_deviation 计算
+- [x] D-3 回测结果持久化（GAP-09）：`Backtester.save_result` 已实现，新增 `tests/test_backtest.py::TestBacktestResultPersistence`，验证文件格式/字段完整性/读取一致性/文件名规范
+- [ ] D-4 OB-R2/R3 收益回填闭环 → **移交阶段五（P2）**，详见 `agent.md` 第阶段五章；当前不实现
+
 > 运维提示：跑全量测试统一加 `--timeout=30`（pytest-timeout），避免无超时盲等。
-
-### 阶段 D — 阶段五预备：绩效驱动（GAP-48）
-
-里程碑：交易闭环可回填收益，为绩效驱动策略选择铺路。
-
-- [ ] D-1 F2 持仓盈亏更新（GAP-07）
-- [ ] D-2 平仓记录（GAP-08）
-- [ ] D-3 回测结果持久化（GAP-09）
-- [ ] D-4 OB-R2/R3 收益回填闭环
 
 ### 穿插补测（不阻塞主线）
 
@@ -121,3 +123,7 @@ D 类数据域（铜价/美联储/分钟线/股东等）均 P2，部分受 Tusha
 | 日期 | 变更 |
 |---|---|
 | 2026-06-21 | 初版：基于全量 review 产出阶段 A~D 规划 |
+| 2026-06-21 | 阶段 A 完成（成交额过滤/回测持仓上限/行业排除/新鲜度采样） |
+| 2026-06-21 | 阶段 B 部分完成（B-1/B-2 契约对齐；B-3/B-4 核实为误报撤回） |
+| 2026-06-21 | 阶段 C 完成（A2 P0 辅助分析聚合 + 推送/看板展示） |
+| 2026-06-21 | 阶段 D 完成（GAP-07/08/09 测试补齐；D-4 OB-R2/R3 移交阶段五） |

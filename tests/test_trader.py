@@ -412,3 +412,91 @@ class TestAllocationConstraint:
         orchestrator.order_node(state)
         assert captured["allocation"] == {"position_pct": 0.5, "trading_pct": 0.3}
         assert captured["max_position"] == 0.7
+
+
+# ═══════════════════════════════════════════════════════════════
+# GAP-07: F2 持仓盈亏汇总（get_pnl_summary / list_executed_orders）
+# GAP-08: 平仓记录完整性与持久化
+# ═══════════════════════════════════════════════════════════════
+
+class TestF2PnlSummary:
+    """GAP-07: F2 按策略汇总盈亏（基于已成交单）"""
+
+    def _exec_order(self, ta, sig, actual_price, qty):
+        """生成→确认→录入成交，返回 order_id"""
+        orders = ta.generate_orders([sig])
+        oid = orders[0].order_id
+        ta.confirm_order(oid)
+        ta.record_execution(oid, actual_price=actual_price, actual_quantity=qty)
+        return oid
+
+    def test_pnl_summary_empty_when_no_executed(self, tmp_order_dir):
+        ta = TradeAssistant(BACKTEST)
+        s = ta.get_pnl_summary()
+        assert s["total_trades"] == 0
+        assert s["total_pnl"] == 0.0
+        assert s["by_strategy"] == {}
+
+    def test_pnl_summary_aggregates_by_strategy(self, tmp_order_dir):
+        ta = TradeAssistant(BACKTEST)
+        # 预期价 10.0，实际成交 10.5 → 单笔盈利 (10.5-10)*1000=500
+        sig = _make_buy_signal(code="000001", price=10.0)
+        self._exec_order(ta, sig, actual_price=10.5, qty=1000)
+
+        summary = ta.get_pnl_summary()
+        assert summary["total_trades"] == 1
+        assert summary["total_pnl"] == pytest.approx(500.0)
+        # by_strategy 以 reason 首词为 key
+        assert len(summary["by_strategy"]) == 1
+        key = next(iter(summary["by_strategy"]))
+        assert summary["by_strategy"][key]["trades"] == 1
+        assert summary["by_strategy"][key]["win"] == 1
+        assert summary["by_strategy"][key]["pnl"] == pytest.approx(500.0)
+
+    def test_pnl_summary_counts_loss(self, tmp_order_dir):
+        ta = TradeAssistant(BACKTEST)
+        sig = _make_buy_signal(code="000002", price=10.0)
+        # 实际 9.5 → 亏损 (9.5-10)*1000 = -500
+        self._exec_order(ta, sig, actual_price=9.5, qty=1000)
+        summary = ta.get_pnl_summary()
+        assert summary["total_pnl"] == pytest.approx(-500.0)
+        key = next(iter(summary["by_strategy"]))
+        assert summary["by_strategy"][key]["win"] == 0
+
+    def test_list_executed_only_executed_status(self, tmp_order_dir):
+        ta = TradeAssistant(BACKTEST)
+        # 一单成交，一单仅确认（不录入）
+        o1 = ta.generate_orders([_make_buy_signal(code="000001", price=10.0)])[0]
+        ta.confirm_order(o1.order_id)
+        ta.record_execution(o1.order_id, actual_price=10.2, actual_quantity=500)
+        o2 = ta.generate_orders([_make_buy_signal(code="000002", price=20.0)])[0]
+        ta.confirm_order(o2.order_id)
+
+        executed = ta.list_executed_orders()
+        assert len(executed) == 1
+        assert executed[0]["code"] == "000001"
+        assert executed[0]["status"] == "EXECUTED"
+
+
+class TestExecutedOrderRecordIntegrity:
+    """GAP-08: 平仓/成交记录字段完整性与持久化往返"""
+
+    def test_executed_record_fields_complete(self, tmp_order_dir):
+        ta = TradeAssistant(BACKTEST)
+        order = ta.generate_orders([_make_buy_signal(code="600519", price=100.0)])[0]
+        ta.confirm_order(order.order_id)
+        ta.record_execution(order.order_id, actual_price=101.0, actual_quantity=200)
+
+        # 从磁盘重读，验证字段完整性（持久化往返一致）
+        path = tmp_order_dir / f"{order.order_id}.json"
+        assert path.exists()
+        d = json.loads(path.read_text())
+        for field in ("order_id", "code", "direction", "price", "quantity",
+                      "status", "expected_price", "actual_price",
+                      "actual_quantity", "executed_at", "price_deviation"):
+            assert field in d, f"成交记录缺字段 {field}"
+        assert d["status"] == "EXECUTED"
+        assert d["actual_price"] == 101.0
+        assert d["actual_quantity"] == 200
+        # price_deviation = (101/100 - 1)*100 = 1.0
+        assert d["price_deviation"] == pytest.approx(1.0)
