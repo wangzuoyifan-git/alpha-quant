@@ -1,7 +1,7 @@
 # Alpha量化 — Agent 层文档
 
 > Agent 层架构设计、Tool Layer 规范、LLM 接入方案、阶段规划。
-> 最后更新：2026-06-12（重大更新：多周期配置定位、LLM 融合模式、autonomy_level 框架）
+> 最后更新：2026-06-21（L2行业评分升级申万L2/131个细分行业；新增 ETF Agent 独立三维评分体系 4.6；L3联动强势主题ETF补入选股池）
 >
 > **项目基础信息见 `docs/project.md`**
 > **架构兼容性约束完整定义（AC1~AC9+AC14~17）见 `docs/requirements.md` 第七/八章**
@@ -328,6 +328,29 @@ graph.add_conditional_edges("check_data", route_after_check, {...})
 - `process_signals(signals, current_equity, vix)`：调 `filter_signals_by_risk`（RC1~RC8）+ `generate_orders`
 - `confirm_trade(order_id)` / `cancel_trade(order_id)`：指令单生命周期
 - Phase 3 计划：在风控规则约束内自主执行下单
+
+### 4.5 Industry Agent（agents/industry_agent.py）✅ 已实现（规则版）
+
+职责：L2 行业轮动层，三维评分（景气/估值/资金流）。支持申万 L1/L2/L3 粒度，统一走"个股自底向上聚合"路径（按 industry_member 的 l1/l2/l3_code 聚合，代码匹配）。
+
+- `evaluate_industry_rotation(risk_mode, date, level, weights)`：输出行业池 + 行业详情 + ETF 白名单
+- `get_industry_score(industry_code, level, date)`：单行业三维评分轻量查询
+- **2026-06-21 L2 升级**：默认评估升级到申万 L2（131 个细分行业，粒度提升 4 倍），可体现半导体/证券Ⅱ/农商行Ⅱ 等细分轮动。ETF 白名单经 `store_meta.map_to_l1` 桥接（L2/L3 行业 → L1 父级，SW_L1_ETF_MAP 按 L1 键）。
+
+### 4.6 ETF Agent（agents/etf_agent.py）✅ 已实现（规则版，2026-06-21 新增）
+
+职责：细分主题 ETF 独立三维综合评分。ETF 是对细分行业/主题的市场定价代理，对工业软件/半导体设备/机床/创新药/军工等主题，单纯动量或申万 L1 评分过于粗糙。
+
+- `evaluate_etf(code, df, weights, date, lookback)`：三维评分
+  - ① **技术动量**：ETF 自身价格序列，绝对动量 + 相对动量（vs 沪深300）+ 趋势确认（MA20/MA60）
+  - ② **估值分位**（过渡=选项C）：ETF→申万L2 映射（`etf_config.sw_l2_codes`），复用 L2 三维评分估值维度（成员股 pe_ttm 历史分位聚合）。后续升级 Tushare 积分可替换为 sw_daily/fund_portfolio 官方数据
+  - ③ **政策配置**：`etf_config.policy_outlook` 人工维护，positive/neutral/negative → 75/50/25
+  - 缺失维度按权重重归一；默认权重 {技术 0.45, 估值 0.25, 政策 0.30}
+- `get_strong_theme_industries(threshold, date, weights)`：**L3 联动**——综合评分≥阈值(默认60)的强势主题 ETF，其 `sw_l2_codes` 映射的 L2 行业补入 L3 选股池（即使未进入 L2 自动行业池）。在 `industry_rotation_node` 中 L2 粒度下生效。
+- 配置文件 `data/etf_config.json`：ETF 元数据（名称/跟踪指数/sw_l2_codes/政策展望/标签），可进 git。
+- 消费方：`portfolio` 命令 `theme_etf` 出场路径展示主题综合评分 + 持/减/加建议。
+
+> 信息流：`L1宏观(5种) → L2行业评分(131个) → 细分主题评分(ETF代理) → L3个股选择`。ETF 评估双向影响：向上补充 L2 行业池（强势主题），向下指导 L3 在细分主题内选股。
 
 ---
 

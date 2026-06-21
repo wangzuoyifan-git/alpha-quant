@@ -1,7 +1,7 @@
 # Alpha量化 — 运维手册
 
 > CLI 速查、定时脚本、环境变量配置、Git 规范。
-> 最后更新：2026-06-18（持仓管理模块：策略级出场框架 + 基于风险的仓位 + 分级操作表；新增 exit-levels / position-size 命令；scan 输出含委托价/建议股数；委托价按信号类型智能计算；ETF持仓管理：自动探测资产类型+三条出场路径）
+> 最后更新：2026-06-21（L2行业评分升级到申万L2/131个细分行业；ETF独立三维评分体系 etf_agent+etf_config.json；portfolio 新增 theme_etf 出场路径；L3联动强势主题ETF补入选股池）
 >
 > **项目基础信息见 `docs/project.md`**
 > **持仓管理设计详见 `docs/position_management.md`**
@@ -196,10 +196,12 @@ python3 main.py cancel <order_id>                 # 取消指令单
      "position_type": "trading", "style": "momentum"},
     {"code": "510300", "cost": 3.92, "shares": 20000,
      "position_type": "config", "style": "macro_allocation"},
-    {"code": "512010", "cost": 1.65, "shares": 50000,
-     "position_type": "config", "style": "industry_allocation",
-     "industry": "801150.SI"}
-  ]
+     {"code": "512010", "cost": 1.65, "shares": 50000,
+      "position_type": "config", "style": "industry_allocation",
+      "industry": "801151.SI", "industry_level": "L2"},
+     {"code": "159516", "cost": 1.00, "shares": 10000,
+      "position_type": "config", "style": "theme_etf"}
+   ]
 }
 ```
 
@@ -211,15 +213,38 @@ python3 main.py cancel <order_id>                 # 取消指令单
 | `position_type` | trading/config | 不填按 style 推断 |
 | `style` | 见下表 | 决定出场逻辑路径 |
 | `asset_type` | stock/etf | 不填自动探测（先试 stock，再试 etf） |
-| `industry` | 申万L1代码如 801150.SI | `industry_allocation` ETF 必填，用于读 L2 行业评分 |
+| `industry` | 申万行业代码如 801151.SI | `industry_allocation` ETF 必填，用于读行业评分 |
+| `industry_level` | L1/L2/L3 | `industry_allocation` 行业代码层级，默认 L2 |
 
 ETF style 出场路径：
 
 | style | 出场逻辑 | 数据来源 |
 |---|---|---|
 | `momentum` | ATR 技术止损 + 动量轮出 | etf_momentum 策略 |
-| `industry_allocation` | L2 行业三维评分（景气/估值/资金流） | industry_agent.get_industry_score() |
+| `industry_allocation` | 行业三维评分（景气/估值/资金流），默认 L2 粒度 | industry_agent.get_industry_score(level) |
 | `macro_allocation` | L1 宏观 regime（crisis/risk_off 提示减仓） | strategy_agent.evaluate_market_condition() |
+| `theme_etf` | ETF 三维综合评分（技术动量+估值代理+政策配置） | etf_agent.evaluate_etf() |
+
+**细分主题 ETF（`theme_etf`）** 需在 `data/etf_config.json` 维护元数据：
+
+```json
+{
+  "159516": {
+    "name": "半导体材料设备ETF",
+    "sw_l2_codes": ["801081.SI"],
+    "theme": "半导体设备材料",
+    "policy_outlook": "positive",
+    "policy_tags": ["国产替代", "大基金三期"],
+    "note": "判断依据备注",
+    "benchmark": "000300"
+  }
+}
+```
+
+- `sw_l2_codes`：申万 L2 行业代码，双重用途——①估值分位代理（成员股 pe_ttm 聚合）②L3 联动（主题强势时在这些行业内选股）
+- `policy_outlook`：政策展望 positive/neutral/negative（人工维护，季度更新）
+- 估值数据为过渡方案（L2 成员股聚合代理）；后续升级 Tushare 积分可替换为 sw_daily/fund_portfolio 官方数据
+
 
 ```bash
 python3 main.py portfolio                         # 评估今日持仓（分级操作表）

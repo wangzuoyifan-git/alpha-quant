@@ -1,7 +1,7 @@
 # Alpha量化 — 项目总览
 
 > 所有 Session 的共同基础参考。专项内容见各模块文档。
-> 最后更新：2026-06-18（持仓管理模块：策略级出场框架/基于风险的仓位/分级操作表；scan输出含委托价/建议股数；exit-levels/position-size命令）
+> 最后更新：2026-06-21（L2行业评分升级到申万L2/131个细分行业；ETF独立三维评分体系 agents/etf_agent.py + data/etf_config.json；portfolio theme_etf 出场路径；L3联动强势主题ETF补入选股池）
 
 ---
 
@@ -248,7 +248,8 @@ alpha量化/
 │   ├── orchestrator.py          # Orchestrator（LangGraph）
 │   ├── data_agent.py
 │   ├── strategy_agent.py        # L1 宏观层 + L3 策略选择
-│   ├── industry_agent.py        # L2 行业轮动层
+│   ├── industry_agent.py        # L2 行业轮动层（申万L2/131个细分行业）
+│   ├── etf_agent.py             # ETF 独立三维评分（技术动量+估值代理+政策配置）
 │   └── trade_agent.py
 │
 ├── notifier/push.py
