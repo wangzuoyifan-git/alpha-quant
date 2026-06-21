@@ -1071,10 +1071,42 @@ def cmd_portfolio(date: str | None = None,
         elif not pos_type and style in ("momentum", "reversal", "breakout"):
             pos_type = "trading"
 
-        # ── ETF 专属出场路径（三条，按 style 分流）─────────────
+        # ── ETF 专属出场路径（按 style 分流）─────────────
         if is_etf:
             pos_type = pos_type or "config"
-            if style == "industry_allocation":
+            if style == "theme_etf":
+                # 细分主题 ETF：etf_agent 三维综合评分（技术动量+估值代理+政策）
+                from strategies.builtin.etf_momentum import ETFMomentumStrategy
+                el = ETFMomentumStrategy().compute_exit_levels(df_r, entry_price=hfq_price)
+                used_strategy = "ETF三维评分"
+                try:
+                    from agents.etf_agent import evaluate_etf
+                    ev = evaluate_etf(code, df=df, date=end)
+                except Exception:
+                    ev = None
+                if ev and ev.get("available"):
+                    ts = ev["total_score"]
+                    parts = []
+                    if ev["technical"] is not None:
+                        parts.append(f"技{ev['technical']:.0f}")
+                    if ev["valuation"] is not None:
+                        parts.append(f"估{ev['valuation']:.0f}")
+                    if ev["policy"] is not None:
+                        parts.append(f"政{ev['policy']:.0f}")
+                    dims_str = "/".join(parts)
+                    ts_disp = f"{ts:.0f}" if ts is not None else "?"
+                    if ts is not None and ts >= 65:
+                        color = "green"
+                    elif ts is not None and ts >= 45:
+                        color = "yellow"
+                    else:
+                        color = "red"
+                    etf_exit_note = (f"[{color}]主题评分{ts_disp}({dims_str})："
+                                     f"{ev['advice']}[/{color}]")
+                else:
+                    etf_exit_note = "[dim]主题评分数据不可用，按 ATR 技术止损[/dim]"
+
+            elif style == "industry_allocation":
                 # L2 行业评分：读行业三维评分判断是否应减配
                 industry_code = h.get("industry", "")
                 ind_level = h.get("industry_level", "L2")  # 默认L2粒度

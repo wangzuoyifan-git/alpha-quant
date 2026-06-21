@@ -1,0 +1,105 @@
+{
+  "_meta": {
+    "description": "ETF 元数据与政策配置。承载 ETF 三维评分（技术动量+估值分位代理+政策配置）所需的静态信息。可进 git，是策略知识库的一部分。",
+    "fields": {
+      "name": "ETF 名称",
+      "track_index": "跟踪指数代码（参考，当前估值走 sw_l2_codes 聚合代理）",
+      "sw_l2_codes": "申万 L2 行业代码列表，用于：①估值分位代理（成员股 pe_ttm 聚合）②L3 联动（主题强势时在这些行业内选股）",
+      "theme": "细分主题标签",
+      "policy_outlook": "政策展望 positive/neutral/negative（人工维护）",
+      "policy_tags": "政策关键词标签",
+      "note": "判断依据备注",
+      "policy_updated": "政策展望最近更新日期",
+      "benchmark": "相对动量基准（默认 000300 沪深300）"
+    },
+    "policy_outlook_score": {"positive": 75, "neutral": 50, "negative": 25}
+  },
+  "159108": {
+    "name": "博时工业软件ETF",
+    "track_index": "931578.CSI",
+    "sw_l2_codes": ["801104.SI"],
+    "theme": "工业软件",
+    "policy_outlook": "positive",
+    "policy_tags": ["国产替代", "信创", "工业母机"],
+    "note": "工业软件国产化率低，信创+制造业升级政策持续支持",
+    "policy_updated": "2026-06-18",
+    "benchmark": "000300"
+  },
+  "159516": {
+    "name": "国泰中证半导体材料设备主题ETF",
+    "track_index": "931743.CSI",
+    "sw_l2_codes": ["801081.SI"],
+    "theme": "半导体设备材料",
+    "policy_outlook": "positive",
+    "policy_tags": ["国产替代", "大基金三期", "半导体设备"],
+    "note": "设备材料国产化率仍低，大基金三期与出口管制反向催化",
+    "policy_updated": "2026-06-18",
+    "benchmark": "000300"
+  },
+  "159622": {
+    "name": "创新药ETF沪港深",
+    "track_index": "931643.CSI",
+    "sw_l2_codes": ["801151.SI", "801152.SI"],
+    "theme": "创新药",
+    "policy_outlook": "positive",
+    "policy_tags": ["医保谈判", "创新药支持", "出海BD"],
+    "note": "创新药支付端改善+出海BD放量，政策由控费转向鼓励创新",
+    "policy_updated": "2026-06-18",
+    "benchmark": "000300"
+  },
+  "159667": {
+    "name": "国泰中证机床ETF",
+    "track_index": "931866.CSI",
+    "sw_l2_codes": ["801072.SI"],
+    "theme": "机床/工业母机",
+    "policy_outlook": "positive",
+    "policy_tags": ["工业母机", "高端制造", "国产替代"],
+    "note": "工业母机列入国家战略，高端数控机床国产替代空间大",
+    "policy_updated": "2026-06-18",
+    "benchmark": "000300"
+  },
+  "159703": {
+    "name": "天弘中证新材料主题ETF",
+    "track_index": "931643.CSI",
+    "sw_l2_codes": ["801051.SI", "801039.SI", "801086.SI"],
+    "theme": "新材料",
+    "policy_outlook": "neutral",
+    "policy_tags": ["新材料", "高端制造"],
+    "note": "覆盖金属新材料/非金属材料/电子化学品，政策支持但周期属性强",
+    "policy_updated": "2026-06-18",
+    "benchmark": "000300"
+  },
+  "159934": {
+    "name": "易方达黄金ETF",
+    "track_index": "AU9999.SGE",
+    "sw_l2_codes": [],
+    "theme": "黄金/宏观对冲",
+    "policy_outlook": "neutral",
+    "policy_tags": ["避险", "实物资产"],
+    "note": "宏观对冲资产，出场逻辑走 L1 regime（macro_allocation），非主题评分",
+    "policy_updated": "2026-06-18",
+    "benchmark": "000300"
+  },
+  "512710": {
+    "name": "富国中证军工龙头ETF",
+    "track_index": "399973.SZ",
+    "sw_l2_codes": ["801742.SI"],
+    "theme": "国防军工",
+    "policy_outlook": "positive",
+    "policy_tags": ["国防预算", "十五五", "装备升级"],
+    "note": "国防预算稳定增长，十五五装备列装周期，订单能见度提升",
+    "policy_updated": "2026-06-18",
+    "benchmark": "000300"
+  },
+  "562590": {
+    "name": "华夏中证半导体材料设备主题ETF",
+    "track_index": "931743.CSI",
+    "sw_l2_codes": ["801081.SI"],
+    "theme": "半导体设备材料",
+    "policy_outlook": "positive",
+    "policy_tags": ["国产替代", "大基金三期", "半导体设备"],
+    "note": "与159516同跟踪中证半导体材料设备指数",
+    "policy_updated": "2026-06-18",
+    "benchmark": "000300"
+  }
+}
