@@ -158,3 +158,51 @@ class TestEvaluateETF:
         assert r["valuation"] is None
         assert r["policy"] is None
         assert r["available"] is True
+
+
+class TestStrongThemeIndustries:
+    """L3 联动：强势主题 ETF → 申万 L2 行业"""
+
+    def _patch(self, monkeypatch, config, scores):
+        monkeypatch.setattr(ea, "load_etf_config", lambda: config)
+
+        def _fake_eval(code, weights=None, date=None):
+            s = scores.get(code)
+            meta = config.get(code, {})
+            return {"total_score": s, "name": meta.get("name", code),
+                    "theme": meta.get("theme", "")}
+        monkeypatch.setattr(ea, "evaluate_etf", _fake_eval)
+
+    def test_strong_above_threshold_included(self, monkeypatch):
+        config = {
+            "A": {"sw_l2_codes": ["801104.SI"], "theme": "工业软件"},
+            "B": {"sw_l2_codes": ["801081.SI"], "theme": "半导体"},
+        }
+        self._patch(monkeypatch, config, {"A": 65.0, "B": 40.0})
+        out = ea.get_strong_theme_industries(threshold=60.0)
+        assert "801104.SI" in out
+        assert "801081.SI" not in out  # 40 < 60
+        assert out["801104.SI"]["theme"] == "工业软件"
+
+    def test_macro_etf_no_l2_skipped(self, monkeypatch):
+        config = {"GOLD": {"sw_l2_codes": [], "theme": "黄金"}}
+        self._patch(monkeypatch, config, {"GOLD": 90.0})
+        out = ea.get_strong_theme_industries(threshold=60.0)
+        assert out == {}
+
+    def test_same_l2_keeps_highest(self, monkeypatch):
+        # 两只 ETF 映射同一 L2，保留高分
+        config = {
+            "A": {"sw_l2_codes": ["801081.SI"], "theme": "半导体设备"},
+            "B": {"sw_l2_codes": ["801081.SI"], "theme": "半导体设备2"},
+        }
+        self._patch(monkeypatch, config, {"A": 70.0, "B": 80.0})
+        out = ea.get_strong_theme_industries(threshold=60.0)
+        assert out["801081.SI"]["score"] == 80.0
+        assert out["801081.SI"]["etf"] == "B"
+
+    def test_none_score_skipped(self, monkeypatch):
+        config = {"A": {"sw_l2_codes": ["801104.SI"], "theme": "工业软件"}}
+        self._patch(monkeypatch, config, {"A": None})
+        out = ea.get_strong_theme_industries(threshold=60.0)
+        assert out == {}

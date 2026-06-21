@@ -353,6 +353,25 @@ def industry_rotation_node(state: WorkflowState) -> WorkflowState:
             state["log"].append(f"[industry_rotation] 手动指定行业范围（override）: {override}")
 
         allowed = result.get("allowed_industries", [])
+        # 台阶二·L3联动：细分主题 ETF 被市场定价为强势时，将其映射的申万L2行业
+        # 补入选股池（即使未进入 L2 自动行业池）。仅 L2 粒度生效（sw_l2_codes 为 L2 码）。
+        theme_added = []
+        if level == "L2" and not override:
+            try:
+                from agents.etf_agent import get_strong_theme_industries
+                strong = get_strong_theme_industries(date=state.get("date"))
+                allowed_norm = {str(c).split(".")[0] for c in allowed}
+                for l2_code, info in strong.items():
+                    if str(l2_code).split(".")[0] not in allowed_norm:
+                        allowed.append(l2_code)
+                        theme_added.append((l2_code, info))
+                if theme_added:
+                    names = [f"{i['theme']}({i['score']:.0f})" for _, i in theme_added]
+                    state["log"].append(
+                        f"[industry_rotation] L3联动：强势主题ETF补入 {len(theme_added)} 个细分行业: {names}")
+            except Exception as e:
+                logger.debug(f"theme-ETF L3 联动失败（不阻断）: {e}")
+
         # 回填 decision_context（阶段三：sanitize numpy 类型，OB-R4）
         ctx["allowed_industries"] = allowed
         ctx["industry_weights"] = _to_native({

@@ -302,3 +302,47 @@ def evaluate_portfolio_etfs(codes: list, weights: dict = None,
                             date: str = None) -> dict:
     """批量评估多只 ETF，返回 {code: evaluate_etf结果}。"""
     return {c: evaluate_etf(c, weights=weights, date=date) for c in codes}
+
+
+def get_strong_theme_industries(threshold: float = 60.0,
+                                date: str = None,
+                                weights: dict = None) -> dict:
+    """
+    L3 联动：扫描 etf_config 中所有细分主题 ETF，对综合评分≥threshold 的强势
+    ETF，收集其映射的申万 L2 行业代码。用于 L2 行业轮动后向 L3 选股池补充
+    "强势主题对应的细分行业"——即使该 L2 行业未进入 L2 自动行业池，只要其
+    主题 ETF 被市场定价为强势，也纳入 L3 选股范围。
+
+    仅纳入有 sw_l2_codes 的 ETF（宏观对冲类如黄金无 L2 映射，自动跳过）。
+
+    Args:
+        threshold: 综合评分阈值（默认 60，>=则视为强势主题）
+        date: 评估日期
+        weights: 三维权重
+
+    Returns:
+        {l2_code: {"score": float, "etf": code, "name": str, "theme": str}}
+        （同一 L2 被多只 ETF 命中时保留最高分）
+    """
+    config = load_etf_config()
+    out: dict = {}
+    for code, meta in config.items():
+        l2_codes = meta.get("sw_l2_codes") or []
+        if not l2_codes:
+            continue
+        try:
+            ev = evaluate_etf(code, weights=weights, date=date)
+        except Exception as e:
+            logger.debug(f"get_strong_theme_industries: {code} 评估失败 {e}")
+            continue
+        ts = ev.get("total_score")
+        if ts is None or ts < threshold:
+            continue
+        for l2 in l2_codes:
+            prev = out.get(l2)
+            if prev is None or ts > prev["score"]:
+                out[l2] = {"score": ts, "etf": code,
+                           "name": ev.get("name", code),
+                           "theme": ev.get("theme", "")}
+    return out
+
