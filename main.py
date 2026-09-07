@@ -812,6 +812,21 @@ def cmd_init_macro(start: str = "2024-01-01"):
     dl.init_db(start=start)
 
 
+def cmd_init_hk(start: str = "2020-01-02", end: str | None = None,
+                force: bool = False, connect_only: bool = True):
+    """首次全量下载港股 K 线（默认仅港股通标的）"""
+    from data.downloader_hk import HKDownloader
+    dl = HKDownloader(connect_only=connect_only)
+    dl.init_db(start=start, end=end, force=force)
+
+
+def cmd_update_hk(end: str | None = None, connect_only: bool = True):
+    """增量更新港股 K 线到最新交易日"""
+    from data.downloader_hk import HKDownloader
+    dl = HKDownloader(connect_only=connect_only)
+    dl.update_db(end=end)
+
+
 def cmd_init_moneyflow(start: str = "2024-01-01",
                        stock_start: str = "2010-01-01",
                        types: list | None = None) -> None:
@@ -856,26 +871,33 @@ def cmd_update_all():
     """更新所有数据域（market + meta + fundamental + factor + macro + moneyflow）"""
     logger.info("开始全域增量更新...")
 
-    print("\n[1/6] 更新 K 线数据...")
+    print("\n[1/7] 更新 A 股 K 线数据...")
     cmd_update()
 
-    print("\n[2/6] 更新 meta 域...")
+    print("\n[2/7] 更新港股 K 线数据...")
+    try:
+        from data.downloader_hk import HKDownloader
+        HKDownloader(connect_only=True).update_db()
+    except Exception as e:
+        print(f"  港股更新跳过: {e}")
+
+    print("\n[3/7] 更新 meta 域...")
     from data.downloader_meta import MetaDownloader
     MetaDownloader().update_db()
 
-    print("\n[3/6] 更新 fundamental 域...")
+    print("\n[4/7] 更新 fundamental 域...")
     from data.downloader_fundamental import FundamentalDownloader
     FundamentalDownloader().update_db()
 
-    print("\n[4/6] 更新 factor 域...")
+    print("\n[5/7] 更新 factor 域...")
     from data.downloader_factor import FactorDownloader
     FactorDownloader().update_db()
 
-    print("\n[5/6] 更新 macro 域...")
+    print("\n[6/7] 更新 macro 域...")
     from data.downloader_macro import MacroDownloader
     MacroDownloader().update_db()
 
-    print("\n[6/6] 更新 moneyflow 域...")
+    print("\n[7/7] 更新 moneyflow 域...")
     try:
         cmd_update_moneyflow()
     except RuntimeError as e:
@@ -889,7 +911,7 @@ def cmd_inspect(subtype: str, target: str = "",
                 level: str = "L1", plot: bool = False,
                 start: str = None, end: str = None,
                 codes: list = None, metric: str = None,
-                all_items: bool = False):
+                all_items: bool = False, market: str = "cn"):
     """数据直查工具"""
     from tools.inspect_data import (cmd_kline, cmd_stock_mf, cmd_ind_mf, cmd_macro,
                                     cmd_kline_multi, cmd_stock_mf_multi, cmd_ind_mf_multi,
@@ -922,10 +944,12 @@ def cmd_inspect(subtype: str, target: str = "",
             return
         if len(targets) == 1:
             cmd_kline(targets[0], asset_type=asset_type, n=n,
-                      start=start, end=end, plot=plot)
+                      start=start, end=end, plot=plot,
+                      market=market)
         else:
             cmd_kline_multi(targets, metric=metric or "close",
-                            asset_type=asset_type, n=n, start=start, end=end)
+                            asset_type=asset_type, n=n, start=start, end=end,
+                            market=market)
 
     elif subtype == "mf":
         raw = codes or ([target] if target else [])
@@ -1580,6 +1604,15 @@ def cmd_data_status():
             market_date = d
     rows.append(("market/stock", market_date))
 
+    # market/hk
+    hk_codes = store.list_codes("stock", market="hk")[:3]
+    hk_date = None
+    for c in hk_codes:
+        d = store.last_date(c, asset_type="stock", market="hk")
+        if d and (hk_date is None or d > hk_date):
+            hk_date = d
+    rows.append(("market/hk", hk_date))
+
     mf_codes = store_mf.list_codes("stock")
     mf_last = store_mf.last_date("stock", code=mf_codes[0]) if mf_codes else None
     rows.append(("moneyflow/stock", mf_last))
@@ -1675,6 +1708,10 @@ if __name__ == "__main__":
   python main.py init-moneyflow --types stock          # 只下载个股资金流
   python main.py init-moneyflow --stock-start 2015-01-01  # 个股资金流从2015年开始
   python main.py update-moneyflow                      # 增量更新 moneyflow 域
+  python main.py init-hk                      # 首次下载港股K线（默认仅港股通标的）
+  python main.py init-hk --full               # 下载全部港股
+  python main.py update-hk                    # 增量更新港股到今日
+  python main.py inspect kline 00700 --market hk   # 直查港股K线
   python main.py update-all                            # 更新所有域（含 moneyflow）
   python main.py scan                          # 今日全市场扫描（A股）
   python main.py scan --date 2024-11-01        # 指定日期扫描
@@ -1803,6 +1840,20 @@ if __name__ == "__main__":
                           choices=["stock", "top_list", "margin", "industry", "market", "northbound"],
                           help="更新类型（默认全部）")
 
+    # init-hk（港股）
+    p_init_hk = sub.add_parser("init-hk", help="首次全量下载港股 K 线（默认仅港股通标的）")
+    p_init_hk.add_argument("--start", default="2020-01-02", help="起始日期（默认2020-01-02）")
+    p_init_hk.add_argument("--end", default=None, help="结束日期（默认今日）")
+    p_init_hk.add_argument("--force", action="store_true", help="强制重新下载已有数据")
+    p_init_hk.add_argument("--full", dest="connect_only", action="store_false",
+                           help="下载全部港股（默认仅港股通标的）")
+
+    # update-hk（港股）
+    p_upd_hk = sub.add_parser("update-hk", help="增量更新港股 K 线到最新交易日")
+    p_upd_hk.add_argument("--end", default=None, help="目标日期（默认今日）")
+    p_upd_hk.add_argument("--full", dest="connect_only", action="store_false",
+                          help="更新全部港股（默认仅港股通标的）")
+
     # update-all
     sub.add_parser("update-all", help="更新所有数据域（market+meta+fundamental+factor+macro）")
 
@@ -1815,6 +1866,8 @@ if __name__ == "__main__":
     p_ins.add_argument("--n", type=int, default=20, help="显示最近N条（默认20）")
     p_ins.add_argument("--type", dest="asset_type", default="stock",
                        choices=["stock", "index", "etf"], help="资产类型（kline用，默认stock）")
+    p_ins.add_argument("--market", default="cn", choices=["cn", "hk", "us"],
+                       help="市场（kline用，默认 cn）")
     p_ins.add_argument("--codes", nargs="*", default=None,
                        help="多个代码/行业名（空格分隔），与 target 二选一")
     p_ins.add_argument("--metric", default=None,
@@ -1902,6 +1955,11 @@ if __name__ == "__main__":
         )
     elif args.command == "update-moneyflow":
         cmd_update_moneyflow(types=args.types)
+    elif args.command == "init-hk":
+        cmd_init_hk(start=args.start, end=args.end,
+                    force=args.force, connect_only=args.connect_only)
+    elif args.command == "update-hk":
+        cmd_update_hk(end=args.end, connect_only=args.connect_only)
     elif args.command == "update-all":
         cmd_update_all()
     elif args.command == "inspect":
@@ -1910,7 +1968,7 @@ if __name__ == "__main__":
                     level=args.level, plot=args.plot,
                     start=args.start, end=args.end,
                     codes=args.codes, metric=args.metric,
-                    all_items=args.all_items)
+                    all_items=args.all_items, market=args.market)
     elif args.command == "exit-levels":
         cmd_exit_levels(code=args.code, entry=args.entry, strategy=args.strategy)
     elif args.command == "position-size":

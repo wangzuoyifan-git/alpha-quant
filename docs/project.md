@@ -1,7 +1,8 @@
 # Alpha量化 — 项目总览
 
 > 所有 Session 的共同基础参考。专项内容见各模块文档。
-> 最后更新：2026-06-21（L2行业评分升级到申万L2/131个细分行业；ETF独立三维评分体系 agents/etf_agent.py + data/etf_config.json；portfolio theme_etf 出场路径；L3联动强势主题ETF补入选股池；阶段A~D：成交额过滤/行业排除修复/Tool契约对齐/A2辅助分析 agent_tools/analysis.py）
+> 最后更新：2026-08-13（港股 K 线接入：`data/downloader_hk.py` + `init-hk/update-hk`，港股通标的优先，AKShare Sina 主源）
+> 2026-06-21（L2行业评分升级到申万L2/131个细分行业；ETF独立三维评分体系 agents/etf_agent.py + data/etf_config.json；portfolio theme_etf 出场路径；L3联动强势主题ETF补入选股池；阶段A~D：成交额过滤/行业排除修复/Tool契约对齐/A2辅助分析 agent_tools/analysis.py）
 
 ---
 
@@ -44,7 +45,7 @@
 - 多 Agent 协作：数据 Agent、策略 Agent、风控/交易 Agent
 
 **不在范围内（当前阶段）：**
-- 港股、美股（store 层已预留结构，数据未接入）
+- 美股（store 层已预留结构，数据未接入；港股 K 线已接入，见 `docs/data.md` 3.2 节）
 - 分钟线策略（数据未接入）
 - 合规报备（个人投资，暂不考虑）
 
@@ -159,7 +160,7 @@ Agent 层内部实现**三层决策架构**，每层职责如下：
 
 | 域 | 路径 | 状态 | 说明 |
 |---|---|---|---|
-| market | `data/market/` | 完成 | A股/指数/ETF 日线（Tushare hfq），5531/760/2032只，2024起；baostock基线备份在 `data/market_baostock/` |
+| market | `data/market/` | 完成 | A股/指数/ETF 日线（Tushare hfq），5531/760/2032只，2024起；**港股日线 `data/market/hk/`（AKShare Sina 主源，港股通标的优先，2026-08 接入）**；baostock基线备份在 `data/market_baostock/` |
 | meta | `data/meta/` | 完成 | 申万SW2021三级（L1=31/L2=134/L3=346）/证监会行业分类/交易日历 |
 | fundamental | `data/fundamental/` | 完成 | 季频财务（利润/资产/现金流/成长/杜邦） |
 | factor | `data/factor/` | 重新定位 | 计算型因子（动量/价值/质量等衍生值），台阶二前暂空 |
@@ -210,6 +211,7 @@ alpha量化/
 │   ├── fetcher.py               # 网络数据获取
 │   ├── downloader.py            # K线批量下载（BaoStock，降级备用）
 │   ├── downloader_tushare.py    # K线批量下载（Tushare，主链路）
+│   ├── downloader_hk.py         # 港股日线下载（AKShare Sina 主源，港股通标的优先）
 │   ├── downloader_meta.py
 │   ├── downloader_fundamental.py
 │   ├── downloader_factor.py

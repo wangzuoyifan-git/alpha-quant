@@ -1,14 +1,61 @@
-[
-  {
-    "code": "600519",
-    "name": "贵州茅台",
-    "cost": 9800.0,
-    "shares": 100
-  },
-  {
-    "code": "000858",
-    "name": "五粮液",
-    "cost": 1450.0,
-    "shares": 200
-  }
-]
+{
+  "total_capital": 2000000,
+  "holdings": [
+    {
+      "code": "300750",
+      "name": "宁德时代",
+      "cost": 391.030,
+      "shares": 200,
+      "position_type": "config",
+      "style": "growth"
+    },
+    {
+      "code": "000876",
+      "name": "新希望",
+      "cost": 11.405,
+      "shares": 2000,
+      "position_type": "trading",
+      "style": "momentum"
+    },
+    {
+      "code": "601899",
+      "name": "紫金矿业",
+      "cost": 28.545,
+      "shares": 5000,
+      "position_type": "config",
+      "style": "value"
+    },
+    {
+      "code": "601988",
+      "name": "中国银行",
+      "cost": 5.772,
+      "shares": 10000,
+      "position_type": "config",
+      "style": "value"
+    },
+    {
+      "code": "601398",
+      "name": "工商银行",
+      "cost": 7.726,
+      "shares": 30000,
+      "position_type": "config",
+      "style": "value"
+    },
+    {
+      "code": "000426",
+      "name": "兴业银锡",
+      "cost": 61.460,
+      "shares": 1000,
+      "position_type": "config",
+      "style": "value"
+    },
+    {
+      "code": "601600",
+      "name": "中国铝业",
+      "cost": 10.102,
+      "shares": 2000,
+      "position_type": "config",
+      "style": "value"
+    }
+  ]
+}

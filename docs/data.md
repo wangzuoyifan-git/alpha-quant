@@ -1,7 +1,7 @@
 # Alpha量化 — 数据层文档
 
 > 数据层接口、各域结构、数据源说明、待办缺口。
-> 最后更新：2026-06-17（K线主源切换为 Tushare；新增 inspect 数据直查工具）
+> 最后更新：2026-08-13（新增港股 `init-hk / update-hk` 下载器 `data/downloader_hk.py`，优先支持港股通标的；Tushare `hk_daily` 账号限频 1次/小时 → 主用 AKShare Sina 源。）
 >
 > 2026-06-21 补充：新增 store_meta.map_to_l1 接口；记录 ETF 估值 Tushare 权限缺口（sw_daily/fund_portfolio）与过渡方案；新增 data/etf_config.json 说明。
 >
@@ -18,6 +18,10 @@ data/market/cn/                       ← 主数据（Tushare hfq 口径，2026-
   index/         760只    38万行    32MB   字段：OHLCV+pct_chg
   etf/          2032只    93万行    57MB   字段：OHLCV+pct_chg（不复权）
   ipo_dates.json         8957只上市日期+行业+名称索引
+
+data/market/hk/                        ← 港股（2026-08 新增，AKShare Sina 源，不复权）
+  stock/        N只                 字段：OHLCV+preclose+pct_chg（volume=股/amount=元HKD）
+  ipo_dates.json（hk:* 键）         含 hk_connect 标志（是否港股通标的）
 
 data/market_baostock/cn/              ← BaoStock 历史基线（静态快照，交叉验证用，不再更新）
   stock/        5208只   baostock hfq 口径（2026-06-16 备份）
@@ -109,6 +113,10 @@ store.trading_days_since_ipo(code, market="cn", as_of=None) -> Optional[int]
 A股字段：`open, high, low, close, preclose, volume, amount, turn, trade_status, pct_chg, pe_ttm, pb_mrq, ps_ttm, pcf_ttm, is_st`
 
 指数/ETF字段：`open, high, low, close, preclose, volume, amount, pct_chg`
+
+港股字段（`market="hk"`）：`open, high, low, close, preclose, volume, amount, pct_chg`
+- `volume` 单位股、`amount` 单位 HKD 元，直接存储（Tushare hk_daily / AKShare 均为该口径，勿照搬 A 股 ×100/×1000 换算）
+- 不复权（原始价）；港股通资格存于 ipo_dates 的 `hk_connect` 标志（`store.get_ipo_date` 同级可读）
 
 注意：`trading_days_since_ipo` 当前用自然日计算，命名有误导性，待修复。
 
@@ -334,7 +342,30 @@ dl.update_db(end=None, types=["stock", "index", "etf"]) -> dict
 
 BaoStock → store 列名映射（旧）：`tradestatus→trade_status, pctChg→pct_chg, peTTM→pe_ttm, pbMRQ→pb_mrq, psTTM→ps_ttm, pcfNcfTTM→pcf_ttm, isST→is_st`
 
-### 3.2 其他域下载器
+### 3.2 港股下载器（data/downloader_hk.py，2026-08 新增）
+
+> **主源 AKShare、非 Tushare 的原因**：Tushare `hk_daily` 在当前账号限频 **1次/小时**，远不能满足批量下载；AKShare `stock_hk_daily`（Sina）返回全历史、无明显限频，故设为主源。Tushare `hk_daily` 仅作单只兜底。
+
+```python
+from data.downloader_hk import HKDownloader
+
+dl = HKDownloader(connect_only=True)          # True=仅港股通标的（默认）/ False=全部港股
+dl.init_db(start="2020-01-02", end=None, force=False)   # 全量初始化（断点续传）
+dl.update_db(end=None)                                  # 增量更新
+```
+
+- **港股通（南向）标的优先**：默认 `connect_only=True`。成分列表来源 AKShare `stock_hk_ggt_components_em`（东财），成功获取后缓存到 `data/meta/hk_connect.json`（当日有效）。列表获取失败时自动降级为全市场下载并告警。
+- 证券列表 `hk_basic`（Tushare）；上市日期索引写入 `ipo_dates.json` 的 `hk:*` 键，并额外记录 `hk_connect` 标志。
+- 容错：与 A 股下载器一致，单只 wall-clock 硬超时 `_PER_STOCK_TIMEOUT=45s`。
+
+CLI（`main.py`）：
+```
+python main.py init-hk [--start 2020-01-02] [--force] [--full]   # --full=全部港股
+python main.py update-hk [--full]
+```
+`update-all` 已含港股增量更新；`inspect kline <code> --market hk` 可直查港股 K 线。
+
+### 3.3 其他域下载器
 
 ```python
 from data.downloader_meta import MetaDownloader
@@ -398,9 +429,9 @@ fetcher.get_financial(code) -> DataFrame
 
 | 数据源 | 用途 | 限制 |
 |---|---|---|
-| **Tushare Pro（主）** | K线日线（stock/index/ETF）/ fundamental / moneyflow / meta（申万SW2021）| 已付费，积分充足；单接口超时20s；需配置 `TUSHARE_TOKEN` |
+| **Tushare Pro（主）** | K线日线（stock/index/ETF）/ fundamental / moneyflow / meta（申万SW2021）/ 港股证券列表 `hk_basic` | 已付费，积分充足；单接口超时20s；需配置 `TUSHARE_TOKEN`；`hk_daily` 限频 1次/小时 |
 | BaoStock（备） | K线降级备用（无 token 时自动切换）；历史基线保留在 `data/market_baostock/` | 免费，连接偶尔不稳定 |
-| AKShare | ETF行情（辅）/ macro（境外指标）/ northbound | 免费，东财接口有限流 |
+| AKShare | ETF行情（辅）/ macro（境外指标）/ northbound / **港股 K 线 `stock_hk_daily`（Sina）与港股通成分列表 `stock_hk_ggt_components_em`** | 免费，东财接口有限流/偶发连接不稳 |
 
 ---
 
@@ -408,7 +439,7 @@ fetcher.get_financial(code) -> DataFrame
 
 ### 已完成（接口已实现并执行）
 
-factor 域 `moneyflow`（AKShare 近60天）/ `moneyflow_sector`；tushare 域 `daily` / `daily_basic` / `top_list` / `margin` / `moneyflow`(2010起) / `moneyflow_ind` / `moneyflow_mkt`；macro 域 `cny_usd` / `shrongji` / `vix` / `dxy` / `oil_wti` / `sp500` / `hsi`（含 `bond_yield` 内的美债字段）；events 域 E1 日历 + E2 减持/质押/分红 + E3 结构。
+factor 域 `moneyflow`（AKShare 近60天）/ `moneyflow_sector`；tushare 域 `daily` / `daily_basic` / `top_list` / `margin` / `moneyflow`(2010起) / `moneyflow_ind` / `moneyflow_mkt`；macro 域 `cny_usd` / `shrongji` / `vix` / `dxy` / `oil_wti` / `sp500` / `hsi`（含 `bond_yield` 内的美债字段）；events 域 E1 日历 + E2 减持/质押/分红 + E3 结构；**港股 K 线下载器 `downloader_hk.py`（`init-hk`/`update-hk`，港股通标的优先，AKShare Sina 主源）**。
 
 ### 待下载（仍未实现下载器或未接入）
 

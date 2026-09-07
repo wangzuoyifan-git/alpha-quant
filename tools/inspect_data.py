@@ -80,7 +80,7 @@ def _resolve_codes(queries: list[str], asset_type: str = "stock") -> list[str] |
 
     result = []
     for q in queries:
-        if q.isdigit() and len(q) == 6:
+        if q.isdigit() and len(q) in (5, 6):
             result.append(q)
             continue
         # 精确名称匹配
@@ -215,18 +215,19 @@ def cmd_fundamental(code: str, data_type: str = "profit",
 # ─────────────────────────────────────────────────────────
 
 def cmd_kline(code: str, asset_type: str = "stock", n: int = 20,
-              start: str = None, end: str = None, plot: bool = False):
+              start: str = None, end: str = None, plot: bool = False,
+              market: str = "cn"):
     import data.store as store
 
-    df = store.load(code, asset_type=asset_type, market="cn")
+    df = store.load(code, asset_type=asset_type, market=market)
     if df is None or df.empty:
-        print(f"[错误] 未找到 {asset_type}/{code} 的本地数据")
+        print(f"[错误] 未找到 {market}/{asset_type}/{code} 的本地数据")
         return
 
     name = code
     try:
         ipo = store.load_ipo_dates()
-        name = ipo.get(f"cn:{code}", ).get("name", code)
+        name = ipo.get(f"{market}:{code}", ).get("name", code)
     except Exception:
         pass
 
@@ -268,7 +269,8 @@ def _cross_table(series_dict: dict, title: str, float_fmt: str = "{:.2f}"):
 
 def cmd_kline_multi(codes: list[str], metric: str = "close",
                     asset_type: str = "stock",
-                    n: int = 20, start: str = None, end: str = None):
+                    n: int = 20, start: str = None, end: str = None,
+                    market: str = "cn"):
     """多只K线横向对比，每行一日期，每列一标的的 metric 值"""
     import data.store as store
     ipo = {}
@@ -279,7 +281,7 @@ def cmd_kline_multi(codes: list[str], metric: str = "close",
 
     series = {}
     for code in codes:
-        df = store.load(code, asset_type=asset_type, market="cn")
+        df = store.load(code, asset_type=asset_type, market=market)
         if df is None or df.empty or metric not in df.columns:
             print(f"[跳过] {code}: 无数据或无 {metric} 列")
             continue
@@ -287,7 +289,7 @@ def cmd_kline_multi(codes: list[str], metric: str = "close",
             df = df[df.index >= pd.Timestamp(start)]
         if end:
             df = df[df.index <= pd.Timestamp(end)]
-        name = ipo.get(f"cn:{code}", {}).get("name", code)
+        name = ipo.get(f"{market}:{code}", {}).get("name", code)
         label = f"{code}\n{name}" if len(codes) <= 6 else code
         series[label] = df[metric] if (start or end) else df[metric].tail(n)
 
