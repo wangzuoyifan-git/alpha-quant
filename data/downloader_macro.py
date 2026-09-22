@@ -1,7 +1,7 @@
 """
 macro 域下载器
 
-负责下载（11 项，init_db/update_db 均已覆盖）：
+负责下载（13 项，init_db/update_db 均已覆盖）：
   国内:
   - bond_yield  国债收益率（AKShare bond_zh_us_rate，日频，含美债字段）
   - m2          M2货币供应（AKShare macro_china_money_supply，月频）
@@ -10,9 +10,12 @@ macro 域下载器
   - shrongji    社融规模（Tushare sf_month 主 / AKShare 备，月频）
   - cny_usd     人民币汇率（AKShare currency_boc_safe 外管局中间价，日频）
   境外:
-  - vix / dxy / oil_wti / sp500 / hsi（日频）
-  - dxy 主源为东财 push2his 直连（100.UDI），AKShare 为备
+  - vix / dxy / oil_wti / copper_lme / sp500 / hsi（日频）
+  - fed_rate    美联储基金利率目标（东财数据中心，事件触发）
+  - dxy 主源为东财 push2his 直连（100.UDI），备源新浪 DINIW / AKShare
   - oil_wti 主源新浪外盘 CL（WTI），备源 OIL（布伦特）
+  - copper_lme 主源新浪外盘 CAD（LME 铜，美元/吨）
+另：us_bond_yield 由 bond_yield 派生（_sync_us_bond_yield）。
 
 用法:
   dl = MacroDownloader()
@@ -35,6 +38,13 @@ DEFAULT_START = "2024-01-01"
 # bond_yield 中的美债字段（派生到独立文件 us_bond_yield.parquet）
 _US_BOND_COLS = ("us_2y", "us_5y", "us_10y", "us_30y",
                  "us_spread_10y_2y", "us_gdp_yoy")
+
+# 东财数据中心（美国经济数据，美联储利率目标）
+_EM_DATACENTER_URL = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+_FED_INDICATORS = {
+    "target_lower": "EMG00358536",   # 美国:联邦基金利率目标:下限
+    "target_upper": "EMG00342250",   # 美国:联邦基金利率目标:上限
+}
 
 
 def _log(msg: str):
@@ -471,9 +481,13 @@ class MacroDownloader:
         time.sleep(1)
         self._download_oil_wti()
         time.sleep(1)
+        self._download_copper_lme()
+        time.sleep(1)
         self._download_sp500()
         time.sleep(1)
         self._download_hsi()
+        time.sleep(1)
+        self._download_fed_rate()
 
     def _download_vix(self) -> None:
         import akshare as ak
@@ -496,16 +510,41 @@ class MacroDownloader:
         """
         美元指数 DXY（日频）。
         主源：东财 push2his 直连（secid=100.UDI；与 akshare `index_global_hist_em`
-        同源，但该封装在当前网络常连接失败）；备源：AKShare `index_global_hist_em`。
+        同源，但该封装在当前网络常连接失败）；
+        备源1：新浪外汇日K `DINIW`（独立于东财，东财限流时可用）；
+        备源2：AKShare `index_global_hist_em`。
         """
         df = self._fetch_dxy_em()
         if df is None or df.empty:
+            try:
+                df = _retry(lambda: self._fetch_dxy_sina())
+            except Exception as e:
+                logger.warning(f"美元指数（新浪 DINIW）下载失败: {e}")
+        if df is None or df.empty:
             df = self._fetch_dxy_ak()
+        df = self._normalize_dxy(df)
         if df is None or df.empty:
             _log("  DXY：无可用数据源")
             return
         store.replace("dxy", df)
         _log(f"  DXY：{len(df)} 条记录")
+
+    @staticmethod
+    def _normalize_dxy(df: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
+        """统一各来源列结构：date/open/high/low/close/pct_chg"""
+        if df is None or df.empty or "date" not in df.columns:
+            return None
+        out = df.copy()
+        out["date"] = pd.to_datetime(out["date"], errors="coerce")
+        out = out.dropna(subset=["date"])
+        for c in ("open", "high", "low", "close"):
+            out[c] = (pd.to_numeric(out[c], errors="coerce")
+                      if c in out.columns else float("nan"))
+        out = out.dropna(subset=["close"])
+        if out.empty:
+            return None
+        out["pct_chg"] = out["close"].pct_change() * 100
+        return out[["date", "open", "high", "low", "close", "pct_chg"]]
 
     @staticmethod
     def _fetch_dxy_em() -> Optional[pd.DataFrame]:
@@ -582,6 +621,38 @@ class MacroDownloader:
             logger.warning(f"美元指数（AKShare 备用源）下载失败: {e}")
             return None
 
+    @staticmethod
+    def _parse_dxy_sina(text: str) -> Optional[pd.DataFrame]:
+        """解析新浪 DINIW 日K（行格式：date,open,low,high,close,）"""
+        import re
+        m = re.search(r"var _DINIW=\((.*)\);?\s*$", (text or "").strip(), re.S)
+        if not m:
+            return None
+        raw = m.group(1).strip().strip('"')
+        rows = []
+        for line in raw.split("|"):
+            p = line.split(",")
+            if len(p) < 5 or not p[0]:
+                continue
+            rows.append({"date": p[0], "open": p[1], "low": p[2],
+                         "high": p[3], "close": p[4]})
+        if not rows:
+            return None
+        return pd.DataFrame(rows)
+
+    @staticmethod
+    def _fetch_dxy_sina() -> Optional[pd.DataFrame]:
+        """新浪外汇日K（DINIW 美元指数），全历史"""
+        import requests
+
+        url = ("https://vip.stock.finance.sina.com.cn/forex/api/jsonp.php/"
+               "var%20_DINIW=/NewForexService.getDayKLine")
+        r = requests.get(url, params={"symbol": "DINIW"}, timeout=20,
+                         headers={"User-Agent": "Mozilla/5.0",
+                                  "Referer": "https://finance.sina.com.cn/"})
+        r.raise_for_status()
+        return MacroDownloader._parse_dxy_sina(r.text)
+
     def _download_oil_wti(self) -> None:
         """
         WTI 原油（日频）。主源新浪外盘期货 CL（NYMEX WTI），备源 OIL（布伦特）。
@@ -639,3 +710,89 @@ class MacroDownloader:
             _log(f"  恒生指数：{len(df)} 条记录")
         except Exception as e:
             logger.warning(f"恒生指数下载失败: {e}")
+
+    def _download_copper_lme(self) -> None:
+        """LME 铜（新浪外盘期货 CAD，美元/吨，日频）"""
+        import akshare as ak
+        try:
+            df = _retry(lambda: ak.futures_foreign_hist(symbol="CAD"))
+            if df is None or df.empty:
+                _log("  LME铜：无数据")
+                return
+            df = df.copy()
+            df["date"] = pd.to_datetime(df["date"])
+            df = df.set_index("date")
+            df = df[df["close"] > 0]
+            if df.empty:
+                _log("  LME铜：无有效数据")
+                return
+            store.replace("copper_lme", df)
+            _log(f"  LME铜（新浪 CAD）：{len(df)} 条记录")
+        except Exception as e:
+            logger.warning(f"LME铜下载失败: {e}")
+
+    # ------------------------------------------------------------------
+    # D5b: 美联储基准利率（事件触发，东财数据中心）
+    # ------------------------------------------------------------------
+
+    def _download_fed_rate(self) -> None:
+        """
+        美联储基金利率目标（上限/下限，事件触发）。
+        来源：东财数据中心 RPT_ECONOMICVALUE_USA（金十源已停更，改用此源）。
+        日期取公布日（议息决议日），列：target_lower / target_upper（%）。
+        """
+        rows = {}
+        for col, indicator_id in _FED_INDICATORS.items():
+            try:
+                rows[col] = _retry(lambda i=indicator_id: self._fetch_fed_indicator(i))
+            except Exception as e:
+                logger.warning(f"美联储利率（{col}）下载失败: {e}")
+
+        df = self._parse_fed_rate(rows)
+        if df is None or df.empty:
+            _log("  美联储利率：无数据")
+            return
+        store.replace("fed_rate", df)
+        _log(f"  美联储利率（上限/下限）：{len(df)} 条记录  最新: {df.index.max().date()}")
+
+    @staticmethod
+    def _fetch_fed_indicator(indicator_id: str) -> list:
+        """东财数据中心-美国经济数据（单个指标全历史）"""
+        import requests
+
+        params = {
+            "reportName": "RPT_ECONOMICVALUE_USA",
+            "columns": "ALL",
+            "filter": f'(INDICATOR_ID="{indicator_id}")',
+            "sortColumns": "REPORT_DATE",
+            "sortTypes": "1",
+            "source": "WEB",
+            "client": "WEB",
+            "pageSize": "1000",
+            "pageNumber": "1",
+        }
+        r = requests.get(_EM_DATACENTER_URL, params=params, timeout=20,
+                         headers={"User-Agent": "Mozilla/5.0"})
+        r.raise_for_status()
+        return (r.json().get("result") or {}).get("data") or []
+
+    @staticmethod
+    def _parse_fed_rate(rows_by_col: dict) -> Optional[pd.DataFrame]:
+        """把东财指标记录（date=公布日，缺失时回退报告月）合并为宽表"""
+        frames = []
+        for col, rows in (rows_by_col or {}).items():
+            recs = []
+            for r in rows or []:
+                v = r.get("VALUE")
+                d = r.get("PUBLISH_DATE") or r.get("REPORT_DATE")
+                if v is None or not d:
+                    continue
+                recs.append({"date": str(d)[:10], col: float(v)})
+            if recs:
+                frames.append(pd.DataFrame(recs).drop_duplicates("date")
+                              .set_index("date"))
+        if not frames:
+            return None
+        out = pd.concat(frames, axis=1)
+        out.index = pd.to_datetime(out.index)
+        return out.sort_index()

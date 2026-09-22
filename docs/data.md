@@ -1,7 +1,7 @@
 # Alpha量化 — 数据层文档
 
 > 数据层接口、各域结构、数据源说明、待办缺口。
-> 最后更新：2026-09-22（macro 域修复：`update_db()` 补齐汇率/境外指标 + 新增 `update-macro` CLI；换源 CPI/PPI→东财、社融→Tushare `sf_month`、汇率→外管局中间价、DXY→东财 100.UDI 直连、WTI→新浪外盘 CL，修复 oil_wti 误存黄金数据。）
+> 最后更新：2026-09-22（macro 域修复：`update_db()` 补齐汇率/境外指标 + 新增 `update-macro` CLI；换源 CPI/PPI→东财、社融→Tushare `sf_month`、汇率→外管局中间价、DXY→东财 100.UDI 直连、WTI→新浪外盘 CL，修复 oil_wti 误存黄金数据；补齐 `copper_lme`（新浪 CAD，LME 铜）与 `fed_rate`（东财数据中心利率目标），macro 14 项全部落地。）
 >
 > 2026-08-13（新增港股 `init-hk / update-hk` 下载器 `data/downloader_hk.py`，优先支持港股通标的；Tushare `hk_daily` 账号限频 1次/小时 → 主用 AKShare Sina 源。）
 >
@@ -55,12 +55,12 @@ data/macro/
   cpi_ppi.parquet        CPI/PPI同比（月频）
   pmi.parquet            PMI制造业/非制造业（月频）
   境外宏观（D5b）：
-  fed_rate.parquet       美联储基准利率                    ⚠️ 待下载
+  fed_rate.parquet       美联储基金利率目标（上限/下限，事件触发）
   us_bond_yield.parquet  美债收益率2Y/5Y/10Y/30Y（派生自 bond_yield，日频）
   vix.parquet            VIX恐慌指数（VIX期货代理，日频）
   dxy.parquet            美元指数DXY（日频）
   oil_wti.parquet        WTI原油价格（日频）
-  copper_lme.parquet     LME铜价                          ⚠️ 待下载
+  copper_lme.parquet     LME铜价（新浪 CAD，美元/吨，日频）
   sp500.parquet          标普500指数（日频）
   hsi.parquet            恒生指数（日频）
 
@@ -198,18 +198,18 @@ store_macro.exists(data_type) -> bool
 store_macro.last_date(data_type) -> Optional[str]
 ```
 
-`data_type` 取值（已实现下载）：`bond_yield`（含美债）/ `m2` / `cpi_ppi` / `pmi` / `shrongji` / `cny_usd` / `vix` / `dxy` / `oil_wti` / `sp500` / `hsi`
+`data_type` 取值（全部 14 项均已落地）：`bond_yield`（含美债）/ `m2` / `cpi_ppi` / `pmi` / `shrongji` / `cny_usd` / `us_bond_yield`（派生）/ `vix` / `dxy` / `oil_wti` / `copper_lme` / `sp500` / `hsi` / `fed_rate`
 
-仍未实现下载器（VALID_TYPES 已预留）：`fed_rate` / `copper_lme`。
-`us_bond_yield` 为派生文件：每次下载 `bond_yield` 后自动截取 `us_2y/us_5y/us_10y/us_30y/us_spread_10y_2y/us_gdp_yoy` 写入，`bond_yield` 仍是唯一数据源。
-
-`update_db()` 已覆盖全部 11 项（含汇率与境外指标）；CLI：`main.py update-macro`（`update-all` 第 6 步同路径）。
+`update_db()` 已覆盖全部下载项（含汇率与境外指标）；CLI：`main.py update-macro`（`update-all` 第 6 步同路径）。
 主要来源（2026-09-22 换源后）：
 - `cpi_ppi`：东财 `macro_china_cpi` + `macro_china_ppi`（原金十源已停更至 2025-09），整表覆盖写入
 - `shrongji`：Tushare `sf_month`（单位：inc_month/inc_cumval 亿元，stk_endval 万亿元），AKShare 商务数据中心为备用
 - `cny_usd`：国家外汇管理局中间价 `currency_boc_safe`（列 `usd_cny`，元；原 `currency_boc_sina` 接口内置日期参数已过期）
-- `dxy`：东财 push2his 直连 `secid=100.UDI`（备用域名 91 前缀/HTTP，主域名 TLS 常被重置），AKShare `index_global_hist_em` 为备用
+- `dxy`：东财 push2his 直连 `secid=100.UDI`（备用域名 91 前缀/HTTP，主域名 TLS 常被重置）→ 新浪外汇日K `DINIW`（独立于东财）→ AKShare `index_global_hist_em`
 - `oil_wti`：新浪外盘期货 `futures_foreign_hist(symbol="CL")`（WTI，备源 OIL 布伦特）；**已修复历史 bug（上海金基准价曾被误存为 oil_wti）**
+- `copper_lme`：新浪外盘期货 `futures_foreign_hist(symbol="CAD")`（LME 铜，美元/吨）
+- `fed_rate`：东财数据中心 `RPT_ECONOMICVALUE_USA`（联邦基金利率目标上限/下限，列 `target_upper`/`target_lower`，日期取议息公布日）
+- `us_bond_yield`：派生文件，每次下载 `bond_yield` 后自动截取 `us_2y/us_5y/us_10y/us_30y/us_spread_10y_2y/us_gdp_yoy` 写入，`bond_yield` 仍是唯一数据源
 - 其余：`bond_yield`=AKShare `bond_zh_us_rate`；`m2`=`macro_china_money_supply`；`pmi`=`macro_china_pmi`；`vix`=`futures_foreign_hist("VX")`；`sp500`=`index_us_stock_sina(".INX")`；`hsi`=`stock_hk_index_daily_sina("HSI")`
 
 ### 2.6 moneyflow 域（data/store_moneyflow.py）
@@ -452,14 +452,12 @@ fetcher.get_financial(code) -> DataFrame
 
 ### 已完成（接口已实现并执行）
 
-factor 域 `moneyflow`（AKShare 近60天）/ `moneyflow_sector`；tushare 域 `daily` / `daily_basic` / `top_list` / `margin` / `moneyflow`(2010起) / `moneyflow_ind` / `moneyflow_mkt`；macro 域 `cny_usd` / `shrongji` / `vix` / `dxy` / `oil_wti` / `sp500` / `hsi`（含 `bond_yield` 内的美债字段）；events 域 E1 日历 + E2 减持/质押/分红 + E3 结构；**港股 K 线下载器 `downloader_hk.py`（`init-hk`/`update-hk`，港股通标的优先，AKShare Sina 主源）**。
+factor 域 `moneyflow`（AKShare 近60天）/ `moneyflow_sector`；tushare 域 `daily` / `daily_basic` / `top_list` / `margin` / `moneyflow`(2010起) / `moneyflow_ind` / `moneyflow_mkt`；macro 域全部 14 项（`cny_usd` / `shrongji` / `vix` / `dxy` / `oil_wti` / `copper_lme` / `sp500` / `hsi` / `fed_rate` / `us_bond_yield` 等，含 `bond_yield` 内的美债字段）；events 域 E1 日历 + E2 减持/质押/分红 + E3 结构；**港股 K 线下载器 `downloader_hk.py`（`init-hk`/`update-hk`，港股通标的优先，AKShare Sina 主源）**。
 
 ### 待下载（仍未实现下载器或未接入）
 
 | 数据 | 域 | 接口 | 优先级 | 说明 |
 |---|---|---|---|---|
-| 铜价 LME（D5b） | macro/copper_lme | 东财 `futures_global_hist_em("HG00Y")`（COMEX 铜代理） | P2 | VALID_TYPES 已预留，未接入；AKShare 无 LME 历史，可用 COMEX 代理 |
-| 美联储基准利率（D5b） | macro/fed_rate | AKShare `macro_bank_usa_interest_rate` | P2 | VALID_TYPES 已预留，无下载方法；该源已停更（2025-09 后无值） |
 | 分钟K线 | tushare/mins | Tushare `stk_mins` | P2 | 日内策略基础；日线体系稳定后再接入 |
 | 十大流通股东 | tushare/holders | Tushare `top10_floatholders` | P2 | 季频，机构持仓变化 |
 | 股东人数 | tushare/holders | Tushare `stk_holdernumber` | P2 | 筹码集中度判断 |

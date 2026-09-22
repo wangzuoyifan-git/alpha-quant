@@ -165,7 +165,7 @@ Agent 层内部实现**三层决策架构**，每层职责如下：
 | meta | `data/meta/` | 完成 | 申万SW2021三级（L1=31/L2=134/L3=346）/证监会行业分类/交易日历 |
 | fundamental | `data/fundamental/` | 完成 | 季频财务（利润/资产/现金流/成长/杜邦） |
 | factor | `data/factor/` | 重新定位 | 计算型因子（动量/价值/质量等衍生值），台阶二前暂空 |
-| macro | `data/macro/` | 基本完成 | 国内：国债收益率/M2/CPI-PPI/PMI/社融/汇率 已有。境外：VIX/DXY/原油WTI/标普/恒生 已有；美联储利率/LME铜 待下载。`update_db()`/`update-macro` 已覆盖全部 11 项（含汇率/境外） |
+| macro | `data/macro/` | 完成 | 国内 6 项 + 境外 8 项（含美债 `us_bond_yield` 派生、`copper_lme`、`fed_rate`）全部落地；`update_db()`/`update-macro` 覆盖全部下载项 |
 | moneyflow | `data/moneyflow/` | 完成 | 资金流与情绪域：stock/industry/market/northbound/margin/top_list；行业资金流用东财BK体系（覆盖申万L1全部/L2约95%） |
 | events | `data/events/` | 已建设 | E1 定期事件日历、E2 企业事件（减持/质押/分红）、E3 突发事件归档 |
 
