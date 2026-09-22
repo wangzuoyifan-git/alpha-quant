@@ -5,13 +5,19 @@
 # （A股 EOD 数据 16:00 后落定；港股 16:00 收盘，17:30 可拿到当日最终值）
 #
 # crontab 配置示例（每个交易日 17:30 运行）：
-#   30 17 * * 1-5 /home/wz/alpha-quant/scripts/update_daily.sh >> /home/wz/alpha-quant/logs/update_daily.log 2>&1
+#   30 17 * * 1-5 /home/wz/alpha-quant/scripts/update_daily.sh
+# 脚本内部会 tee 到 logs/update_daily.log，crontab 无需再重定向
 #
 # 手动运行：
 #   bash /home/wz/alpha-quant/scripts/update_daily.sh
+#
+# 说明：
+#   - 单步失败不中断后续步骤，末尾汇总；有失败时退出码为 1
+#   - 首次/长期未更新时，K 线补数据可能耗时较长（历史缺口越大越久）
+#   - events 域（E2 企业事件）为全市场逐只拉取，约 1 小时
 # =============================================================
 
-set -euo pipefail
+set -uo pipefail
 
 PROJ_DIR="/home/wz/alpha-quant"
 PYTHON="${PROJ_DIR}/venv/bin/python3"
@@ -19,25 +25,31 @@ LOG_DIR="${PROJ_DIR}/logs"
 LOG_FILE="${LOG_DIR}/update_daily.log"
 
 mkdir -p "${LOG_DIR}"
-
-echo "========================================"
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] 每日更新开始"
-echo "========================================"
-
 cd "${PROJ_DIR}"
 
-# 1. 更新 K 线数据（stock + index + etf）
-echo ""
-echo "[$(date '+%H:%M:%S')] [1/6] 更新 K 线数据..."
-"${PYTHON}" main.py update --types stock index etf
+# 输出同时写入终端与日志
+exec > >(tee -a "${LOG_FILE}") 2>&1
 
-# 2. 更新 meta 域（行业分类每周一更新，其他每日）
-echo ""
-echo "[$(date '+%H:%M:%S')] [2/6] 更新 meta 域..."
-"${PYTHON}" -c "
+FAILED=()
+
+run_step() {
+  local name="$1"; shift
+  echo ""
+  echo "[$(date '+%H:%M:%S')] ${name}..."
+  if "$@"; then
+    echo "[$(date '+%H:%M:%S')] ${name} 完成"
+  else
+    local rc=$?
+    echo "[$(date '+%H:%M:%S')] [警告] ${name} 失败（exit=${rc}），继续后续步骤"
+    FAILED+=("${name}")
+  fi
+}
+
+# meta：行业分类每周一全量刷新，其余每日增量
+update_meta() {
+  "${PYTHON}" -c "
 from data.downloader_meta import MetaDownloader
 import datetime
-# 只在周一更新行业分类（避免频繁请求）
 today = datetime.datetime.now().weekday()
 dl = MetaDownloader()
 if today == 0:  # 周一
@@ -45,42 +57,60 @@ if today == 0:  # 周一
 else:
     dl.update_db()
 "
+}
 
-# 3. 更新 factor 域（每日：北向资金 + 行业资金流向）
-echo ""
-echo "[$(date '+%H:%M:%S')] [3/6] 更新 factor 域..."
-"${PYTHON}" -c "
+# 港股：16:15 前跳过（避免写入盘中残缺 bar）
+update_hk_guarded() {
+  if [ "$(date '+%H%M')" -ge 1615 ]; then
+    "${PYTHON}" main.py update-hk
+  else
+    echo "跳过港股更新：当前 $(date '+%H:%M') 早于 16:15（港股未收盘）"
+    echo "如需更新请稍后单独执行: ${PYTHON} main.py update-hk"
+    return 0
+  fi
+}
+
+echo "========================================"
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] 每日更新开始"
+echo "========================================"
+
+# 1. A 股 K 线（stock + index + etf，Tushare 主源）
+run_step "[1/7] 更新 A 股 K 线数据" \
+  "${PYTHON}" main.py update --types stock index etf
+
+# 2. meta 域（行业分类 + 申万指数 + 交易日历）
+run_step "[2/7] 更新 meta 域" update_meta
+
+# 3. moneyflow 域（个股/龙虎榜/两融/行业/大盘/北向）
+run_step "[3/7] 更新 moneyflow 域" \
+  "${PYTHON}" main.py update-moneyflow
+
+# 4. events 域（E1 日历 + E2 减持/质押/分红，供风控过滤；全市场约 1 小时）
+run_step "[4/7] 更新 events 域" \
+  "${PYTHON}" main.py update-events
+
+# 5. macro 域（国内月频 + 汇率/境外日频）
+run_step "[5/7] 更新 macro 域" \
+  "${PYTHON}" main.py update-macro
+
+# 6. 港股 K 线（默认仅港股通标的）
+run_step "[6/7] 更新港股 K 线（港股通）" update_hk_guarded
+
+# 7. factor 域（台阶二前为空，空跑占位）
+run_step "[7/7] 更新 factor 域" "${PYTHON}" -c "
 from data.downloader_factor import FactorDownloader
-dl = FactorDownloader()
-dl.update_db()
+FactorDownloader().update_db()
 "
 
-# 4. 更新 tushare 域（融资融券等每日数据）
-echo ""
-echo "[$(date '+%H:%M:%S')] [4/6] 更新 tushare 域..."
-"${PYTHON}" main.py update-tushare
+# 8. 扫描信号（默认关闭，需要时取消注释）
+#run_step "[8/8] 扫描信号" "${PYTHON}" main.py scan --types stock
 
-# 5. 更新 macro 域（国内月频 + 汇率/境外日频）
-# 注：17:30 前运行时港股/境外当日 bar 可能未收，次日刷新会自动覆盖修正
 echo ""
-echo "[$(date '+%H:%M:%S')] [5/6] 更新 macro 域..."
-"${PYTHON}" main.py update-macro
-
-# 6. 更新港股 K 线（默认仅港股通标的；港股 16:00 收盘，16:15 前跳过避免写入盘中残缺 bar）
-echo ""
-if [ "$(date '+%H%M')" -ge 1615 ]; then
-  echo "[$(date '+%H:%M:%S')] [6/6] 更新港股 K 线（港股通）..."
-  "${PYTHON}" main.py update-hk
-else
-  echo "[$(date '+%H:%M:%S')] [6/6] 跳过港股更新：当前 $(date '+%H:%M') 早于 16:15（港股未收盘）"
-  echo "        如需更新请稍后单独执行: ${PYTHON} main.py update-hk"
+echo "========================================"
+if [ "${#FAILED[@]}" -gt 0 ]; then
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] 每日更新完成，但有失败步骤: ${FAILED[*]}"
+  echo "========================================"
+  exit 1
 fi
-
-# 7. 扫描信号
-#echo ""
-#echo "[$(date '+%H:%M:%S')] [7/7] 扫描信号..."
-#"${PYTHON}" main.py scan --types stock
-
-echo ""
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] 每日更新完成！"
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] 每日更新全部完成！"
 echo "========================================"
