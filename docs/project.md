@@ -1,7 +1,8 @@
 # Alpha量化 — 项目总览
 
 > 所有 Session 的共同基础参考。专项内容见各模块文档。
-> 最后更新：2026-08-13（港股 K 线接入：`data/downloader_hk.py` + `init-hk/update-hk`，港股通标的优先，AKShare Sina 主源）
+> 最后更新：2026-09-22（macro 域修复：`update_db()` 补齐汇率/境外指标 + `update-macro` CLI；CPI/PPI、社融、汇率、DXY、WTI 换源，修复 oil_wti 误存黄金数据）
+> 2026-08-13（港股 K 线接入：`data/downloader_hk.py` + `init-hk/update-hk`，港股通标的优先，AKShare Sina 主源）
 > 2026-06-21（L2行业评分升级到申万L2/131个细分行业；ETF独立三维评分体系 agents/etf_agent.py + data/etf_config.json；portfolio theme_etf 出场路径；L3联动强势主题ETF补入选股池；阶段A~D：成交额过滤/行业排除修复/Tool契约对齐/A2辅助分析 agent_tools/analysis.py）
 
 ---
@@ -164,7 +165,7 @@ Agent 层内部实现**三层决策架构**，每层职责如下：
 | meta | `data/meta/` | 完成 | 申万SW2021三级（L1=31/L2=134/L3=346）/证监会行业分类/交易日历 |
 | fundamental | `data/fundamental/` | 完成 | 季频财务（利润/资产/现金流/成长/杜邦） |
 | factor | `data/factor/` | 重新定位 | 计算型因子（动量/价值/质量等衍生值），台阶二前暂空 |
-| macro | `data/macro/` | 基本完成 | 国内：国债收益率/M2/CPI-PPI/PMI/社融/汇率 已有。境外：VIX/DXY/原油WTI/标普/恒生 已有；美联储利率/LME铜 待下载 |
+| macro | `data/macro/` | 基本完成 | 国内：国债收益率/M2/CPI-PPI/PMI/社融/汇率 已有。境外：VIX/DXY/原油WTI/标普/恒生 已有；美联储利率/LME铜 待下载。`update_db()`/`update-macro` 已覆盖全部 11 项（含汇率/境外） |
 | moneyflow | `data/moneyflow/` | 完成 | 资金流与情绪域：stock/industry/market/northbound/margin/top_list；行业资金流用东财BK体系（覆盖申万L1全部/L2约95%） |
 | events | `data/events/` | 已建设 | E1 定期事件日历、E2 企业事件（减持/质押/分红）、E3 突发事件归档 |
 

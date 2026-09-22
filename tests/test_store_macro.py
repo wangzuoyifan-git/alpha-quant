@@ -124,6 +124,25 @@ class TestMacroQuery:
         assert smacro.last_date("bond_yield") is None
 
 
+class TestMacroReplace:
+    """replace：整表覆盖写入（换源/全量重取，清除旧字段结构）"""
+
+    def test_replace_drops_old_columns(self, tmp_macro_dir):
+        old = pd.DataFrame({"date": [pd.Timestamp("2024-01-01")], "old_col": [1.0]})
+        smacro.save("cpi_ppi", old)
+        new = pd.DataFrame({"date": [pd.Timestamp("2024-02-01")], "cpi_yoy": [0.5]})
+        smacro.replace("cpi_ppi", new)
+        loaded = smacro.load("cpi_ppi")
+        assert loaded is not None
+        assert list(loaded.columns) == ["cpi_yoy"]
+        assert len(loaded) == 1
+
+    def test_replace_none_or_empty_noop(self, tmp_macro_dir):
+        smacro.replace("dxy", None)
+        smacro.replace("dxy", pd.DataFrame())
+        assert smacro.load("dxy") is None
+
+
 class TestMacroAux:
     """辅助接口"""
 

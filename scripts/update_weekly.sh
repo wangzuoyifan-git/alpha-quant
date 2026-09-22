@@ -30,7 +30,7 @@ dl = MetaDownloader()
 dl.update_db()
 "
 
-# 2. 更新 macro 域（宏观数据，月频但每周检查）
+# 2. 更新 macro 域（月频数据 + 汇率/境外日频兜底）
 echo ""
 echo "[$(date '+%H:%M:%S')] [2/2] 更新 macro 域..."
 "${PYTHON}" -c "

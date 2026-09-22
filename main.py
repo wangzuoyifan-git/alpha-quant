@@ -812,6 +812,12 @@ def cmd_init_macro(start: str = "2024-01-01"):
     dl.init_db(start=start)
 
 
+def cmd_update_macro():
+    """增量更新 macro 域（含汇率与境外指标）"""
+    from data.downloader_macro import MacroDownloader
+    MacroDownloader().update_db()
+
+
 def cmd_init_hk(start: str = "2020-01-02", end: str | None = None,
                 force: bool = False, connect_only: bool = True):
     """首次全量下载港股 K 线（默认仅港股通标的）"""
@@ -1704,6 +1710,7 @@ if __name__ == "__main__":
   python main.py init-fundamental --start-year 2022  # 从2022年开始
   python main.py init-factor                   # 初始化 factor 域（计算型因子，台阶二）
   python main.py init-macro                    # 初始化宏观经济数据
+  python main.py update-macro                  # 增量更新宏观数据（含汇率/境外指标）
   python main.py init-moneyflow                        # 初始化 moneyflow 域（stock 2010起，其余 2024起）
   python main.py init-moneyflow --types stock          # 只下载个股资金流
   python main.py init-moneyflow --stock-start 2015-01-01  # 个股资金流从2015年开始
@@ -1822,6 +1829,9 @@ if __name__ == "__main__":
     # init-macro
     p_init_macro = sub.add_parser("init-macro", help="初始化 macro 域（宏观经济数据）")
     p_init_macro.add_argument("--start", default="2024-01-01", help="起始日期（默认2024-01-01）")
+
+    # update-macro
+    sub.add_parser("update-macro", help="增量更新 macro 域（含汇率与境外指标）")
 
     # init-moneyflow
     p_init_mf = sub.add_parser("init-moneyflow", help="初始化 moneyflow 域（资金流与情绪）")
@@ -1947,6 +1957,8 @@ if __name__ == "__main__":
         cmd_init_factor(start=args.start)
     elif args.command == "init-macro":
         cmd_init_macro(start=args.start)
+    elif args.command == "update-macro":
+        cmd_update_macro()
     elif args.command == "init-moneyflow":
         cmd_init_moneyflow(
             start=args.start,

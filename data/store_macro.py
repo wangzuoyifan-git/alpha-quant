@@ -9,7 +9,7 @@ macro 域存储层
     pmi.parquet           PMI（月频）
     shrongji.parquet      社融/新增信贷（月频）D5a
     cny_usd.parquet       人民币汇率 CNY/USD（日频）D5a
-    us_bond_yield.parquet 美债收益率 2Y/10Y（日频）D5b
+    us_bond_yield.parquet 美债收益率 2Y/5Y/10Y/30Y（日频，派生自 bond_yield）D5b
     vix.parquet           VIX 恐慌指数（日频）D5b
     dxy.parquet           美元指数 DXY（日频）D5b
     oil_wti.parquet       原油 WTI（日频）D5b
@@ -19,7 +19,8 @@ macro 域存储层
     fed_rate.parquet      美联储基准利率（事件触发）D5b
 
 接口:
-  save(data_type, df)
+  save(data_type, df)          # 追加去重（keep="last"）
+  replace(data_type, df)       # 整表覆盖（换源/全量重取）
   load(data_type, start=None, end=None)
   exists(data_type)
   last_date(data_type)
@@ -87,6 +88,22 @@ def save(data_type: str, df: pd.DataFrame) -> None:
     df.sort_index(inplace=True)
     df.to_parquet(p, engine="pyarrow", compression="snappy")
     logger.debug(f"macro/{data_type} 已保存: {len(df)} 行")
+
+
+def replace(data_type: str, df: pd.DataFrame) -> None:
+    """
+    整表覆盖写入（不做 concat）。
+    适用于全量重取的来源（汇率/境外指标/换源后的 CPI/PPI/社融），
+    避免旧字段结构残留或旧源数据混杂。
+    """
+    if df is None or df.empty:
+        return
+    df = _normalize(df)
+    df = df[~df.index.duplicated(keep="last")]
+    df.sort_index(inplace=True)
+    p = _path(data_type)
+    df.to_parquet(p, engine="pyarrow", compression="snappy")
+    logger.debug(f"macro/{data_type} 已覆盖: {len(df)} 行")
 
 
 def load(data_type: str,

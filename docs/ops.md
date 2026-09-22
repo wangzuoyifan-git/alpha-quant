@@ -67,6 +67,7 @@ python3 main.py init-meta                         # 行业分类+申万指数+�
 python3 main.py init-fundamental                  # 季频财务数据（2024起）
 python3 main.py init-fundamental --start-year 2022
 python3 main.py init-macro                        # 宏观经济数据
+python3 main.py update-macro                      # 增量更新宏观（含汇率/境外指标）
 python3 main.py init-moneyflow                    # 资金流与情绪（stock 2010起，其余 2024起）
 python3 main.py init-moneyflow --types stock      # 只下载个股资金流
 python3 main.py update-moneyflow                  # 增量更新 moneyflow 域
@@ -327,19 +328,20 @@ python3 tools/test_init_flow.py                                 # init 流程端
 
 脚本位于 `scripts/`，需先激活虚拟环境。
 
-### 每日（收盘后，约 15:30）
+### 每日（收盘后，建议 17:30）
 
 ```bash
 scripts/update_daily.sh
-# 执行：update(market) → meta(周一init/其余update) → factor → update-tushare → scan(stock)
-# 注意：脚本未走 update-all，不含 fundamental/macro 域（分别由季度/每周脚本覆盖）
+# 执行：update(market) → meta(周一init/其余update) → factor → update-tushare → macro(含汇率/境外) → update-hk(港股通) → scan(stock)
+# 注：港股步骤在 16:15 前自动跳过（避免盘中残缺 bar）；17:30 运行可拿到港股当日最终值
+#     macro 的港股/境外当日 bar 次日刷新会自动覆盖修正
 ```
 
 ### 每周（周六 10:00）
 
 ```bash
 scripts/update_weekly.sh
-# 执行：meta 域 update_db（申万行业指数） → macro 域 update_db（月频宏观）
+# 执行：meta 域 update_db（申万行业指数） → macro 域 update_db（含汇率/境外，日频数据兜底）
 ```
 
 ### 每季度（季报披露后，约1月/4月/8月/10月）

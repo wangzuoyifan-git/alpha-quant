@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================
-# Alpha量化 — 每季度财务数据更新脚本
+# Alpha-quant— 每季度财务数据更新脚本
 # 建议在季报披露期后运行（4月/8月/10月/次年1月）
 #
 # crontab 配置示例（每月1日 09:00 检查，季报期自动更新）：
@@ -9,7 +9,7 @@
 
 set -euo pipefail
 
-PROJ_DIR="/home/wz/alpha量化"
+PROJ_DIR="/home/wz/alpha-quant"
 PYTHON="${PROJ_DIR}/venv/bin/python3"
 LOG_DIR="${PROJ_DIR}/logs"
 

@@ -615,11 +615,11 @@ _MACRO_TYPES = (
 
 _MACRO_DESC = {
     "bond_yield":   "中国国债收益率（2Y/5Y/10Y/30Y）",
-    "us_bond_yield":"美国国债收益率（2Y/10Y）",
+    "us_bond_yield":"美国国债收益率（2Y/5Y/10Y/30Y，派生自 bond_yield）",
     "m2":           "M2货币供应（月频）",
     "cpi_ppi":      "CPI / PPI（月频）",
     "pmi":          "PMI制造业/非制造业（月频）",
-    "shrongji":     "社会融资规模/新增信贷（月频）",
+    "shrongji":     "社会融资规模增量/存量（月频）",
     "cny_usd":      "人民币兑美元汇率",
     "vix":          "VIX 恐慌指数",
     "dxy":          "美元指数 DXY",
