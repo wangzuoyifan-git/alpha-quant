@@ -367,7 +367,7 @@ dl.init_db(start="2020-01-02", end=None, force=False)   # 全量初始化（断�
 dl.update_db(end=None)                                  # 增量更新
 ```
 
-- **港股通（南向）标的优先**：默认 `connect_only=True`。成分列表来源 AKShare `stock_hk_ggt_components_em`（东财），成功获取后缓存到 `data/meta/hk_connect.json`（当日有效）。列表获取失败时自动降级为全市场下载并告警。
+- **港股通（南向）标的优先**：默认 `connect_only=True`。成分列表来源 AKShare `stock_hk_ggt_components_em`（东财，失败重试 3 次）→ Tushare `hk_hold`（南向持股近似列表）→ 全市场降级；缓存 `data/meta/hk_connect.json` 当日有效，45 天内缓存可兜底。
 - 证券列表 `hk_basic`（Tushare）；上市日期索引写入 `ipo_dates.json` 的 `hk:*` 键，并额外记录 `hk_connect` 标志。
 - 容错：与 A 股下载器一致，单只 wall-clock 硬超时 `_PER_STOCK_TIMEOUT=45s`。
 

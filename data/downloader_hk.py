@@ -4,7 +4,8 @@
 设计目标：
   - store.py 已内置 hk 市场结构（data/market/hk/stock），本模块补齐数据通路。
   - **优先支持港股通（南向）标的**：默认 connect_only=True，
-    从港股通成分列表下载；列表获取失败时降级为全市场，并保留已有缓存。
+    从港股通成分列表下载；列表来源 东财（AKShare，重试）→ Tushare hk_hold 近似
+    → 全市场降级，并保留已有缓存。
   - 数据源（重要：Tushare `hk_daily` 当前账号限频 1次/小时，不适合批量，故）
       主 : AKShare `stock_hk_daily`（Sina 源，返回全历史、不复权、无显著限频）
       备 : Tushare `hk_daily`（按日期范围增量拉取，但因每小时限频仅作兜底）
@@ -65,7 +66,6 @@ def _bars(done, total, ok, fail, t0, prefix="港股"):
     bar = "█" * int(28 * pct) + "░" * (28 - int(28 * pct))
     line = (f"{prefix} [{bar}] {done}/{total}  新增:{ok} 失败:{fail}  "
             f"已用:{time.time()-t0:.0f}s")
-    import sys
     if sys.stdout.isatty():
         sys.stdout.write(f"\r{line}   ")
         sys.stdout.flush()
@@ -231,23 +231,60 @@ class HKDownloader:
         return result
 
     def _get_connect_codes(self) -> dict:
-        """港股通成分列表：先读本地缓存，未命中再请求 AKShare，成功后写回缓存。"""
-        # 本地缓存当日有效优先
-        cached = self._load_connect_cache()
-        if cached:
-            return cached
+        """港股通成分列表：当日缓存 → AKShare 东财（重试） → 近期缓存 → Tushare hk_hold 近似列表。"""
+        fresh = self._load_connect_cache(allow_stale=False)
+        if fresh:
+            return fresh
 
-        try:
-            import akshare as ak
-            df = ak.stock_hk_ggt_components_em()
-            if df is not None and not df.empty:
-                codes = self._parse_connect_df(df)
-                if codes:
-                    self._save_connect_cache(codes)
-                    return codes
-        except Exception as e:
-            logger.warning(f"港股通成分列表获取失败: {repr(e)[:100]}")
+        # 主源：AKShare 东财（该接口偶发连接重置，重试 3 次）
+        for attempt in range(3):
+            try:
+                import akshare as ak
+                df = ak.stock_hk_ggt_components_em()
+                if df is not None and not df.empty:
+                    codes = self._parse_connect_df(df)
+                    if codes:
+                        self._save_connect_cache(codes)
+                        return codes
+            except Exception as e:
+                logger.warning(f"港股通成分列表获取失败(第{attempt+1}次): {repr(e)[:100]}")
+                if attempt < 2:
+                    time.sleep(_RETRY_SLEEP * (attempt + 1))
+
+        # 备源1：近期缓存（成分股季度调整，短期过期可接受）
+        stale = self._load_connect_cache(allow_stale=True)
+        if stale:
+            return stale
+
+        # 备源2：Tushare hk_hold（南向持股标的，近似列表）
+        codes = self._get_connect_codes_ts()
+        if codes:
+            self._save_connect_cache(codes)
+            return codes
         return {}
+
+    def _get_connect_codes_ts(self) -> dict:
+        """备源：Tushare hk_hold 最新交易日南向持股标的（近似港股通列表）"""
+        try:
+            if self._pro is None:
+                return {}
+            df = self._pro.hk_hold()
+            if df is None or df.empty:
+                return {}
+            codes = {}
+            for _, row in df.iterrows():
+                tscode = str(row.get("ts_code") or "")
+                code = tscode.split(".")[0] if "." in tscode else tscode
+                code = code.zfill(5)
+                if code.isdigit():
+                    codes[code] = str(row.get("name") or "")
+            if codes:
+                _log(f"[提示] 东财港股通列表不可用，改用 Tushare hk_hold "
+                     f"南向持股标的（{len(codes)} 只，近似列表）")
+            return codes
+        except Exception as e:
+            logger.warning(f"Tushare hk_hold 备用列表获取失败: {e}")
+            return {}
 
     @staticmethod
     def _parse_connect_df(df: pd.DataFrame) -> dict:
@@ -267,14 +304,29 @@ class HKDownloader:
                 codes[code] = str(row[name_col]) if name_col else ""
         return codes
 
-    def _load_connect_cache(self) -> dict:
+    def _load_connect_cache(self, allow_stale: bool = True) -> dict:
+        """读取缓存：当日直接可用；allow_stale=True 时近 45 天缓存兜底（成分股季度调整）"""
         try:
             if not _CONNECT_FILE.exists():
                 return {}
             data = json.loads(_CONNECT_FILE.read_text(encoding="utf-8"))
-            # 仅当日有效：成分列表每日收市后更新
-            if data.get("date") == _today():
-                return data.get("codes", {})
+            codes = data.get("codes", {})
+            if not codes:
+                return {}
+            date_str = data.get("date", "")
+            if date_str == _today():
+                return codes
+            if not allow_stale:
+                return {}
+            try:
+                age = (datetime.strptime(_today(), "%Y-%m-%d") -
+                       datetime.strptime(date_str, "%Y-%m-%d")).days
+            except Exception:
+                age = 999
+            if 0 <= age <= 45:
+                _log(f"[提示] 使用 {date_str} 的港股通缓存列表"
+                     f"（{len(codes)} 只，已 {age} 天）")
+                return codes
         except Exception:
             pass
         return {}
@@ -293,15 +345,17 @@ class HKDownloader:
     # 批量下载
     # ------------------------------------------------------------------
 
-    def _batch_download(self, stocks, start: str, end: str,
+    def _batch_download(self, stocks, start: str | None = None,
+                        end: str | None = None,
                         start_map: dict | None = None,
                         force: bool = False) -> dict:
         total = len(stocks)
+        end = end or _today()
         ok = fail = 0
         t0 = time.time()
         _bars(0, total, ok, fail, t0)
         for code, _name in stocks:
-            s = (start_map or {}).get(code, start)
+            s = (start_map or {}).get(code) or start or DEFAULT_START
             try:
                 status = self._download_one_timed(code, s, end, force=force)
             except FutureTimeout:
