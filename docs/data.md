@@ -370,6 +370,7 @@ dl.update_db(end=None)                                  # 增量更新
 
 - **港股通（南向）标的优先**：默认 `connect_only=True`。成分列表来源 AKShare `stock_hk_ggt_components_em`（东财，失败重试 3 次）→ Tushare `hk_hold`（南向持股近似列表）→ 全市场降级；缓存 `data/meta/hk_connect.json` 当日有效，45 天内缓存可兜底。
 - 证券列表 `hk_basic`（Tushare）；上市日期索引写入 `ipo_dates.json` 的 `hk:*` 键，并额外记录 `hk_connect` 标志。
+- 时效保护：`init_db`/`update_db` 在 16:15（收盘+数据落定）前运行时，目标日自动回退到昨日；抓取窗口内无新数据视为**跳过**（不计失败，也不回落限频的 Tushare `hk_daily`）。
 - 容错：与 A 股下载器一致，单只 wall-clock 硬超时 `_PER_STOCK_TIMEOUT=45s`。
 
 CLI（`main.py`）：

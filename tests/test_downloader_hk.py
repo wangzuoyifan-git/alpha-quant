@@ -158,6 +158,52 @@ class TestBatchDownload:
         assert calls["00001"] == (DEFAULT_START, "2026-09-22")
 
 
+class TestSettledEnd:
+    """未收盘时目标日回退（当日数据尚不可用）"""
+
+    def test_before_close_rolls_back_to_yesterday(self):
+        from datetime import datetime as dt
+        assert dhk._settled_end("2026-09-23", now=dt(2026, 9, 23, 8, 47)) == "2026-09-22"
+
+    def test_after_close_keeps_today(self):
+        from datetime import datetime as dt
+        assert dhk._settled_end("2026-09-23", now=dt(2026, 9, 23, 17, 30)) == "2026-09-23"
+
+    def test_past_end_unchanged(self):
+        from datetime import datetime as dt
+        assert dhk._settled_end("2026-09-01", now=dt(2026, 9, 23, 8, 47)) == "2026-09-01"
+
+    def test_future_end_capped_to_today(self):
+        from datetime import datetime as dt
+        assert dhk._settled_end("2026-10-01", now=dt(2026, 9, 23, 17, 30)) == "2026-09-23"
+
+
+class TestDownloadOneSemantics:
+    """空窗口→跳过（不再回落限频的 Tushare）；异常→失败"""
+
+    def test_empty_window_returns_skip(self, monkeypatch):
+        dl = HKDownloader.__new__(HKDownloader)
+        dl._pro = None
+        monkeypatch.setattr(dl, "_download_stock_ak", lambda c, s, e: pd.DataFrame())
+        assert dl._download_one("00700", "2026-09-23", "2026-09-23") == "skip"
+
+    def test_source_error_returns_fail(self, monkeypatch):
+        dl = HKDownloader.__new__(HKDownloader)
+        dl._pro = None
+        monkeypatch.setattr(dl, "_download_stock_ak", lambda c, s, e: None)
+        assert dl._download_one("00700", "2026-09-23", "2026-09-23") == "fail"
+
+    def test_counts_skip_status(self, monkeypatch):
+        dl = HKDownloader.__new__(HKDownloader)
+        monkeypatch.setattr(dl, "_download_one_timed",
+                            lambda code, s, e, force=False: "skip")
+        monkeypatch.setattr(dhk.time, "sleep", lambda *_: None)
+        res = dl._batch_download([("00700", "腾讯控股")], end="2026-09-22",
+                                 start_map={"00700": "2026-09-01"})
+        assert res["skip"] == 1
+        assert res["fail"] == 0
+
+
 class TestValuationParsing:
     """百度股市通估值序列解析 + 合并进 K 线"""
 

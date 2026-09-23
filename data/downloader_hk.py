@@ -37,6 +37,18 @@ DEFAULT_START = "2020-01-02"
 _SLEEP = 0.3
 _RETRY_SLEEP = 2.0
 _PER_STOCK_TIMEOUT = 45
+_HK_SETTLE_TIME = "16:15"   # 港股收盘（16:00）+ 收市竞价/数据落定的大致时点
+
+
+def _settled_end(end: str, now: datetime | None = None) -> str:
+    """港股当日数据需收盘（约 16:15）后才可用；未收盘时把目标日回退到昨日"""
+    now = now or datetime.now()
+    today = now.strftime("%Y-%m-%d")
+    if end < today:
+        return end
+    if now.strftime("%H:%M") < _HK_SETTLE_TIME:
+        return (now - timedelta(days=1)).strftime("%Y-%m-%d")
+    return min(end, today)
 
 # 港股通成分列表本地缓存（data/meta/ 域，gitignore）
 _CONNECT_FILE = Path(__file__).parent / "meta" / "hk_connect.json"
@@ -119,7 +131,10 @@ class HKDownloader:
 
     def init_db(self, start: str = DEFAULT_START, end: str | None = None,
                 force: bool = False, connect_only: bool | None = None) -> dict:
-        end = end or _today()
+        requested_end = end or _today()
+        end = _settled_end(requested_end)
+        if end != requested_end:
+            _log(f"[提示] 港股当日数据需收盘后可用，目标日期由 {requested_end} 回退至 {end}")
         connect_only = self.connect_only if connect_only is None else connect_only
 
         mode = "港股通（南向）" if connect_only else "全市场"
@@ -153,7 +168,10 @@ class HKDownloader:
 
     def update_db(self, end: str | None = None,
                   connect_only: bool | None = None) -> dict:
-        end = end or _today()
+        requested_end = end or _today()
+        end = _settled_end(requested_end)
+        if end != requested_end:
+            _log(f"[提示] 港股当日数据需收盘后可用，目标日期由 {requested_end} 回退至 {end}")
         connect_only = self.connect_only if connect_only is None else connect_only
 
         _log("=" * 55)
@@ -483,7 +501,7 @@ class HKDownloader:
                         force: bool = False) -> dict:
         total = len(stocks)
         end = end or _today()
-        ok = fail = 0
+        ok = skip = fail = 0
         t0 = time.time()
         _bars(0, total, ok, fail, t0)
         for code, _name in stocks:
@@ -498,14 +516,16 @@ class HKDownloader:
                 status = "fail"
             if status == "ok":
                 ok += 1
+            elif status == "skip":
+                skip += 1
             else:
                 fail += 1
-            done = ok + fail
+            done = ok + skip + fail
             _bars(done, total, ok, fail, t0)
             time.sleep(_SLEEP)
         print()
-        _log(f"完成: 新增={ok} 失败={fail}")
-        return {"ok": ok, "skip": 0, "fail": fail, "total": total}
+        _log(f"完成: 新增={ok} 跳过={skip} 失败={fail}")
+        return {"ok": ok, "skip": skip, "fail": fail, "total": total}
 
     def _download_one_timed(self, code: str, start: str, end: str,
                             force: bool = False) -> str:
@@ -523,11 +543,14 @@ class HKDownloader:
         # 主源：AKShare（Sina，全历史，无显著限频）。
         # store.save 按 date 去重（保留已有 first），全历史重取是安全的增量方式。
         df = self._download_stock_ak(code, start, end)
-        # 兜底：Tushare hk_daily（账号 1次/小时，非批量场景；失败不影响主流程）
-        if df is None or df.empty and self._pro is not None:
+        # 仅当主源异常（None）时才回落 Tushare；窗口内无新数据（空表）直接跳过，
+        # 避免每只都触发 hk_daily（限频 1 次/分钟）拖垮整轮
+        if df is None and self._pro is not None:
             df = self._download_stock_ts(code, start, end)
-        if df is None or df.empty:
+        if df is None:
             return "fail"
+        if df.empty:
+            return "skip"
         store.save(code, df, asset_type="stock", market="hk", force=force)
         return "ok"
 
@@ -571,14 +594,16 @@ class HKDownloader:
     # ------------------------------------------------------------------
 
     def _download_stock_ak(self, code: str, start: str, end: str) -> pd.DataFrame | None:
+        """主源：AKShare Sina 全历史，按 [start,end] 截取。
+
+        返回 None 表示抓取异常（可回落 Tushare）；返回空表表示窗口内无新数据（跳过）。
+        """
         try:
             import akshare as ak
             df = ak.stock_hk_daily(symbol=code, adjust="")
             df["date"] = pd.to_datetime(df["date"])
             df = df[(df["date"] >= pd.Timestamp(start)) &
                     (df["date"] <= pd.Timestamp(end))]
-            if df.empty:
-                return None
             df = df.sort_values("date").reset_index(drop=True)
             df["preclose"] = df["close"].shift(1)
             df["pct_chg"] = df["close"].pct_change() * 100
