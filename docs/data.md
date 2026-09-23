@@ -117,9 +117,10 @@ A股字段：`open, high, low, close, preclose, volume, amount, turn, trade_stat
 
 指数/ETF字段：`open, high, low, close, preclose, volume, amount, pct_chg`
 
-港股字段（`market="hk"`）：`open, high, low, close, preclose, volume, amount, pct_chg`
+港股字段（`market="hk"`）：`open, high, low, close, preclose, volume, amount, pct_chg, pe_ttm, pb_mrq`
 - `volume` 单位股、`amount` 单位 HKD 元，直接存储（Tushare hk_daily / AKShare 均为该口径，勿照搬 A 股 ×100/×1000 换算）
 - 不复权（原始价）；港股通资格存于 ipo_dates 的 `hk_connect` 标志（`store.get_ipo_date` 同级可读）
+- `pe_ttm` / `pb_mrq`：由 `update-hk-valuation` 从百度股市通抓取后合并进 K 线文件（行情列不被覆盖）；日频、近三年历史
 
 注意：`trading_days_since_ipo` 当前用自然日计算，命名有误导性，待修复。
 
@@ -375,8 +376,11 @@ CLI（`main.py`）：
 ```
 python main.py init-hk [--start 2020-01-02] [--force] [--full]   # --full=全部港股
 python main.py update-hk [--full]
+python main.py update-hk-valuation [--full] [--period 近三年|近一年]  # PE/PB，合并进 K 线
 ```
-`update-all` 已含港股增量更新；`inspect kline <code> --market hk` 可直查港股 K 线。
+`update-all` 已含港股增量更新；`inspect kline <code> --market hk` 可直查港股 K 线（含 pe_ttm/pb_mrq）。
+
+**港股估值（PE/PB）**：来源百度股市通 `gushitong.baidu.com/opendata`（需带 UA/Referer，akshare 封装未带头会失败；亿牛网接口已停更至 2022-07，东财 `stock_hk_valuation_comparison_em` 只有快照）。逐只抓取 `市盈率(TTM)` 与 `市净率` 后按日期合并进 K 线文件；近三年为日频（约 1096 点），港股通约 1011 只、全量约 30 分钟。
 
 ### 3.3 其他域下载器
 

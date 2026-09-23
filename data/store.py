@@ -65,7 +65,7 @@ COLUMNS: Dict[str, Dict[str, List[str]]] = {
     "hk": {
         "stock": [
             "open", "high", "low", "close", "preclose",
-            "volume", "amount", "pct_chg",
+            "volume", "amount", "pct_chg", "pe_ttm", "pb_mrq",
         ],
         "index": [
             "open", "high", "low", "close", "preclose",
@@ -160,6 +160,25 @@ def save(code: str, df: pd.DataFrame,
     df.sort_index(inplace=True)
 
     # DS2 原子写入：先写临时文件，成功后再 rename
+    p = _path(code, market, asset_type)
+    tmp = Path(str(p) + ".tmp")
+    df.to_parquet(tmp, engine="pyarrow", compression="snappy")
+    os.replace(tmp, p)
+
+
+def replace(code: str, df: pd.DataFrame,
+            asset_type: str = "stock",
+            market: str = "cn") -> None:
+    """
+    整表覆盖写入（不做 concat），用于合并列/换源后的完整表。
+    market: cn / hk / us；asset_type: stock / index / etf
+    """
+    if df is None or df.empty:
+        return
+    df = _normalize(df, market, asset_type)
+    df = df[~df.index.duplicated(keep="last")]
+    df.sort_index(inplace=True)
+
     p = _path(code, market, asset_type)
     tmp = Path(str(p) + ".tmp")
     df.to_parquet(tmp, engine="pyarrow", compression="snappy")

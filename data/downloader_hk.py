@@ -41,6 +41,15 @@ _PER_STOCK_TIMEOUT = 45
 # 港股通成分列表本地缓存（data/meta/ 域，gitignore）
 _CONNECT_FILE = Path(__file__).parent / "meta" / "hk_connect.json"
 
+# 港股估值来源：百度股市通（需带 UA/Referer，akshare 封装未带头会失败）
+_BAIDU_URL = "https://gushitong.baidu.com/opendata"
+_BAIDU_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"),
+    "Referer": "https://gushitong.baidu.com/",
+}
+_VALUATION_COLS = ("pe_ttm", "pb_mrq")
+
 
 def _today() -> str:
     return datetime.now().strftime("%Y-%m-%d")
@@ -181,6 +190,129 @@ class HKDownloader:
         _log("更新完成！")
         self._save_ipo_dates(connect_only=connect_only)
         return self._print_stats(result)
+
+    # ------------------------------------------------------------------
+    # 港股估值（PE/PB，来源：百度股市通）
+    # ------------------------------------------------------------------
+
+    def update_valuation(self, connect_only: bool | None = None,
+                         period: str = "近三年",
+                         codes: list[str] | None = None) -> dict:
+        """下载港股 PE(TTM)/PB(MRQ) 并合并进 K 线文件（不覆盖行情列）"""
+        connect_only = self.connect_only if connect_only is None else connect_only
+        if codes is None:
+            codes = [c for c, _ in self._get_security_list(connect_only=connect_only)]
+        total = len(codes)
+        _log("=" * 55)
+        _log(f"HKDownloader — 估值更新（PE/PB）  标的: {total} 只  区间: {period}")
+        _log("=" * 55)
+
+        ok = skip = fail = 0
+        t0 = time.time()
+        _bars(0, total, ok, fail, t0, prefix="港股估值")
+        for code in codes:
+            try:
+                status = self._update_valuation_one(code, period)
+            except Exception as e:
+                logger.warning(f"{code} 估值更新异常: {e}")
+                status = "fail"
+            if status == "ok":
+                ok += 1
+            elif status == "skip":
+                skip += 1
+            else:
+                fail += 1
+            _bars(ok + skip + fail, total, ok, fail, t0, prefix="港股估值")
+            time.sleep(_SLEEP)
+        print()
+        _log(f"估值更新完成: 成功={ok} 跳过={skip} 失败={fail}")
+        return {"ok": ok, "skip": skip, "fail": fail, "total": total}
+
+    def _update_valuation_one(self, code: str, period: str) -> str:
+        kline = store.load(code, "stock", market="hk")
+        if kline is None or kline.empty:
+            return "skip"
+
+        pe = pb = None
+        try:
+            pe = self._fetch_baidu_valuation(code, "市盈率(TTM)", period)
+        except Exception as e:
+            logger.debug(f"{code} PE 获取失败: {e}")
+        time.sleep(_SLEEP)
+        try:
+            pb = self._fetch_baidu_valuation(code, "市净率", period)
+        except Exception as e:
+            logger.debug(f"{code} PB 获取失败: {e}")
+
+        val = self._build_valuation_df(pe, pb)
+        if val is None:
+            return "fail"
+        store.replace(code, self._merge_valuation(kline, val),
+                      asset_type="stock", market="hk")
+        return "ok"
+
+    @staticmethod
+    def _build_valuation_df(pe: pd.DataFrame | None,
+                            pb: pd.DataFrame | None) -> pd.DataFrame | None:
+        frames = {}
+        if pe is not None and not pe.empty:
+            frames["pe_ttm"] = pe["value"]
+        if pb is not None and not pb.empty:
+            frames["pb_mrq"] = pb["value"]
+        if not frames:
+            return None
+        return pd.DataFrame(frames)
+
+    @staticmethod
+    def _merge_valuation(kline: pd.DataFrame,
+                         val: pd.DataFrame) -> pd.DataFrame:
+        """按日期把估值列合并进 K 线（估值覆盖旧值，日期以 K 线为准）"""
+        merged = kline.copy()
+        for col in _VALUATION_COLS:
+            if col not in val.columns:
+                continue
+            new = val[col].reindex(merged.index)
+            if col in merged.columns:
+                merged[col] = new.where(new.notna(), merged[col])
+            else:
+                merged[col] = new
+        return merged
+
+    @staticmethod
+    def _parse_baidu_valuation(body: list) -> pd.DataFrame | None:
+        rows = []
+        for item in body or []:
+            if not isinstance(item, (list, tuple)) or len(item) < 2:
+                continue
+            try:
+                rows.append({"date": item[0], "value": float(item[1])})
+            except (TypeError, ValueError):
+                continue
+        if not rows:
+            return None
+        df = pd.DataFrame(rows).drop_duplicates("date").set_index("date")
+        df.index = pd.to_datetime(df.index)
+        return df
+
+    @staticmethod
+    def _fetch_baidu_valuation(code: str, indicator: str,
+                               period: str) -> pd.DataFrame | None:
+        """百度股市通-港股估值序列（市盈率(TTM)/市净率）；需带 UA/Referer"""
+        import requests
+
+        params = {
+            "openapi": "1", "dspName": "iphone", "tn": "tangram", "client": "app",
+            "query": indicator, "code": code, "word": "",
+            "resource_id": "51171", "market": "hk", "tag": indicator,
+            "chart_select": period, "industry_select": "",
+            "skip_industry": "1", "finClientType": "pc",
+        }
+        r = requests.get(_BAIDU_URL, params=params,
+                         headers=_BAIDU_HEADERS, timeout=20)
+        r.raise_for_status()
+        body = (r.json()["Result"][0]["DisplayData"]["resultData"]["tplData"]
+                ["result"]["chartInfo"][0]["body"])
+        return HKDownloader._parse_baidu_valuation(body)
 
     # ------------------------------------------------------------------
     # 证券列表（港股通标的优先）

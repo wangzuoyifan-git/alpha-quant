@@ -839,6 +839,12 @@ def cmd_update_hk(end: str | None = None, connect_only: bool = True):
     dl.update_db(end=end)
 
 
+def cmd_update_hk_valuation(connect_only: bool = True, period: str = "近三年"):
+    """更新港股 PE/PB 估值（百度股市通）并合并进 K 线"""
+    from data.downloader_hk import HKDownloader
+    HKDownloader(connect_only=connect_only).update_valuation(period=period)
+
+
 def cmd_init_moneyflow(start: str = "2024-01-01",
                        stock_start: str = "2010-01-01",
                        types: list | None = None) -> None:
@@ -1725,6 +1731,7 @@ if __name__ == "__main__":
   python main.py init-hk                      # 首次下载港股K线（默认仅港股通标的）
   python main.py init-hk --full               # 下载全部港股
   python main.py update-hk                    # 增量更新港股到今日
+  python main.py update-hk-valuation          # 更新港股 PE/PB（港股通，合并进 K 线）
   python main.py inspect kline 00700 --market hk   # 直查港股K线
   python main.py update-all                            # 更新所有域（含 moneyflow）
   python main.py scan                          # 今日全市场扫描（A股）
@@ -1874,6 +1881,15 @@ if __name__ == "__main__":
     p_upd_hk.add_argument("--full", dest="connect_only", action="store_false",
                           help="更新全部港股（默认仅港股通标的）")
 
+    # update-hk-valuation（港股 PE/PB）
+    p_upd_hkv = sub.add_parser("update-hk-valuation",
+                               help="更新港股 PE/PB 估值（百度股市通，合并进 K 线）")
+    p_upd_hkv.add_argument("--full", dest="connect_only", action="store_false",
+                           help="全部港股（默认仅港股通标的）")
+    p_upd_hkv.add_argument("--period", default="近三年",
+                           choices=["近一年", "近三年"],
+                           help="估值历史区间（默认近三年）")
+
     # update-all
     sub.add_parser("update-all", help="更新所有数据域（market+meta+fundamental+factor+macro）")
 
@@ -1984,6 +2000,8 @@ if __name__ == "__main__":
                     force=args.force, connect_only=args.connect_only)
     elif args.command == "update-hk":
         cmd_update_hk(end=args.end, connect_only=args.connect_only)
+    elif args.command == "update-hk-valuation":
+        cmd_update_hk_valuation(connect_only=args.connect_only, period=args.period)
     elif args.command == "update-all":
         cmd_update_all()
     elif args.command == "inspect":

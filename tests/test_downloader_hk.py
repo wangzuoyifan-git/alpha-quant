@@ -158,6 +158,37 @@ class TestBatchDownload:
         assert calls["00001"] == (DEFAULT_START, "2026-09-22")
 
 
+class TestValuationParsing:
+    """百度股市通估值序列解析 + 合并进 K 线"""
+
+    def test_parse_baidu(self):
+        body = [["2026-09-21", "14.42"], ["2026-09-22", "15.15"],
+                ["2026-09-23", None]]
+        out = HKDownloader._parse_baidu_valuation(body)
+        assert out is not None
+        assert list(out.columns) == ["value"]
+        assert len(out) == 2
+        assert out.index.max() == pd.Timestamp("2026-09-22")
+
+    def test_parse_bad_body(self):
+        assert HKDownloader._parse_baidu_valuation([]) is None
+        assert HKDownloader._parse_baidu_valuation([["bad"]]) is None
+
+    def test_merge_valuation_keeps_ohlc_and_updates_pe(self):
+        idx = pd.to_datetime(["2026-09-21", "2026-09-22"])
+        kline = pd.DataFrame({"close": [430.0, 451.6], "pe_ttm": [14.0, None]},
+                             index=idx)
+        val = pd.DataFrame({"pe_ttm": [15.15, 99.9], "pb_mrq": [3.14, 9.9]},
+                           index=pd.to_datetime(["2026-09-22", "2026-09-23"]))
+        out = HKDownloader._merge_valuation(kline, val)
+        assert list(out.columns) == ["close", "pe_ttm", "pb_mrq"]
+        assert out.loc["2026-09-22", "close"] == 451.6
+        assert out.loc["2026-09-22", "pe_ttm"] == 15.15
+        assert out.loc["2026-09-22", "pb_mrq"] == 3.14
+        assert out.loc["2026-09-21", "pe_ttm"] == 14.0
+        assert pd.Timestamp("2026-09-23") not in out.index
+
+
 class TestConnectTsFallback:
 
     def test_hk_hold_parsed(self):
