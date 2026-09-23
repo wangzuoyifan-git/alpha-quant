@@ -80,6 +80,11 @@ def save(data_type: str, df: pd.DataFrame, code: Optional[str] = None) -> None:
             df["date"] = pd.to_datetime(df["date"])
             df = df.set_index("date")
         df.index.name = "date"
+
+        existing = load(data_type)
+        if existing is not None and not existing.empty:
+            df = pd.concat([existing, df])
+            df = df[~df.index.duplicated(keep="last")]
         df.sort_index(inplace=True)
 
     df.to_parquet(p, engine="pyarrow", compression="snappy")

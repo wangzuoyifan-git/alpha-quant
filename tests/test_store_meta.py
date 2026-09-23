@@ -112,6 +112,9 @@ class TestMetaSaveLoad:
         store_meta.save("calendar", df2)
         loaded = store_meta.load("calendar")
         assert not loaded.index.has_duplicates
+        # 增量保存应合并（保留旧区间，新值覆盖重叠日期）
+        assert loaded.index.min() == pd.Timestamp("2024-01-02")
+        assert loaded.index.max() == pd.Timestamp("2024-01-31")
 
     def test_sw_index_dedup_on_resave(self, tmp_meta_dir):
         dates1 = pd.date_range("2024-01-02", "2024-01-20", freq="B")

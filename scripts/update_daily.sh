@@ -32,6 +32,13 @@ cd "${PROJ_DIR}"
 # 输出同时写入终端与日志
 exec > >(tee -a "${LOG_FILE}") 2>&1
 
+# 防止重复运行（上一轮未结束时新的 cron/手动执行直接退出）
+exec 9>"${LOG_DIR}/update_daily.lock"
+if ! flock -n 9; then
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] 已有 update_daily 实例在运行，本次退出"
+  exit 1
+fi
+
 FAILED=()
 
 run_step() {
@@ -61,14 +68,14 @@ else:
 "
 }
 
-# 港股：16:15 前跳过（避免写入盘中残缺 bar）
-update_hk_guarded() {
+# 港股步骤：16:15 前跳过（避免写入盘中残缺 bar）
+run_hk_step() {
+  local name="$1"; shift
   if [ "$(date '+%H%M')" -ge 1615 ]; then
-    "${PYTHON}" main.py update-hk
+    run_step "$name" "$@"
   else
-    echo "跳过港股更新：当前 $(date '+%H:%M') 早于 16:15（港股未收盘）"
-    echo "如需更新请稍后单独执行: ${PYTHON} main.py update-hk"
-    return 0
+    echo ""
+    echo "[$(date '+%H:%M:%S')] [跳过] ${name}：当前 $(date '+%H:%M') 早于 16:15（港股未收盘）"
   fi
 }
 
@@ -96,18 +103,19 @@ run_step "[5/10] 更新 macro 域" \
   "${PYTHON}" main.py update-macro
 
 # 6. 港股 K 线（默认仅港股通标的）
-run_step "[6/10] 更新港股 K 线（港股通）" update_hk_guarded
+run_hk_step "[6/10] 更新港股 K 线（港股通）" \
+  "${PYTHON}" main.py update-hk
 
 # 7. 港股 PE/PB/PCF 估值（百度股市通，合并进 K 线；约 30 分钟）
-run_step "[7/10] 更新港股估值（PE/PB/PCF）" \
+run_hk_step "[7/10] 更新港股估值（PE/PB/PCF）" \
   "${PYTHON}" main.py update-hk-valuation
 
 # 8. 港股资金流（东财，滚动约 100 个交易日；约 10-15 分钟）
-run_step "[8/10] 更新港股资金流" \
+run_hk_step "[8/10] 更新港股资金流" \
   "${PYTHON}" main.py update-hk-moneyflow
 
 # 9. 港股分红事件（events E2；约 10-15 分钟）
-run_step "[9/10] 更新港股分红事件" \
+run_hk_step "[9/10] 更新港股分红事件" \
   "${PYTHON}" main.py update-hk-events
 
 # 10. factor 域（台阶二前为空，空跑占位）

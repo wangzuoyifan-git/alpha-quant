@@ -24,6 +24,13 @@ cd "${PROJ_DIR}"
 
 exec > >(tee -a "${LOG_FILE}") 2>&1
 
+# 防止重复运行
+exec 9>"${LOG_DIR}/update_weekly.lock"
+if ! flock -n 9; then
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] 已有 update_weekly 实例在运行，本次退出"
+  exit 1
+fi
+
 FAILED=()
 
 run_step() {

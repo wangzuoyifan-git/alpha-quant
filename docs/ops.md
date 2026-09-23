@@ -347,8 +347,9 @@ scripts/update_daily.sh
 #       → [8]update-hk-moneyflow(约15m) → [9]update-hk-events(约15m)
 #       → [10]factor(台阶二前空跑) → scan(stock，默认注释)
 # 注：单步失败不中断，末尾汇总，有失败时退出码 1；输出同时写入 logs/update_daily.log
-#     港股步骤在 16:15 前自动跳过（避免盘中残缺 bar）；17:30 运行可拿到港股当日最终值
-#     macro 的港股/境外当日 bar 次日刷新会自动覆盖修正
+#     脚本带 flock 并发锁（上一轮未结束时新执行直接退出）
+#     港股 4 个步骤（K线/估值/资金流/分红）在 16:15 前统一跳过（避免盘中残缺 bar）
+#     17:30 运行可拿到港股当日最终值；macro 的港股/境外当日 bar 次日刷新会自动覆盖修正
 ```
 
 ### 每周（周六 10:00）
@@ -357,14 +358,15 @@ scripts/update_daily.sh
 scripts/update_weekly.sh
 # 执行：meta 域 update_db → macro 域 update_db（含汇率/境外，日频数据兜底）
 #       → 港股财务 update-hk-financials（约1h） → A股 PCF update-cn-pcf（约1-1.5h）
-# 注：events 域在每日脚本中更新；单步失败不中断，末尾汇总
+# 注：events 域在每日脚本中更新；单步失败不中断，末尾汇总；带 flock 并发锁
 ```
 
 ### 每季度（季报披露后，约1月/4月/8月/10月）
 
 ```bash
 scripts/update_quarterly.sh
-# 执行：fundamental 域 update_db（更新财务数据）
+# 执行：A股 fundamental 域 update_db（更新财务数据）
+# 注：港股财务在每周脚本中更新；单步失败不中断，末尾汇总；带 flock 并发锁
 ```
 
 ### 用 crontab 配置自动运行
@@ -372,14 +374,14 @@ scripts/update_quarterly.sh
 ```bash
 crontab -e
 
-# 每个交易日 15:35 运行每日更新
-35 15 * * 1-5 /home/wz/alpha量化/scripts/update_daily.sh >> /home/wz/alpha量化/logs/update_daily.log 2>&1
+# 每个交易日 17:30 运行每日更新（脚本内部自带日志与 flock 并发锁）
+30 17 * * 1-5 /home/wz/alpha-quant/scripts/update_daily.sh
 
-# 每周六 10:00 运行每周更新（与脚本头注释一致）
-0 10 * * 6 /home/wz/alpha量化/scripts/update_weekly.sh >> /home/wz/alpha量化/logs/update_weekly.log 2>&1
+# 每周六 10:00 运行每周更新
+0 10 * * 6 /home/wz/alpha-quant/scripts/update_weekly.sh
 
 # 每季度首月1日 09:00 运行季度更新
-0 9 1 1,4,8,10 * /home/wz/alpha量化/scripts/update_quarterly.sh >> /home/wz/alpha量化/logs/update_quarterly.log 2>&1
+0 9 1 1,4,8,10 /home/wz/alpha-quant/scripts/update_quarterly.sh
 ```
 
 ### 用 APScheduler 运行（内置调度器）
