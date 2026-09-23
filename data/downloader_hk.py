@@ -412,7 +412,10 @@ class HKDownloader:
                 if len(line.split(",")) >= len(cols)]
         if not rows:
             return None
-        return pd.DataFrame(rows, columns=cols)
+        df = pd.DataFrame(rows, columns=cols)
+        for c in cols[1:]:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+        return df
 
     @staticmethod
     def _fetch_hk_fflow(code: str) -> pd.DataFrame | None:

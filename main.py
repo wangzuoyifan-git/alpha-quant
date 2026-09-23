@@ -1002,10 +1002,13 @@ def cmd_inspect(subtype: str, target: str = "",
         if targets is None:
             return
         if len(targets) == 1:
-            cmd_stock_mf(targets[0], n=n, start=start, end=end, plot=plot)
+            cmd_stock_mf(targets[0], n=n, start=start, end=end, plot=plot,
+                         market=market)
         else:
-            cmd_stock_mf_multi(targets, metric=metric or "net_mf_amount",
-                                n=n, start=start, end=end)
+            cmd_stock_mf_multi(targets,
+                               metric=metric or ("main_net" if market == "hk"
+                                                 else "net_mf_amount"),
+                               n=n, start=start, end=end, market=market)
 
     elif subtype == "ind":
         raw = codes or ([target] if target else [])
@@ -1036,12 +1039,15 @@ def cmd_inspect(subtype: str, target: str = "",
                 return
             print("请提供股票代码或名称")
             return
-        resolved = _resolve_codes(raw, asset_type="stock")
-        if not resolved:
-            return
+        if market == "cn":
+            resolved = _resolve_codes(raw, asset_type="stock")
+            if not resolved:
+                return
+        else:
+            resolved = raw
         for code in resolved:
             cmd_fundamental(code, data_type=metric or "profit",
-                            n=n, start=start, end=end)
+                            n=n, start=start, end=end, market=market)
     else:
         print("可用子类型: kline / mf / ind / macro")
 
@@ -1955,7 +1961,7 @@ if __name__ == "__main__":
     p_ins.add_argument("--type", dest="asset_type", default="stock",
                        choices=["stock", "index", "etf"], help="资产类型（kline用，默认stock）")
     p_ins.add_argument("--market", default="cn", choices=["cn", "hk", "us"],
-                       help="市场（kline用，默认 cn）")
+                       help="市场（kline/mf/fundamental 用，默认 cn）")
     p_ins.add_argument("--codes", nargs="*", default=None,
                        help="多个代码/行业名（空格分隔），与 target 二选一")
     p_ins.add_argument("--metric", default=None,

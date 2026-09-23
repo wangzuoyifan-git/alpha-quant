@@ -214,8 +214,8 @@ class TestHkMoneyflowParsing:
         assert out is not None
         assert len(out) == 1
         assert out.iloc[0]["date"] == "2026-09-22"
-        assert out.iloc[0]["main_net"] == "3208242096.0"
-        assert out.iloc[0]["close"] == "451.600"
+        assert out.iloc[0]["main_net"] == 3208242096.0
+        assert out.iloc[0]["close"] == 451.6
 
     def test_parse_fflow_bad(self):
         assert HKDownloader._parse_fflow([]) is None

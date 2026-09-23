@@ -149,6 +149,19 @@ _FUNDAMENTAL_COLS = {
                  "dupontNitogr", "dupontPnitoni"],
 }
 
+# 港股（东财）关键列（科目名为中文/英文字段，取实际存在的）
+_HK_FUNDAMENTAL_COLS = {
+    "profit":   ["营业额", "毛利", "经营溢利", "除税前溢利", "股东应占溢利", "每股基本盈利"],
+    "balance":  ["总资产", "总负债", "总权益", "净资产", "总资产减总负债合计"],
+    "cashflow": ["经营业务现金净额", "投资业务现金净额", "融资业务现金净额",
+                 "现金净额", "期末现金"],
+    "growth":   ["OPERATE_INCOME_YOY", "GROSS_PROFIT_YOY", "HOLDER_PROFIT_YOY",
+                 "OPERATE_INCOME_QOQ", "GROSS_PROFIT_QOQ", "HOLDER_PROFIT_QOQ"],
+    "dupont":   ["BASIC_EPS", "EPS_TTM", "BPS", "OPERATE_INCOME", "GROSS_PROFIT",
+                 "HOLDER_PROFIT", "GROSS_PROFIT_RATIO", "NET_PROFIT_RATIO",
+                 "ROE_AVG", "ROA", "DEBT_ASSET_RATIO", "OCF_SALES"],
+}
+
 _FUNDAMENTAL_DESC = {
     "profit":   "利润表（ROE/净利润率/毛利率/净利润/EPS）",
     "balance":  "资产负债表（总资产/总负债/净资产/货币资金）",
@@ -159,7 +172,8 @@ _FUNDAMENTAL_DESC = {
 
 
 def cmd_fundamental(code: str, data_type: str = "profit",
-                    n: int = 8, start: str = None, end: str = None):
+                    n: int = 8, start: str = None, end: str = None,
+                    market: str = "cn"):
     import data.store_fundamental as fs
     import data.store as store
 
@@ -173,22 +187,23 @@ def cmd_fundamental(code: str, data_type: str = "profit",
         print(f"[错误] 未知表 '{data_type}'，可选: {list(_FUNDAMENTAL_DESC)}")
         return
 
-    # 支持名称输入
-    resolved = _resolve_codes([code], asset_type="stock")
-    if not resolved:
-        return
-    code = resolved[0]
+    # A股支持名称输入；港股直接使用 5 位代码
+    if market == "cn":
+        resolved = _resolve_codes([code], asset_type="stock")
+        if not resolved:
+            return
+        code = resolved[0]
 
     name = code
     try:
         ipo = store.load_ipo_dates()
-        name = ipo.get(f"cn:{code}", {}).get("name", code)
+        name = ipo.get(f"{market}:{code}", {}).get("name", code)
     except Exception:
         pass
 
-    df = fs.load(code, data_type)
+    df = fs.load(code, data_type, market=market)
     if df is None or df.empty:
-        print(f"[错误] 未找到 {code} {name} 的 {data_type} 数据")
+        print(f"[错误] 未找到 {market}/{code} {name} 的 {data_type} 数据")
         return
 
     if start:
@@ -198,13 +213,14 @@ def cmd_fundamental(code: str, data_type: str = "profit",
 
     tail = df.tail(n) if not (start or end) else df
 
-    # 只显示关键列（取实际存在的）
-    show_cols = [c for c in _FUNDAMENTAL_COLS.get(data_type, []) if c in tail.columns]
+    # 只显示关键列（取实际存在的；港股用港股列名表）
+    col_map = _HK_FUNDAMENTAL_COLS if market == "hk" else _FUNDAMENTAL_COLS
+    show_cols = [c for c in col_map.get(data_type, []) if c in tail.columns]
     if not show_cols:
         show_cols = [c for c in tail.columns if c != "pubDate"]
 
     _print_df(tail[show_cols],
-              title=f"基本面  {code} {name}  {data_type}  "
+              title=f"基本面  {market}/{code} {name}  {data_type}  "
                     f"{_FUNDAMENTAL_DESC.get(data_type, '')}  "
                     f"{len(tail)} 期  （最新 {df.index.max().date()}）",
               float_fmt="{:.4f}")
@@ -302,13 +318,19 @@ def cmd_kline_multi(codes: list[str], metric: str = "close",
 
 
 def cmd_stock_mf_multi(codes: list[str], metric: str = "net_mf_amount",
-                       n: int = 20, start: str = None, end: str = None):
+                       n: int = 20, start: str = None, end: str = None,
+                       market: str = "cn"):
     """多只个股资金流横向对比"""
     import data.store_moneyflow as mf
 
+    if market == "hk" and metric == "net_mf_amount":
+        metric = "main_net"
+    scale = 1e8 if market == "hk" else 1e4   # hk: 元→亿；cn: 万元→亿
+    unit = "亿港元" if market == "hk" else "亿元"
+
     series = {}
     for code in codes:
-        df = mf.load("stock", code=code)
+        df = mf.load("stock", code=code, market=market)
         if df is None or df.empty or metric not in df.columns:
             print(f"[跳过] {code}: 无数据或无 {metric} 列")
             continue
@@ -317,13 +339,13 @@ def cmd_stock_mf_multi(codes: list[str], metric: str = "net_mf_amount",
         if end:
             df = df[df.index <= pd.Timestamp(end)]
         s = df[metric] if (start or end) else df[metric].tail(n)
-        series[code] = s / 1e4  # 万元 → 亿元
+        series[code] = s / scale
 
     if not series:
         print("[错误] 无有效数据")
         return
     _cross_table(series,
-                 title=f"个股资金流对比  {metric}(亿)  {len(series)} 只  "
+                 title=f"个股资金流对比  {metric}({unit})  {len(series)} 只  "
                        f"{'最近'+str(n)+'条' if not (start or end) else f'{start}~{end}'}",
                  float_fmt="{:.3f}")
 
@@ -433,12 +455,13 @@ def _plot_kline(df: pd.DataFrame, title: str):
 # ─────────────────────────────────────────────────────────
 
 def cmd_stock_mf(code: str, n: int = 10,
-                 start: str = None, end: str = None, plot: bool = False):
+                 start: str = None, end: str = None, plot: bool = False,
+                 market: str = "cn"):
     import data.store_moneyflow as mf
 
-    df = mf.load("stock", code=code)
+    df = mf.load("stock", code=code, market=market)
     if df is None or df.empty:
-        print(f"[错误] 未找到 {code} 的个股资金流数据")
+        print(f"[错误] 未找到 {market}/{code} 的个股资金流数据")
         return
 
     if start:
@@ -451,6 +474,28 @@ def cmd_stock_mf(code: str, n: int = 10,
 
     tail = df.tail(n) if not (start or end) else df
     tail = tail.copy()
+
+    if market == "hk":
+        # 港股（东财）：净额为「元」，转亿元；展示主力/超大/大/中/小单 + 主力占比
+        rename = {
+            "main_net": "主力(亿)", "xlarge_net": "超大单(亿)",
+            "large_net": "大单(亿)", "medium_net": "中单(亿)",
+            "small_net": "小单(亿)", "main_pct": "主力占比(%)",
+        }
+        for col in rename:
+            if col in tail.columns and col != "main_pct":
+                tail[col] = tail[col] / 1e8
+        show = [c for c in ("close", "pct_chg", "main_net", "xlarge_net",
+                            "large_net", "medium_net", "small_net",
+                            "main_pct") if c in tail.columns]
+        _print_df(tail[show].rename(columns=rename),
+                  title=f"港股资金流  {code}  最近 {len(tail)} 日  "
+                        f"（最新 {df.index.max().date()}）",
+                  float_fmt="{:.3f}")
+        if plot:
+            _plot_stock_mf(df.tail(60), code, market=market)
+        return
+
     # 金额转亿元
     for col in ["buy_elg_amount", "sell_elg_amount",
                 "buy_lg_amount", "sell_lg_amount",
@@ -476,19 +521,29 @@ def cmd_stock_mf(code: str, n: int = 10,
         _plot_stock_mf(df.tail(60), code)
 
 
-def _plot_stock_mf(df: pd.DataFrame, code: str):
+def _plot_stock_mf(df: pd.DataFrame, code: str, market: str = "cn"):
     try:
         import matplotlib.pyplot as plt
-        if "net_mf_amount" not in df.columns:
-            print("[提示] 无 net_mf_amount 字段，无法绘图")
-            return
-        net = df["net_mf_amount"] / 1e4  # 万元 → 亿元
+        if market == "hk":
+            if "main_net" not in df.columns:
+                print("[提示] 无 main_net 字段，无法绘图")
+                return
+            net = df["main_net"] / 1e8
+            ylabel = "主力净流入（亿港元）"
+            title = f"{code} 港股主力净流入（近60日）"
+        else:
+            if "net_mf_amount" not in df.columns:
+                print("[提示] 无 net_mf_amount 字段，无法绘图")
+                return
+            net = df["net_mf_amount"] / 1e4  # 万元 → 亿元
+            ylabel = "净流入（亿元）"
+            title = f"{code} 个股资金流（近60日）"
         colors = ["#d62728" if v >= 0 else "#2ca02c" for v in net]
         fig, ax = plt.subplots(figsize=(14, 4))
         ax.bar(df.index, net, color=colors, width=1)
         ax.axhline(0, color="gray", linewidth=0.8)
-        ax.set_ylabel("净流入（亿元）")
-        ax.set_title(f"{code} 个股资金流（近60日）")
+        ax.set_ylabel(ylabel)
+        ax.set_title(title)
         ax.grid(alpha=0.3)
         plt.tight_layout()
         plt.show()

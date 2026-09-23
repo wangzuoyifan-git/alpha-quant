@@ -98,6 +98,7 @@ python3 main.py inspect kline --codes 茅台 平安银行 --metric pct_chg   # �
 # 个股资金流
 python3 main.py inspect mf 茅台 --n 10
 python3 main.py inspect mf --codes 贵州茅台 000001 --start 2026-05-01  # 多只对比
+python3 main.py inspect mf 00700 --market hk --n 10                    # 港股资金流（主力/超大/大/中/小单）
 
 # 行业资金流（支持名称精确/模糊匹配）
 python3 main.py inspect ind 食品饮料 --n 20
@@ -116,6 +117,7 @@ python3 main.py inspect fundamental 茅台 --metric growth               # 成�
 python3 main.py inspect fundamental 600519 --metric dupont --n 8       # 杜邦分析
 python3 main.py inspect fundamental --metric list                      # 列出可用表
 python3 main.py inspect fundamental --codes 茅台 平安银行 --metric profit  # 多只对比
+python3 main.py inspect fundamental 00700 --market hk --metric dupont  # 港股财务（5 表：profit/balance/cashflow/growth/dupont）
 ```
 
 inspect 通用参数：
