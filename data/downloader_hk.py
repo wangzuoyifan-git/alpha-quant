@@ -60,7 +60,32 @@ _BAIDU_HEADERS = {
                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"),
     "Referer": "https://gushitong.baidu.com/",
 }
-_VALUATION_COLS = ("pe_ttm", "pb_mrq")
+_VALUATION_COLS = ("pe_ttm", "pb_mrq", "pcf_ttm")
+
+# 东财资金流接口（港股 secid=116.xxxxx；主域名 TLS 常被重置，备用域名/HTTP）
+_EM_FFLOW_HOSTS = ("https://91.push2his.eastmoney.com",
+                   "http://push2his.eastmoney.com")
+_EM_FFLOW_PATH = "/api/qt/stock/fflow/daykline/get"
+
+# 港股财务分析指标 → growth / dupont 分表列
+_HK_GROWTH_COLS = ("OPERATE_INCOME_YOY", "GROSS_PROFIT_YOY", "HOLDER_PROFIT_YOY",
+                   "OPERATE_INCOME_QOQ", "GROSS_PROFIT_QOQ", "HOLDER_PROFIT_QOQ")
+_HK_DUPONT_COLS = ("BASIC_EPS", "DILUTED_EPS", "EPS_TTM", "BPS", "PER_OI",
+                   "PER_NETCASH_OPERATE", "OPERATE_INCOME", "GROSS_PROFIT",
+                   "HOLDER_PROFIT", "GROSS_PROFIT_RATIO", "NET_PROFIT_RATIO",
+                   "ROE_AVG", "ROE_YEARLY", "ROA", "ROIC_YEARLY", "TAX_EBT",
+                   "OCF_SALES", "DEBT_ASSET_RATIO", "CURRENT_RATIO",
+                   "CURRENTDEBT_DEBT")
+
+
+def _norm_date(v) -> str | None:
+    """规范化日期值 → 'YYYY-MM-DD'，无效返回 None"""
+    if v is None:
+        return None
+    s = str(v).strip()
+    if not s or s.lower() == "nan" or s in ("-", "--"):
+        return None
+    return s.replace("/", "-")[:10]
 
 
 def _today() -> str:
@@ -251,7 +276,7 @@ class HKDownloader:
         if kline is None or kline.empty:
             return "skip"
 
-        pe = pb = None
+        pe = pb = pcf = None
         try:
             pe = self._fetch_baidu_valuation(code, "市盈率(TTM)", period)
         except Exception as e:
@@ -261,8 +286,13 @@ class HKDownloader:
             pb = self._fetch_baidu_valuation(code, "市净率", period)
         except Exception as e:
             logger.debug(f"{code} PB 获取失败: {e}")
+        time.sleep(_SLEEP)
+        try:
+            pcf = self._fetch_baidu_valuation(code, "市现率", period)
+        except Exception as e:
+            logger.debug(f"{code} PCF 获取失败: {e}")
 
-        val = self._build_valuation_df(pe, pb)
+        val = self._build_valuation_df(pe, pb, pcf)
         if val is None:
             return "fail"
         store.replace(code, self._merge_valuation(kline, val),
@@ -271,12 +301,15 @@ class HKDownloader:
 
     @staticmethod
     def _build_valuation_df(pe: pd.DataFrame | None,
-                            pb: pd.DataFrame | None) -> pd.DataFrame | None:
+                            pb: pd.DataFrame | None,
+                            pcf: pd.DataFrame | None = None) -> pd.DataFrame | None:
         frames = {}
         if pe is not None and not pe.empty:
             frames["pe_ttm"] = pe["value"]
         if pb is not None and not pb.empty:
             frames["pb_mrq"] = pb["value"]
+        if pcf is not None and not pcf.empty:
+            frames["pcf_ttm"] = pcf["value"]
         if not frames:
             return None
         return pd.DataFrame(frames)
@@ -331,6 +364,256 @@ class HKDownloader:
         body = (r.json()["Result"][0]["DisplayData"]["resultData"]["tplData"]
                 ["result"]["chartInfo"][0]["body"])
         return HKDownloader._parse_baidu_valuation(body)
+
+    # ------------------------------------------------------------------
+    # 港股资金流（东财，滚动约 100 个交易日，逐日累积）
+    # ------------------------------------------------------------------
+
+    def update_moneyflow(self, connect_only: bool | None = None,
+                         codes: list[str] | None = None) -> dict:
+        """下载港股个股资金流（主力/超大/大/中/小单净额+占比）"""
+        import data.store_moneyflow as store_mf
+
+        connect_only = self.connect_only if connect_only is None else connect_only
+        if codes is None:
+            codes = [c for c, _ in self._get_security_list(connect_only=connect_only)]
+        total = len(codes)
+        _log("=" * 55)
+        _log(f"HKDownloader — 资金流更新  标的: {total} 只")
+        _log("=" * 55)
+
+        ok = skip = fail = 0
+        t0 = time.time()
+        _bars(0, total, ok, fail, t0, prefix="港股资金流")
+        for code in codes:
+            try:
+                df = self._fetch_hk_fflow(code)
+                if df is None or df.empty:
+                    skip += 1
+                else:
+                    store_mf.save("stock", df, code=code, market="hk")
+                    ok += 1
+            except Exception as e:
+                logger.warning(f"{code} 资金流更新失败: {e}")
+                fail += 1
+            _bars(ok + skip + fail, total, ok, fail, t0, prefix="港股资金流")
+            time.sleep(_SLEEP)
+        print()
+        _log(f"资金流更新完成: 成功={ok} 跳过={skip} 失败={fail}")
+        return {"ok": ok, "skip": skip, "fail": fail, "total": total}
+
+    @staticmethod
+    def _parse_fflow(klines: list) -> pd.DataFrame | None:
+        """东财 fflow klines → 宽表（date + 主力/小/中/大/超大单净额+占比 + close/pct_chg）"""
+        cols = ["date", "main_net", "small_net", "medium_net", "large_net",
+                "xlarge_net", "main_pct", "small_pct", "medium_pct",
+                "large_pct", "xlarge_pct", "close", "pct_chg"]
+        rows = [line.split(",")[:len(cols)] for line in (klines or [])
+                if len(line.split(",")) >= len(cols)]
+        if not rows:
+            return None
+        return pd.DataFrame(rows, columns=cols)
+
+    @staticmethod
+    def _fetch_hk_fflow(code: str) -> pd.DataFrame | None:
+        import requests
+
+        params = {
+            "lmt": "0", "klt": "101", "secid": f"116.{code}",
+            "fields1": "f1,f2,f3,f7",
+            "fields2": ("f51,f52,f53,f54,f55,f56,f57,f58,"
+                        "f59,f60,f61,f62,f63,f64,f65"),
+            "ut": "b2884a393a59ad64002292a3e90d46a5",
+        }
+        headers = {
+            "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                           "AppleWebKit/537.36 Chrome/120 Safari/537.36"),
+            "Referer": "https://data.eastmoney.com/",
+        }
+        last_err = None
+        for host in _EM_FFLOW_HOSTS:
+            try:
+                r = requests.get(host + _EM_FFLOW_PATH, params=params,
+                                 headers=headers, timeout=20)
+                r.raise_for_status()
+                klines = (r.json().get("data") or {}).get("klines") or []
+                if klines:
+                    return HKDownloader._parse_fflow(klines)
+            except Exception as e:
+                last_err = e
+        if last_err is not None:
+            raise last_err
+        return None
+
+    # ------------------------------------------------------------------
+    # 港股财务（东财：三大报表 + 主要指标）
+    # ------------------------------------------------------------------
+
+    def update_financials(self, connect_only: bool | None = None,
+                          codes: list[str] | None = None) -> dict:
+        """下载港股财务：利润表/资产负债表/现金流量表 + 成长/杜邦指标"""
+        connect_only = self.connect_only if connect_only is None else connect_only
+        if codes is None:
+            codes = [c for c, _ in self._get_security_list(connect_only=connect_only)]
+        total = len(codes)
+        _log("=" * 55)
+        _log(f"HKDownloader — 财务更新  标的: {total} 只")
+        _log("=" * 55)
+
+        ok = skip = fail = 0
+        t0 = time.time()
+        _bars(0, total, ok, fail, t0, prefix="港股财务")
+        for code in codes:
+            try:
+                status = self._update_financials_one(code)
+            except Exception as e:
+                logger.warning(f"{code} 财务更新异常: {e}")
+                status = "fail"
+            if status == "ok":
+                ok += 1
+            elif status == "skip":
+                skip += 1
+            else:
+                fail += 1
+            _bars(ok + skip + fail, total, ok, fail, t0, prefix="港股财务")
+            time.sleep(_SLEEP)
+        print()
+        _log(f"财务更新完成: 成功={ok} 跳过={skip} 失败={fail}")
+        return {"ok": ok, "skip": skip, "fail": fail, "total": total}
+
+    def _update_financials_one(self, code: str) -> str:
+        import akshare as ak
+        import data.store_fundamental as store_fund
+
+        got = False
+        for symbol, dtype in (("利润表", "profit"),
+                              ("资产负债表", "balance"),
+                              ("现金流量表", "cashflow")):
+            try:
+                raw = ak.stock_financial_hk_report_em(
+                    stock=code, symbol=symbol, indicator="报告期")
+                wide = self._pivot_hk_statement(raw)
+                if wide is not None and not wide.empty:
+                    store_fund.save(code, wide, dtype, market="hk")
+                    got = True
+            except Exception as e:
+                logger.debug(f"{code} {symbol} 失败: {e}")
+            time.sleep(_SLEEP)
+
+        try:
+            ind = ak.stock_financial_hk_analysis_indicator_em(
+                symbol=code, indicator="报告期")
+            growth, dupont = self._split_hk_indicator(ind)
+            if growth is not None and not growth.empty:
+                store_fund.save(code, growth, "growth", market="hk")
+                got = True
+            if dupont is not None and not dupont.empty:
+                store_fund.save(code, dupont, "dupont", market="hk")
+                got = True
+        except Exception as e:
+            logger.debug(f"{code} 主要指标失败: {e}")
+        return "ok" if got else "skip"
+
+    @staticmethod
+    def _pivot_hk_statement(raw: pd.DataFrame) -> pd.DataFrame | None:
+        """东财港股报表长表（STD_ITEM_NAME/AMOUNT）→ 宽表（index=报告期，columns=科目）"""
+        if raw is None or raw.empty:
+            return None
+        if "STD_ITEM_NAME" not in raw.columns or "AMOUNT" not in raw.columns:
+            return None
+        df = raw.copy()
+        wide = df.pivot_table(index="REPORT_DATE", columns="STD_ITEM_NAME",
+                              values="AMOUNT", aggfunc="first")
+        if wide.empty:
+            return None
+        wide.index = pd.to_datetime(wide.index)
+        wide.index.name = "stat_date"
+        wide.columns.name = None
+        return wide
+
+    @staticmethod
+    def _split_hk_indicator(ind: pd.DataFrame):
+        """主要指标 → (growth 表, dupont 表)"""
+        if ind is None or ind.empty or "REPORT_DATE" not in ind.columns:
+            return None, None
+        df = ind.copy()
+        df["REPORT_DATE"] = pd.to_datetime(df["REPORT_DATE"])
+        df = df.set_index("REPORT_DATE")
+        df.index.name = "stat_date"
+        growth_cols = [c for c in _HK_GROWTH_COLS if c in df.columns]
+        dupont_cols = [c for c in _HK_DUPONT_COLS if c in df.columns]
+        growth = df[growth_cols] if growth_cols else None
+        dupont = df[dupont_cols] if dupont_cols else None
+        return growth, dupont
+
+    # ------------------------------------------------------------------
+    # 港股企业事件（分红派息 → events E2）
+    # ------------------------------------------------------------------
+
+    def update_dividend_events(self, connect_only: bool | None = None,
+                               codes: list[str] | None = None) -> dict:
+        """下载港股分红派息并写入 events 域 E2（event_type=dividend）"""
+        import akshare as ak
+        from data.store_events import save_corp_events
+
+        connect_only = self.connect_only if connect_only is None else connect_only
+        if codes is None:
+            codes = [c for c, _ in self._get_security_list(connect_only=connect_only)]
+        total = len(codes)
+        _log("=" * 55)
+        _log(f"HKDownloader — 分红事件更新  标的: {total} 只")
+        _log("=" * 55)
+
+        ok = skip = fail = 0
+        t0 = time.time()
+        _bars(0, total, ok, fail, t0, prefix="港股分红")
+        for code in codes:
+            try:
+                df = ak.stock_hk_dividend_payout_em(symbol=code)
+                events = self._build_hk_dividend_events(df, code)
+                if events:
+                    save_corp_events(code, events)
+                    ok += 1
+                else:
+                    skip += 1
+            except Exception as e:
+                logger.warning(f"{code} 分红事件更新失败: {e}")
+                fail += 1
+            _bars(ok + skip + fail, total, ok, fail, t0, prefix="港股分红")
+            time.sleep(_SLEEP)
+        print()
+        _log(f"分红事件更新完成: 成功={ok} 跳过={skip} 失败={fail}")
+        return {"ok": ok, "skip": skip, "fail": fail, "total": total}
+
+    @staticmethod
+    def _build_hk_dividend_events(df: pd.DataFrame, code: str) -> list:
+        """东财港股分红派息 → E2 事件列表"""
+        if df is None or df.empty:
+            return []
+        events = []
+        for _, row in df.iterrows():
+            ann = _norm_date(row.get("最新公告日期"))
+            if not ann:
+                continue
+            ex = _norm_date(row.get("除净日"))
+            events.append({
+                "event_id": f"hk_dividend_{code}_{ann.replace('-', '')}",
+                "code": code,
+                "event_type": "dividend",
+                "date": ann,
+                "end_date": ex,
+                "detail": {
+                    "fiscal_year": str(row.get("财政年度") or ""),
+                    "plan": str(row.get("分红方案") or ""),
+                    "div_type": str(row.get("分配类型") or ""),
+                    "ex_date": ex,
+                    "record_date": str(row.get("截至过户日") or ""),
+                    "pay_date": _norm_date(row.get("发放日")),
+                },
+                "source": "akshare",
+                "phase": 1,
+            })
+        return events
 
     # ------------------------------------------------------------------
     # 证券列表（港股通标的优先）

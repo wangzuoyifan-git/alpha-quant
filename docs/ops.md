@@ -74,7 +74,11 @@ python3 main.py init-moneyflow --types stock      # 只下载个股资金流
 python3 main.py update-moneyflow                  # 增量更新 moneyflow 域
 python3 main.py init-hk                           # 首次下载港股 K 线（默认仅港股通标的）
 python3 main.py update-hk                         # 增量更新港股 K 线
-python3 main.py update-hk-valuation               # 更新港股 PE/PB（港股通，合并进 K 线）
+python3 main.py update-hk-valuation               # 更新港股 PE/PB/PCF（港股通，合并进 K 线）
+python3 main.py update-hk-moneyflow               # 更新港股个股资金流（东财，滚动约100个交易日）
+python3 main.py update-hk-financials              # 更新港股财务（三大报表+成长/杜邦）
+python3 main.py update-hk-events                  # 更新港股分红事件（events E2）
+python3 main.py update-cn-pcf                     # 补充 A 股 pcf_ttm（百度市现率）
 
 # 全域更新
 python3 main.py update-all                        # market+meta+fundamental+factor+macro+moneyflow
@@ -338,7 +342,8 @@ python3 tools/test_init_flow.py                                 # init 流程端
 scripts/update_daily.sh
 # 执行：[1]market K线 → [2]meta(周一init/其余update) → [3]moneyflow → [4]events(约1h)
 #       → [5]macro(含汇率/境外) → [6]update-hk(港股通) → [7]update-hk-valuation(约30m)
-#       → [8]factor(台阶二前空跑) → scan(stock，默认注释)
+#       → [8]update-hk-moneyflow(约15m) → [9]update-hk-events(约15m)
+#       → [10]factor(台阶二前空跑) → scan(stock，默认注释)
 # 注：单步失败不中断，末尾汇总，有失败时退出码 1；输出同时写入 logs/update_daily.log
 #     港股步骤在 16:15 前自动跳过（避免盘中残缺 bar）；17:30 运行可拿到港股当日最终值
 #     macro 的港股/境外当日 bar 次日刷新会自动覆盖修正
@@ -349,6 +354,7 @@ scripts/update_daily.sh
 ```bash
 scripts/update_weekly.sh
 # 执行：meta 域 update_db → macro 域 update_db（含汇率/境外，日频数据兜底）
+#       → 港股财务 update-hk-financials（约1h） → A股 PCF update-cn-pcf（约1-1.5h）
 # 注：events 域在每日脚本中更新；单步失败不中断，末尾汇总
 ```
 

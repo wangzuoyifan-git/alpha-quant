@@ -845,6 +845,30 @@ def cmd_update_hk_valuation(connect_only: bool = True, period: str = "近三年"
     HKDownloader(connect_only=connect_only).update_valuation(period=period)
 
 
+def cmd_update_hk_moneyflow(connect_only: bool = True):
+    """更新港股个股资金流（东财，滚动约 100 个交易日）"""
+    from data.downloader_hk import HKDownloader
+    HKDownloader(connect_only=connect_only).update_moneyflow()
+
+
+def cmd_update_hk_financials(connect_only: bool = True):
+    """更新港股财务（东财三大报表 + 成长/杜邦指标）"""
+    from data.downloader_hk import HKDownloader
+    HKDownloader(connect_only=connect_only).update_financials()
+
+
+def cmd_update_hk_events(connect_only: bool = True):
+    """更新港股分红派息事件（写入 events E2）"""
+    from data.downloader_hk import HKDownloader
+    HKDownloader(connect_only=connect_only).update_dividend_events()
+
+
+def cmd_update_cn_pcf(codes: list | None = None):
+    """补充 A 股 pcf_ttm（百度市现率）"""
+    from data.downloader_valuation import update_cn_pcf
+    update_cn_pcf(codes=codes)
+
+
 def cmd_init_moneyflow(start: str = "2024-01-01",
                        stock_start: str = "2010-01-01",
                        types: list | None = None) -> None:
@@ -1732,6 +1756,10 @@ if __name__ == "__main__":
   python main.py init-hk --full               # 下载全部港股
   python main.py update-hk                    # 增量更新港股到今日
   python main.py update-hk-valuation          # 更新港股 PE/PB（港股通，合并进 K 线）
+  python main.py update-hk-moneyflow          # 更新港股个股资金流（东财）
+  python main.py update-hk-financials         # 更新港股财务（三大报表+指标）
+  python main.py update-hk-events             # 更新港股分红事件（events E2）
+  python main.py update-cn-pcf                # 补充 A 股 pcf_ttm（百度市现率）
   python main.py inspect kline 00700 --market hk   # 直查港股K线
   python main.py update-all                            # 更新所有域（含 moneyflow）
   python main.py scan                          # 今日全市场扫描（A股）
@@ -1890,6 +1918,30 @@ if __name__ == "__main__":
                            choices=["近一年", "近三年"],
                            help="估值历史区间（默认近三年）")
 
+    # update-hk-moneyflow（港股资金流）
+    p_upd_hkm = sub.add_parser("update-hk-moneyflow",
+                               help="更新港股个股资金流（东财，约 100 个交易日滚动）")
+    p_upd_hkm.add_argument("--full", dest="connect_only", action="store_false",
+                           help="全部港股（默认仅港股通标的）")
+
+    # update-hk-financials（港股财务）
+    p_upd_hkf = sub.add_parser("update-hk-financials",
+                               help="更新港股财务（三大报表 + 成长/杜邦指标）")
+    p_upd_hkf.add_argument("--full", dest="connect_only", action="store_false",
+                           help="全部港股（默认仅港股通标的）")
+
+    # update-hk-events（港股分红事件）
+    p_upd_hke = sub.add_parser("update-hk-events",
+                               help="更新港股分红派息事件（events E2）")
+    p_upd_hke.add_argument("--full", dest="connect_only", action="store_false",
+                           help="全部港股（默认仅港股通标的）")
+
+    # update-cn-pcf（A股 PCF）
+    p_upd_pcf = sub.add_parser("update-cn-pcf",
+                               help="补充 A 股 pcf_ttm（百度市现率）")
+    p_upd_pcf.add_argument("--codes", nargs="*", default=None,
+                           help="指定股票代码（默认全市场，约 1 小时）")
+
     # update-all
     sub.add_parser("update-all", help="更新所有数据域（market+meta+fundamental+factor+macro）")
 
@@ -2002,6 +2054,14 @@ if __name__ == "__main__":
         cmd_update_hk(end=args.end, connect_only=args.connect_only)
     elif args.command == "update-hk-valuation":
         cmd_update_hk_valuation(connect_only=args.connect_only, period=args.period)
+    elif args.command == "update-hk-moneyflow":
+        cmd_update_hk_moneyflow(connect_only=args.connect_only)
+    elif args.command == "update-hk-financials":
+        cmd_update_hk_financials(connect_only=args.connect_only)
+    elif args.command == "update-hk-events":
+        cmd_update_hk_events(connect_only=args.connect_only)
+    elif args.command == "update-cn-pcf":
+        cmd_update_cn_pcf(codes=args.codes)
     elif args.command == "update-all":
         cmd_update_all()
     elif args.command == "inspect":

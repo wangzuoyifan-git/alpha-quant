@@ -234,3 +234,21 @@ class TestMoneyflowAux:
         smf.save("stock", None, code="600519")
         smf.save("stock", pd.DataFrame(), code="600519")
         assert smf.load("stock", code="600519") is None
+
+
+class TestMoneyflowMarket:
+    """market 维度：hk 落在 BASE_DIR/hk/ 下，与 cn 同名代码互不干扰"""
+
+    def test_hk_market_path_and_roundtrip(self, tmp_mf_dir):
+        d = tmp_mf_dir / "hk" / "stock"
+        d.mkdir(parents=True, exist_ok=True)
+        df = pd.DataFrame({
+            "date": pd.date_range("2026-09-01", periods=3, freq="B"),
+            "main_net": [1.0, 2.0, 3.0],
+        })
+        smf.save("stock", df, code="00700", market="hk")
+        loaded = smf.load("stock", code="00700", market="hk")
+        assert loaded is not None and len(loaded) == 3
+        assert (d / "00700.parquet").exists()
+        assert smf.load("stock", code="00700") is None
+        assert smf.list_codes("stock", market="hk") == ["00700"]

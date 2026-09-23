@@ -1,7 +1,9 @@
 # Alpha量化 — 数据层文档
 
 > 数据层接口、各域结构、数据源说明、待办缺口。
-> 最后更新：2026-09-22（macro 域修复：`update_db()` 补齐汇率/境外指标 + 新增 `update-macro` CLI；换源 CPI/PPI→东财、社融→Tushare `sf_month`、汇率→外管局中间价、DXY→东财 100.UDI 直连、WTI→新浪外盘 CL，修复 oil_wti 误存黄金数据；补齐 `copper_lme`（新浪 CAD，LME 铜）与 `fed_rate`（东财数据中心利率目标），macro 14 项全部落地。）
+> 最后更新：2026-09-23（港股数据批次1：资金流 `update-hk-moneyflow`、财务 5 表 `update-hk-financials`、分红事件 `update-hk-events`、PCF 估值；store_moneyflow/store_fundamental 增加 market 维度；A股 pcf_ttm 补充 `update-cn-pcf`）
+>
+> 2026-09-22（macro 域修复：`update_db()` 补齐汇率/境外指标 + 新增 `update-macro` CLI；换源 CPI/PPI→东财、社融→Tushare `sf_month`、汇率→外管局中间价、DXY→东财 100.UDI 直连、WTI→新浪外盘 CL，修复 oil_wti 误存黄金数据；补齐 `copper_lme`（新浪 CAD，LME 铜）与 `fed_rate`（东财数据中心利率目标），macro 14 项全部落地。）
 >
 > 2026-08-13（新增港股 `init-hk / update-hk` 下载器 `data/downloader_hk.py`，优先支持港股通标的；Tushare `hk_daily` 账号限频 1次/小时 → 主用 AKShare Sina 源。）
 >
@@ -34,6 +36,7 @@ data/fundamental/
   cashflow/     5207只   季频现金流
   growth/       5207只   季频成长能力
   dupont/       5207只   季频杜邦分析
+  hk/                    港股财务（东财：三大报表 + 成长/杜邦指标，按 code 分片）
 
 data/meta/
   industry_classify.parquet  申万分类树（L1=31 / L2=134 / L3=346，SW2021，Tushare）
@@ -71,6 +74,7 @@ data/moneyflow/
   northbound.parquet     北向资金（AKShare，日频，2024起）
   margin/                融资融券明细（Tushare，按code分片）
   top_list/              龙虎榜（Tushare，按date分片）
+  hk/stock/              港股个股资金流（东财，主力/超大/大/中/小单净额+占比，滚动约100个交易日）
 
 data/events/
   calendar.json          E1 定期事件日历
@@ -117,10 +121,10 @@ A股字段：`open, high, low, close, preclose, volume, amount, turn, trade_stat
 
 指数/ETF字段：`open, high, low, close, preclose, volume, amount, pct_chg`
 
-港股字段（`market="hk"`）：`open, high, low, close, preclose, volume, amount, pct_chg, pe_ttm, pb_mrq`
+港股字段（`market="hk"`）：`open, high, low, close, preclose, volume, amount, pct_chg, pe_ttm, pb_mrq, pcf_ttm`
 - `volume` 单位股、`amount` 单位 HKD 元，直接存储（Tushare hk_daily / AKShare 均为该口径，勿照搬 A 股 ×100/×1000 换算）
 - 不复权（原始价）；港股通资格存于 ipo_dates 的 `hk_connect` 标志（`store.get_ipo_date` 同级可读）
-- `pe_ttm` / `pb_mrq`：由 `update-hk-valuation` 从百度股市通抓取后合并进 K 线文件（行情列不被覆盖）；日频、近三年历史
+- `pe_ttm` / `pb_mrq` / `pcf_ttm`：由 `update-hk-valuation` 从百度股市通抓取后合并进 K 线文件（行情列不被覆盖）；日频、近三年历史（市销率 PS 百度不提供，待批次 2）
 
 注意：`trading_days_since_ipo` 当前用自然日计算，命名有误导性，待修复。
 
@@ -162,13 +166,14 @@ store_meta.map_to_l1(industry_codes, level="L2") -> list[str]
 ```python
 import data.store_fundamental as store_fund
 
-store_fund.save(code, df, data_type) -> None
-store_fund.load(code, data_type, start=None, end=None) -> Optional[DataFrame]
-store_fund.exists(code, data_type) -> bool
-store_fund.last_date(code, data_type) -> Optional[str]
+store_fund.save(code, df, data_type, market="cn") -> None
+store_fund.load(code, data_type, start=None, end=None, market="cn") -> Optional[DataFrame]
+store_fund.exists(code, data_type, market="cn") -> bool
+store_fund.last_date(code, data_type, market="cn") -> Optional[str]
 ```
 
 `data_type` 取值：`profit` / `balance` / `cashflow` / `growth` / `dupont`
+`market` 取值：`cn`（默认，`data/fundamental/{type}/`）/ `hk`（`data/fundamental/hk/{type}/`，来源东财：三表 + 主要指标拆分）
 
 ### 2.4 factor 域（data/store_factor.py）
 
@@ -220,13 +225,13 @@ store_macro.last_date(data_type) -> Optional[str]
 ```python
 import data.store_moneyflow as store_mf
 
-# 支持 code分片 / date分片 / 单文件 三种存储模式
-store_mf.save(data_type, df, code=None, date=None) -> None
-store_mf.load(data_type, code=None, date=None, start=None, end=None) -> Optional[DataFrame]
-store_mf.exists(data_type, code=None, date=None) -> bool
-store_mf.list_codes(data_type) -> List[str]
-store_mf.list_dates(data_type) -> List[str]
-store_mf.last_date(data_type, code=None) -> Optional[str]
+# 支持 code分片 / date分片 / 单文件 三种存储模式（market: cn 默认 / hk）
+store_mf.save(data_type, df, code=None, date=None, market="cn") -> None
+store_mf.load(data_type, code=None, date=None, start=None, end=None, market="cn") -> Optional[DataFrame]
+store_mf.exists(data_type, code=None, date=None, market="cn") -> bool
+store_mf.list_codes(data_type, market="cn") -> List[str]
+store_mf.list_dates(data_type, market="cn") -> List[str]
+store_mf.last_date(data_type, code=None, market="cn") -> Optional[str]
 store_mf.stats() -> dict
 ```
 
@@ -377,11 +382,21 @@ CLI（`main.py`）：
 ```
 python main.py init-hk [--start 2020-01-02] [--force] [--full]   # --full=全部港股
 python main.py update-hk [--full]
-python main.py update-hk-valuation [--full] [--period 近三年|近一年]  # PE/PB，合并进 K 线
+python main.py update-hk-valuation [--full] [--period 近三年|近一年]  # PE/PB/PCF，合并进 K 线
+python main.py update-hk-moneyflow [--full]        # 港股资金流（东财，滚动约100个交易日）
+python main.py update-hk-financials [--full]       # 港股财务（三表+成长/杜邦指标）
+python main.py update-hk-events [--full]           # 港股分红事件 → events E2
+python main.py update-cn-pcf [--codes ...]         # A股 pcf_ttm（百度市现率）
 ```
-`update-all` 已含港股增量更新；`inspect kline <code> --market hk` 可直查港股 K 线（含 pe_ttm/pb_mrq）。
+`update-all` 已含港股增量更新；`inspect kline <code> --market hk` 可直查港股 K 线（含 pe_ttm/pb_mrq/pcf_ttm）。
 
-**港股估值（PE/PB）**：来源百度股市通 `gushitong.baidu.com/opendata`（需带 UA/Referer，akshare 封装未带头会失败；亿牛网接口已停更至 2022-07，东财 `stock_hk_valuation_comparison_em` 只有快照）。逐只抓取 `市盈率(TTM)` 与 `市净率` 后按日期合并进 K 线文件；近三年为日频（约 1096 点），港股通约 1011 只、全量约 30 分钟。
+**港股估值（PE/PB/PCF）**：来源百度股市通 `gushitong.baidu.com/opendata`（需带 UA/Referer，akshare 封装未带头会失败；亿牛网接口已停更至 2022-07，东财 `stock_hk_valuation_comparison_em` 只有快照）。逐只抓取 `市盈率(TTM)`/`市净率`/`市现率` 后按日期合并进 K 线文件；近三年为日频（约 1096 点），港股通约 1011 只、全量约 30 分钟。
+
+**港股其他数据（批次1，2026-09-23）**：
+- 资金流：东财 `fflow/daykline`（`secid=116.xxxxx`，91/http 域名回退），主力/超大/大/中/小单净额+占比，滚动约 100 个交易日、逐日累积 → `data/moneyflow/hk/stock/`
+- 财务：AKShare 东财 `stock_financial_hk_report_em`（利润表/资产负债表/现金流量表，长表 pivot）→ profit/balance/cashflow；`stock_financial_hk_analysis_indicator_em` 拆成 growth/dupont → `data/fundamental/hk/`
+- 分红事件：`stock_hk_dividend_payout_em` → events E2（`event_type=dividend`，`source=akshare`；港股 5 位代码与 A 股 6 位不冲突）
+- 暂不可行：港股两融/卖空（需港交所沽空报表，无免费 API）、减持/质押（港交所权益披露无 API）、市销率 PS 历史（百度不提供，可用总市值÷营收TTM 计算，批次2）
 
 ### 3.3 其他域下载器
 

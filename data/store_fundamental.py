@@ -27,23 +27,29 @@ BASE_DIR = Path(__file__).parent / "fundamental"
 
 VALID_TYPES = ("profit", "balance", "cashflow", "growth", "dupont")
 
-# 各类型的 statDate 字段（报告期，作为 index）
-# 初始化目录
+# 初始化目录（A股保持原路径；港股落在 data/fundamental/hk/ 下）
 for _t in VALID_TYPES:
     (BASE_DIR / _t).mkdir(parents=True, exist_ok=True)
+    (BASE_DIR / "hk" / _t).mkdir(parents=True, exist_ok=True)
 
 
-def _path(code: str, data_type: str) -> Path:
+def _base(market: str = "cn") -> Path:
+    return BASE_DIR if market == "cn" else BASE_DIR / market
+
+
+def _path(code: str, data_type: str, market: str = "cn") -> Path:
     if data_type not in VALID_TYPES:
         raise ValueError(f"data_type 必须是 {VALID_TYPES} 之一，got: {data_type}")
-    return BASE_DIR / data_type / f"{code}.parquet"
+    return _base(market) / data_type / f"{code}.parquet"
 
 
-def save(code: str, df: pd.DataFrame, data_type: str) -> None:
+def save(code: str, df: pd.DataFrame, data_type: str,
+         market: str = "cn") -> None:
     """
     写入季频财务数据，以 statDate（报告期）为 index，自动去重。
-    code: 纯数字代码，如 '600519'
+    code: 纯数字代码，如 '600519' / 港股 '00700'
     data_type: profit / balance / cashflow / growth / dupont
+    market: cn / hk
     """
     if df is None or df.empty:
         return
@@ -56,38 +62,45 @@ def save(code: str, df: pd.DataFrame, data_type: str) -> None:
     elif "stat_date" in df.columns:
         df["stat_date"] = pd.to_datetime(df["stat_date"])
         df = df.set_index("stat_date")
+    elif "REPORT_DATE" in df.columns:
+        df["REPORT_DATE"] = pd.to_datetime(df["REPORT_DATE"])
+        df = df.set_index("REPORT_DATE")
     elif not isinstance(df.index, pd.DatetimeIndex):
         df.index = pd.to_datetime(df.index)
     df.index.name = "stat_date"
 
     # 去掉 code 列（冗余）
-    if "code" in df.columns:
-        df = df.drop(columns=["code"])
+    for c in ("code", "SECUCODE", "SECURITY_CODE", "ORG_CODE"):
+        if c in df.columns:
+            df = df.drop(columns=[c])
 
     # 数值列转换
     for col in df.columns:
-        if col not in ("pubDate", "pub_date"):
+        if col not in ("pubDate", "pub_date", "SECURITY_NAME_ABBR",
+                       "DATE_TYPE_CODE", "CURRENCY", "IS_CNY_CODE",
+                       "START_DATE", "FISCAL_YEAR"):
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    p = _path(code, data_type)
-    existing = load(code, data_type)
+    p = _path(code, data_type, market=market)
+    existing = load(code, data_type, market=market)
     if existing is not None and not existing.empty:
         df = pd.concat([existing, df])
         df = df[~df.index.duplicated(keep="last")]
     df.sort_index(inplace=True)
     df.to_parquet(p, engine="pyarrow", compression="snappy")
-    logger.debug(f"fundamental/{data_type}/{code} 已保存: {len(df)} 季")
+    logger.debug(f"fundamental/{market}/{data_type}/{code} 已保存: {len(df)} 期")
 
 
 def load(code: str,
          data_type: str,
          start: Optional[str] = None,
-         end: Optional[str] = None) -> Optional[pd.DataFrame]:
+         end: Optional[str] = None,
+         market: str = "cn") -> Optional[pd.DataFrame]:
     """
     读取季频财务数据，index 为 stat_date（报告期）。
     start/end 格式 'YYYY-MM-DD'，按报告期过滤。
     """
-    p = _path(code, data_type)
+    p = _path(code, data_type, market=market)
     if not p.exists():
         return None
     df = pd.read_parquet(p, engine="pyarrow")
@@ -100,34 +113,34 @@ def load(code: str,
     return df if not df.empty else None
 
 
-def exists(code: str, data_type: str) -> bool:
+def exists(code: str, data_type: str, market: str = "cn") -> bool:
     try:
-        return _path(code, data_type).exists()
+        return _path(code, data_type, market=market).exists()
     except ValueError:
         return False
 
 
-def last_date(code: str, data_type: str) -> Optional[str]:
+def last_date(code: str, data_type: str, market: str = "cn") -> Optional[str]:
     """返回最新报告期 'YYYY-MM-DD'，无数据返回 None"""
-    df = load(code, data_type)
+    df = load(code, data_type, market=market)
     if df is None or df.empty:
         return None
     return df.index.max().strftime("%Y-%m-%d")
 
 
-def list_codes(data_type: str) -> list:
+def list_codes(data_type: str, market: str = "cn") -> list:
     """返回指定类型已下载的股票代码列表"""
-    d = BASE_DIR / data_type
+    d = _base(market) / data_type
     if not d.exists():
         return []
     return [p.stem for p in d.glob("*.parquet")]
 
 
-def stats() -> dict:
+def stats(market: str = "cn") -> dict:
     """返回各类型数据统计"""
     result = {}
     for t in VALID_TYPES:
-        d = BASE_DIR / t
+        d = _base(market) / t
         files = list(d.glob("*.parquet")) if d.exists() else []
         size_mb = round(sum(f.stat().st_size for f in files) / 1024 / 1024, 1)
         result[t] = {"count": len(files), "size_mb": size_mb}

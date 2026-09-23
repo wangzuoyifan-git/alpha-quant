@@ -204,6 +204,86 @@ class TestDownloadOneSemantics:
         assert res["fail"] == 0
 
 
+class TestHkMoneyflowParsing:
+    """东财 fflow klines 解析"""
+
+    def test_parse_fflow(self):
+        line = ("2026-09-22,3208242096.0,-821992464.0,439920128.0,163809584.0,"
+                "3044432512.0,9.97,-2.56,1.37,0.51,9.46,451.600,5.02,0.00,0.00")
+        out = HKDownloader._parse_fflow([line])
+        assert out is not None
+        assert len(out) == 1
+        assert out.iloc[0]["date"] == "2026-09-22"
+        assert out.iloc[0]["main_net"] == "3208242096.0"
+        assert out.iloc[0]["close"] == "451.600"
+
+    def test_parse_fflow_bad(self):
+        assert HKDownloader._parse_fflow([]) is None
+        assert HKDownloader._parse_fflow(["short,line"]) is None
+
+
+class TestHkFinancialsParsing:
+    """东财港股报表长表 → 宽表；主要指标拆分"""
+
+    def test_pivot_statement(self):
+        raw = pd.DataFrame({
+            "REPORT_DATE": ["2025-12-31", "2025-12-31", "2025-06-30"],
+            "STD_ITEM_NAME": ["营业额", "净利润", "营业额"],
+            "AMOUNT": [743689000000.0, 100.0, 300.0],
+        })
+        wide = HKDownloader._pivot_hk_statement(raw)
+        assert wide is not None
+        assert list(wide.index) == [pd.Timestamp("2025-06-30"),
+                                    pd.Timestamp("2025-12-31")]
+        assert wide.loc["2025-12-31", "营业额"] == 743689000000.0
+
+    def test_pivot_statement_bad(self):
+        assert HKDownloader._pivot_hk_statement(None) is None
+        assert HKDownloader._pivot_hk_statement(pd.DataFrame({"x": [1]})) is None
+
+    def test_split_indicator(self):
+        ind = pd.DataFrame({
+            "REPORT_DATE": ["2025-12-31"],
+            "OPERATE_INCOME_YOY": [10.0],
+            "GROSS_PROFIT_YOY": [5.0],
+            "ROE_AVG": [12.0],
+            "BPS": [100.0],
+            "SECUCODE": ["00700.HK"],
+        })
+        growth, dupont = HKDownloader._split_hk_indicator(ind)
+        assert list(growth.columns) == ["OPERATE_INCOME_YOY", "GROSS_PROFIT_YOY"]
+        assert "ROE_AVG" in dupont.columns and "BPS" in dupont.columns
+
+
+class TestHkDividendEvents:
+    """分红派息 → E2 事件"""
+
+    def test_build_events(self):
+        df = pd.DataFrame({
+            "最新公告日期": ["2026-05-13"],
+            "财政年度": ["2025"],
+            "分红方案": ["每股派港币5.3元"],
+            "分配类型": ["年度分配"],
+            "除净日": ["2026-05-15"],
+            "截至过户日": ["2026/05/19-2026/05/20"],
+            "发放日": ["2026-06-01"],
+        })
+        ev = HKDownloader._build_hk_dividend_events(df, "00700")
+        assert len(ev) == 1
+        e = ev[0]
+        assert e["event_id"] == "hk_dividend_00700_20260513"
+        assert e["event_type"] == "dividend"
+        assert e["date"] == "2026-05-13"
+        assert e["end_date"] == "2026-05-15"
+        assert e["source"] == "akshare"
+        assert e["detail"]["pay_date"] == "2026-06-01"
+
+    def test_skip_missing_ann_date(self):
+        df = pd.DataFrame({"最新公告日期": [None], "除净日": ["2026-05-15"]})
+        assert HKDownloader._build_hk_dividend_events(df, "00700") == []
+        assert HKDownloader._build_hk_dividend_events(pd.DataFrame(), "00700") == []
+
+
 class TestValuationParsing:
     """百度股市通估值序列解析 + 合并进 K 线"""
 
@@ -233,6 +313,15 @@ class TestValuationParsing:
         assert out.loc["2026-09-22", "pb_mrq"] == 3.14
         assert out.loc["2026-09-21", "pe_ttm"] == 14.0
         assert pd.Timestamp("2026-09-23") not in out.index
+
+    def test_build_valuation_df_with_pcf(self):
+        idx = pd.to_datetime(["2026-09-22"])
+        pe = pd.DataFrame({"value": [15.0]}, index=idx)
+        pb = pd.DataFrame({"value": [3.0]}, index=idx)
+        pcf = pd.DataFrame({"value": [12.0]}, index=idx)
+        out = HKDownloader._build_valuation_df(pe, pb, pcf)
+        assert list(out.columns) == ["pe_ttm", "pb_mrq", "pcf_ttm"]
+        assert out.iloc[0]["pcf_ttm"] == 12.0
 
 
 class TestConnectTsFallback:

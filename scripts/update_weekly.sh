@@ -9,7 +9,7 @@
 #
 # 说明：
 #   - 单步失败不中断后续步骤，末尾汇总；有失败时退出码为 1
-#   - events 域已在每日脚本中更新（全市场约 1 小时），此处不再重复
+#   - events 域已在每日脚本中更新；港股财务/A股 PCF 数据量大，放周更
 # =============================================================
 
 set -uo pipefail
@@ -44,16 +44,22 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] 每周更新开始"
 echo "========================================"
 
 # 1. meta 域（行业分类 + 申万指数 + 交易日历）
-run_step "[1/2] 更新 meta 域" "${PYTHON}" -c "
+run_step "[1/4] 更新 meta 域" "${PYTHON}" -c "
 from data.downloader_meta import MetaDownloader
 MetaDownloader().update_db()
 "
 
 # 2. macro 域（月频数据 + 汇率/境外日频兜底）
-run_step "[2/2] 更新 macro 域" "${PYTHON}" -c "
+run_step "[2/4] 更新 macro 域" "${PYTHON}" -c "
 from data.downloader_macro import MacroDownloader
 MacroDownloader().update_db()
 "
+
+# 3. 港股财务（三大报表 + 成长/杜邦指标，逐只拉取；约 1 小时）
+run_step "[3/4] 更新港股财务" "${PYTHON}" main.py update-hk-financials
+
+# 4. A 股 PCF 补充（百度市现率，全市场约 1-1.5 小时）
+run_step "[4/4] 补充 A 股 PCF" "${PYTHON}" main.py update-cn-pcf
 
 echo ""
 echo "========================================"

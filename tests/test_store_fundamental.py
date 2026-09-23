@@ -5,7 +5,6 @@ test_store_fundamental.py — fundamental 域存储层单元测试
 import sys
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import pytest
 
@@ -181,3 +180,17 @@ class TestFundamentalAux:
         sf.save("600519", None, "profit")
         sf.save("600519", pd.DataFrame(), "profit")
         assert sf.load("600519", "profit") is None
+
+
+class TestFundamentalMarket:
+    """market 维度：hk 落在 BASE_DIR/hk/ 下"""
+
+    def test_hk_market_path_and_roundtrip(self, tmp_fund_dir):
+        d = tmp_fund_dir / "hk" / "profit"
+        d.mkdir(parents=True, exist_ok=True)
+        df = pd.DataFrame({"REPORT_DATE": ["2025-12-31"], "营业额": [100.0]})
+        sf.save("00700", df, "profit", market="hk")
+        loaded = sf.load("00700", "profit", market="hk")
+        assert loaded is not None and len(loaded) == 1
+        assert (d / "00700.parquet").exists()
+        assert sf.load("00700", "profit") is None

@@ -65,7 +65,7 @@ COLUMNS: Dict[str, Dict[str, List[str]]] = {
     "hk": {
         "stock": [
             "open", "high", "low", "close", "preclose",
-            "volume", "amount", "pct_chg", "pe_ttm", "pb_mrq",
+            "volume", "amount", "pct_chg", "pe_ttm", "pb_mrq", "pcf_ttm",
         ],
         "index": [
             "open", "high", "low", "close", "preclose",

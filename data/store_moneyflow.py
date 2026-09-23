@@ -35,22 +35,30 @@ _SINGLE_TYPES = ("market", "northbound")
 
 for _d in _CODE_TYPES + _DATE_TYPES:
     (BASE_DIR / _d).mkdir(parents=True, exist_ok=True)
+# 港股资金流（东财，目前仅 stock；A股保持原路径，HK 落在 data/moneyflow/hk/ 下）
+(BASE_DIR / "hk" / "stock").mkdir(parents=True, exist_ok=True)
 BASE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _base(market: str = "cn") -> Path:
+    return BASE_DIR if market == "cn" else BASE_DIR / market
 
 
 def _path(data_type: str,
           code: Optional[str] = None,
-          date: Optional[str] = None) -> Path:
+          date: Optional[str] = None,
+          market: str = "cn") -> Path:
+    base = _base(market)
     if data_type in _CODE_TYPES:
         if not code:
             raise ValueError(f"{data_type} 需要提供 code 参数")
-        return BASE_DIR / data_type / f"{code}.parquet"
+        return base / data_type / f"{code}.parquet"
     if data_type in _DATE_TYPES:
         if not date:
             raise ValueError(f"{data_type} 需要提供 date 参数")
-        return BASE_DIR / data_type / f"{date}.parquet"
+        return base / data_type / f"{date}.parquet"
     if data_type in _SINGLE_TYPES:
-        return BASE_DIR / f"{data_type}.parquet"
+        return base / f"{data_type}.parquet"
     raise ValueError(f"未知 data_type: {data_type}")
 
 
@@ -73,27 +81,29 @@ def _normalize(df: pd.DataFrame) -> pd.DataFrame:
 def save(data_type: str,
          df: pd.DataFrame,
          code: Optional[str] = None,
-         date: Optional[str] = None) -> None:
+         date: Optional[str] = None,
+         market: str = "cn") -> None:
     if df is None or df.empty:
         return
     df = _normalize(df)
-    p = _path(data_type, code=code, date=date)
-    existing = load(data_type, code=code, date=date)
+    p = _path(data_type, code=code, date=date, market=market)
+    existing = load(data_type, code=code, date=date, market=market)
     if existing is not None and not existing.empty:
         df = pd.concat([existing, df])
         df = df[~df.index.duplicated(keep="last")]
     df.sort_index(inplace=True)
     df.to_parquet(p, engine="pyarrow", compression="snappy")
-    logger.debug(f"moneyflow/{data_type} 已保存: {len(df)} 行  code={code} date={date}")
+    logger.debug(f"moneyflow/{data_type} 已保存: {len(df)} 行  market={market} code={code} date={date}")
 
 
 def load(data_type: str,
          code: Optional[str] = None,
          date: Optional[str] = None,
          start: Optional[str] = None,
-         end: Optional[str] = None) -> Optional[pd.DataFrame]:
+         end: Optional[str] = None,
+         market: str = "cn") -> Optional[pd.DataFrame]:
     try:
-        p = _path(data_type, code=code, date=date)
+        p = _path(data_type, code=code, date=date, market=market)
     except ValueError:
         return None
     if not p.exists():
@@ -110,32 +120,34 @@ def load(data_type: str,
 
 def exists(data_type: str,
            code: Optional[str] = None,
-           date: Optional[str] = None) -> bool:
+           date: Optional[str] = None,
+           market: str = "cn") -> bool:
     try:
-        return _path(data_type, code=code, date=date).exists()
+        return _path(data_type, code=code, date=date, market=market).exists()
     except ValueError:
         return False
 
 
-def last_date(data_type: str, code: Optional[str] = None) -> Optional[str]:
+def last_date(data_type: str, code: Optional[str] = None,
+              market: str = "cn") -> Optional[str]:
     if data_type in _SINGLE_TYPES:
-        df = load(data_type)
+        df = load(data_type, market=market)
     else:
-        df = load(data_type, code=code)
+        df = load(data_type, code=code, market=market)
     if df is None or df.empty:
         return None
     return df.index.max().strftime("%Y-%m-%d")
 
 
-def list_codes(data_type: str) -> list:
-    d = BASE_DIR / data_type
+def list_codes(data_type: str, market: str = "cn") -> list:
+    d = _base(market) / data_type
     if not d.exists():
         return []
     return sorted(p.stem for p in d.glob("*.parquet"))
 
 
-def list_dates(data_type: str) -> list:
-    d = BASE_DIR / data_type
+def list_dates(data_type: str, market: str = "cn") -> list:
+    d = _base(market) / data_type
     if not d.exists():
         return []
     return sorted(p.stem for p in d.glob("*.parquet"))
