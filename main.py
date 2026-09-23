@@ -910,40 +910,37 @@ def cmd_update_moneyflow(types: list | None = None) -> None:
 
 
 def cmd_update_all():
-    """更新所有数据域（market + meta + fundamental + factor + macro + moneyflow）"""
+    """更新所有数据域（A股/港股 K线、meta、fundamental、factor、macro、moneyflow、events、估值）"""
     logger.info("开始全域增量更新...")
 
-    print("\n[1/7] 更新 A 股 K 线数据...")
-    cmd_update()
+    def _run(label: str, fn):
+        print(f"\n{label}...")
+        try:
+            fn()
+        except Exception as e:
+            print(f"  {label} 跳过: {e}")
 
-    print("\n[2/7] 更新港股 K 线数据...")
-    try:
-        from data.downloader_hk import HKDownloader
-        HKDownloader(connect_only=True).update_db()
-    except Exception as e:
-        print(f"  港股更新跳过: {e}")
+    _run("[1/13] 更新 A 股 K 线数据", cmd_update)
 
-    print("\n[3/7] 更新 meta 域...")
+    from data.downloader_hk import HKDownloader
     from data.downloader_meta import MetaDownloader
-    MetaDownloader().update_db()
-
-    print("\n[4/7] 更新 fundamental 域...")
     from data.downloader_fundamental import FundamentalDownloader
-    FundamentalDownloader().update_db()
-
-    print("\n[5/7] 更新 factor 域...")
     from data.downloader_factor import FactorDownloader
-    FactorDownloader().update_db()
-
-    print("\n[6/7] 更新 macro 域...")
     from data.downloader_macro import MacroDownloader
-    MacroDownloader().update_db()
 
-    print("\n[7/7] 更新 moneyflow 域...")
-    try:
-        cmd_update_moneyflow()
-    except RuntimeError as e:
-        print(f"  moneyflow 跳过: {e}")
+    _run("[2/13] 更新港股 K 线数据",
+         lambda: HKDownloader(connect_only=True).update_db())
+    _run("[3/13] 更新 meta 域", lambda: MetaDownloader().update_db())
+    _run("[4/13] 更新 fundamental 域", lambda: FundamentalDownloader().update_db())
+    _run("[5/13] 更新 factor 域", lambda: FactorDownloader().update_db())
+    _run("[6/13] 更新 macro 域", lambda: MacroDownloader().update_db())
+    _run("[7/13] 更新 moneyflow 域", cmd_update_moneyflow)
+    _run("[8/13] 更新 events 域", cmd_update_events)
+    _run("[9/13] 更新港股估值（PE/PB/PCF）", cmd_update_hk_valuation)
+    _run("[10/13] 更新港股资金流", cmd_update_hk_moneyflow)
+    _run("[11/13] 更新港股分红事件", cmd_update_hk_events)
+    _run("[12/13] 更新港股财务", cmd_update_hk_financials)
+    _run("[13/13] 补充 A 股 PCF", cmd_update_cn_pcf)
 
     logger.info("全域增量更新完成！")
 
@@ -1767,7 +1764,7 @@ if __name__ == "__main__":
   python main.py update-hk-events             # 更新港股分红事件（events E2）
   python main.py update-cn-pcf                # 补充 A 股 pcf_ttm（百度市现率）
   python main.py inspect kline 00700 --market hk   # 直查港股K线
-  python main.py update-all                            # 更新所有域（含 moneyflow）
+  python main.py update-all                            # 更新所有域（A股/港股/估值/events，耗时较长）
   python main.py scan                          # 今日全市场扫描（A股）
   python main.py scan --date 2024-11-01        # 指定日期扫描
   python main.py scan --types etf              # 扫描 ETF（动量轮动）
@@ -1949,7 +1946,7 @@ if __name__ == "__main__":
                            help="指定股票代码（默认全市场，约 1 小时）")
 
     # update-all
-    sub.add_parser("update-all", help="更新所有数据域（market+meta+fundamental+factor+macro）")
+    sub.add_parser("update-all", help="更新所有数据域（A股/港股 K线、meta、fundamental、factor、macro、moneyflow、events、估值）")
 
     # inspect
     p_ins = sub.add_parser("inspect", help="数据直查工具（K线/个股资金流/行业资金流/宏观）")

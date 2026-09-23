@@ -388,7 +388,7 @@ python main.py update-hk-financials [--full]       # 港股财务（三表+成�
 python main.py update-hk-events [--full]           # 港股分红事件 → events E2
 python main.py update-cn-pcf [--codes ...]         # A股 pcf_ttm（百度市现率）
 ```
-`update-all` 已含港股增量更新；`inspect kline <code> --market hk` 可直查港股 K 线（含 pe_ttm/pb_mrq/pcf_ttm）。
+`update-all` 已含港股 K 线/估值/资金流/财务/分红事件与 A股 PCF；`inspect kline <code> --market hk` 可直查港股 K 线（含 pe_ttm/pb_mrq/pcf_ttm）。
 
 **港股估值（PE/PB/PCF）**：来源百度股市通 `gushitong.baidu.com/opendata`（需带 UA/Referer，akshare 封装未带头会失败；亿牛网接口已停更至 2022-07，东财 `stock_hk_valuation_comparison_em` 只有快照）。逐只抓取 `市盈率(TTM)`/`市净率`/`市现率` 后按日期合并进 K 线文件；近三年为日频（约 1096 点），港股通约 1011 只、全量约 30 分钟。
 

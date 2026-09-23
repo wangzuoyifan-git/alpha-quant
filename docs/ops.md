@@ -81,7 +81,7 @@ python3 main.py update-hk-events                  # 更新港股分红事件（e
 python3 main.py update-cn-pcf                     # 补充 A 股 pcf_ttm（百度市现率）
 
 # 全域更新
-python3 main.py update-all                        # market+meta+fundamental+factor+macro+moneyflow
+python3 main.py update-all                        # 全域：A股/港股K线+估值、meta、fundamental、factor、macro、moneyflow、events、A股PCF（耗时长）
 ```
 
 ### 数据直查（inspect）
