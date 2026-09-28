@@ -8,6 +8,10 @@ from agent_tools.data_tools import (
     validate_data, query_kline,
 )
 from agent_tools.strategy_tools import run_scan, run_backtest, list_strategies, compare_strategies, notify_signals
+from agent_tools.smart_money_tools import (
+    get_seat_identity, get_seat_profile, get_stock_smart_money,
+    get_capital_consensus, get_northbound_behavior, rank_smart_money_seats,
+)
 from agent_tools.trade_tools import (
     filter_signals_by_risk, generate_orders, get_pending_orders,
     confirm_order, cancel_order, record_execution,
@@ -18,6 +22,8 @@ __all__ = [
     "get_active_event_windows", "check_reduce_window",
     "validate_data", "query_kline",
     "run_scan", "run_backtest", "list_strategies", "compare_strategies", "notify_signals",
+    "get_seat_identity", "get_seat_profile", "get_stock_smart_money",
+    "get_capital_consensus", "get_northbound_behavior", "rank_smart_money_seats",
     "filter_signals_by_risk", "generate_orders", "get_pending_orders",
     "confirm_order", "cancel_order", "record_execution",
 ]

@@ -875,11 +875,16 @@ def cmd_init_moneyflow(start: str = "2024-01-01",
     """初始化 moneyflow 域（资金流与情绪）"""
     from data.downloader_moneyflow import MoneyflowDownloader
     dl = MoneyflowDownloader()
-    types = types or ["stock", "top_list", "margin", "industry", "market", "northbound"]
+    types = types or ["stock", "top_list", "top_inst", "block_trade",
+                      "margin", "industry", "market", "northbound"]
     if "stock" in types:
         dl.init_stock(start=stock_start)
     if "top_list" in types:
         dl.init_top_list(start=start)
+    if "top_inst" in types:
+        dl.init_top_inst(start=start)
+    if "block_trade" in types:
+        dl.init_block_trade(start=start)
     if "margin" in types:
         dl.init_margin(start=start)
     if "industry" in types:
@@ -894,11 +899,16 @@ def cmd_update_moneyflow(types: list | None = None) -> None:
     """增量更新 moneyflow 域"""
     from data.downloader_moneyflow import MoneyflowDownloader
     dl = MoneyflowDownloader()
-    types = types or ["stock", "top_list", "margin", "industry", "market", "northbound"]
+    types = types or ["stock", "top_list", "top_inst", "block_trade",
+                      "margin", "industry", "market", "northbound"]
     if "stock" in types:
         dl._update_stock()
     if "top_list" in types:
         dl._update_top_list()
+    if "top_inst" in types:
+        dl._update_top_inst()
+    if "block_trade" in types:
+        dl._update_block_trade()
     if "margin" in types:
         dl._update_margin()
     if "industry" in types:
@@ -907,6 +917,195 @@ def cmd_update_moneyflow(types: list | None = None) -> None:
         dl._update_market()
     if "northbound" in types:
         dl._update_northbound()
+
+
+def cmd_update_hk_hold(codes: list | None = None, from_portfolio: bool = False,
+                       from_lhb: int | None = None):
+    """下载北向个股持股（Tushare hk_hold，按代码，普通积分账户为季度披露）。
+
+    标的来源可组合：--codes 显式指定 / --from-portfolio 当前持仓 /
+    --from-lhb N 最近 N 个龙虎榜上榜交易日涉及的股票。
+    """
+    from data.downloader_moneyflow import MoneyflowDownloader
+
+    targets = [str(c) for c in (codes or []) if str(c).strip()]
+
+    if from_portfolio:
+        try:
+            from data.portfolio import load_portfolio
+            for h in load_portfolio().get("holdings", []):
+                c = h.get("code")
+                if c:
+                    targets.append(str(c))
+        except Exception as e:
+            print(f"[警告] 读取持仓文件失败: {e}")
+
+    if from_lhb:
+        try:
+            import data.store_moneyflow as store_mf
+            dates = sorted(store_mf.list_dates("top_inst"))
+            if not dates:
+                print("[警告] 无 top_inst 数据，跳过 --from-lhb（请先 update-moneyflow --types top_inst）")
+            else:
+                from agents.smart_money_agent import load_seat_episodes
+                eps = load_seat_episodes(start=dates[-int(from_lhb)])
+                targets.extend(eps["code"].astype(str).tolist())
+        except Exception as e:
+            print(f"[警告] 读取近期龙虎榜失败: {e}")
+
+    targets = sorted({str(c).split(".")[0] for c in targets if str(c).strip()})
+    if not targets:
+        print("请用 --codes 指定代码，或用 --from-portfolio / --from-lhb N 收集标的")
+        return
+    print(f"北向个股持股（hk_hold）更新：{len(targets)} 只")
+    MoneyflowDownloader().update_hk_hold(targets)
+
+
+def cmd_smart_money(target: str = None, target_type: str = "auto", mode: str = "full",
+                    window_months: int = 12, horizons: str = "5,10,20",
+                    fetch: bool = False, as_json: bool = False,
+                    as_markdown: bool = False, rank: bool = False,
+                    top_n: int = 20):
+    """资金主体行为画像：识别谁在买卖 + 跨期行为模式（描述性，不构成投资建议）"""
+    from rich.console import Console
+    from rich.table import Table
+    from rich.panel import Panel
+    from agents.smart_money_agent import build_profile, report_to_markdown
+
+    console = Console()
+
+    # ── 近期活跃资金主体榜 ──
+    if rank:
+        from agents.smart_money_agent import rank_active_seats
+        from agents.smart_money_agent import parse_horizons
+        cards = rank_active_seats(window_months=window_months, top_n=top_n,
+                                  horizons=parse_horizons(horizons))
+        if not cards:
+            console.print("[yellow]窗口内无龙虎榜席位数据（top_inst）[/yellow]")
+            return
+        t = Table(title=f"近期活跃资金主体榜（近 {window_months} 个月，活动名册非买入清单）",
+                  border_style="magenta")
+        for c in ("席位", "身份", "上榜(买/卖)", "累计净买卖(亿)", "5/10/20日胜率", "偏好板块"):
+            t.add_column(c)
+        for s in cards:
+            wr = s["win_rate"]
+            wr_s = "/".join((f"{wr.get(f'd{h}'):.0%}" if wr.get(f"d{h}") is not None else "NA")
+                            for h in parse_horizons(horizons))
+            fav = ",".join(x["sector"] for x in s["fav_sectors"][:3]) or "-"
+            ac = s["appearance_count"]
+            t.add_row(s["agency"][:24], f"{s['label']}({s['label_basis']})",
+                      f"{ac['buy']}/{ac['sell']}", f"{s['cum_net_value']/1e8:+.2f}", wr_s, fav)
+        console.print(t)
+        console.print("[dim]席位标签来自规则匹配/推断，不等于官方认定[/dim]")
+        return
+
+    if not target:
+        console.print("[yellow]请提供目标（股票代码/名称 或 席位名），或用 --rank 查看活跃资金主体榜[/yellow]")
+        return
+
+    report = build_profile(target, target_type=target_type, mode=mode,
+                           window_months=window_months,
+                           horizons=horizons, fetch=fetch)
+
+    if as_json:
+        import json
+        console.print_json(json.dumps(report, ensure_ascii=False, default=str))
+        return
+    if as_markdown:
+        console.print(report_to_markdown(report))
+        return
+
+    subj = report["subject"]
+    console.print(Panel(
+        f"[bold cyan]资金主体行为画像[/bold cyan]\n"
+        f"标的/主体: [yellow]{subj['target']}[/yellow]（{subj['type']}）  "
+        f"模式: [yellow]{mode}[/yellow]  "
+        f"窗口: [yellow]{window_months}个月[/yellow]  "
+        f"事后验证: [yellow]{report['horizons']}交易日[/yellow]",
+        expand=False))
+
+    # ── 席位画像（按资金主体）──
+    seat = report.get("seat_profile")
+    if seat:
+        t = Table(title=f"席位画像 — {seat['agency']}", show_header=False, border_style="blue")
+        t.add_column("项", style="bold cyan")
+        t.add_column("值")
+        t.add_row("身份", f"{seat['label']}（{seat['label_basis']}，非官方认定）")
+        t.add_row("上榜频次", str(seat["appearance_count"]))
+        t.add_row("累计净买卖", f"{seat['cum_net_value']/1e8:+.2f}亿")
+        wr = seat["win_rate"]
+        t.add_row("上榜后胜率", " / ".join(
+            f"{h}日 {wr.get(f'd{h}') if wr.get(f'd{h}') is not None else 'NA'}（n={wr.get(f'd{h}_n',0)}）"
+            for h in report["horizons"]))
+        t.add_row("平均持有周期", f"{seat['avg_hold_days']} 交易日" if seat.get("avg_hold_days") else "样本不足")
+        t.add_row("偏好板块", ", ".join(f"{s['sector']}({s['count']})" for s in seat["fav_sectors"]) or "-")
+        console.print(t)
+
+    # ── 席位身份与画像（按个股）──
+    seats = report.get("seats")
+    if seats is not None:
+        if not seats.get("available"):
+            console.print(f"[yellow]席位：{'; '.join(seats.get('notes', [])) or '无数据'}[/yellow]")
+        else:
+            t = Table(title=f"席位身份与画像（{len(seats['seats'])} 个席位，按|本股净额|降序，展示前20）",
+                      border_style="magenta")
+            for c in ("席位", "身份", "本股净买卖(亿)", "累计净买卖(亿)", "5/10/20日胜率", "偏好板块"):
+                t.add_column(c)
+            for s in seats["seats"][:20]:
+                wr = s["win_rate"]
+                wr_s = "/".join(
+                    (f"{wr.get(f'd{h}'):.0%}" if wr.get(f"d{h}") is not None else "NA")
+                    for h in report["horizons"])
+                fav = ",".join(x["sector"] for x in s["fav_sectors"][:3]) or "-"
+                t.add_row(s["agency"][:22], f"{s['label']}({s['label_basis']})",
+                          f"{s['this_stock']['net']/1e8:+.2f}",
+                          f"{s['cum_net_value']/1e8:+.2f}", wr_s, fav)
+            console.print(t)
+
+    # ── 北向跨期行为 ──
+    nb = report.get("northbound")
+    if nb is not None:
+        if not nb.get("available"):
+            console.print(f"[yellow]北向：{'; '.join(nb.get('notes', [])) or '无数据'}[/yellow]")
+        else:
+            t = Table(title="北向跨期行为", show_header=False, border_style="cyan")
+            t.add_column("项", style="bold cyan")
+            t.add_column("值")
+            t.add_row("披露点数", f"{nb['points']}（{nb.get('disclosure')}）")
+            t.add_row("最长同向 streak", f"{nb['streak']['direction']} {nb['streak']['length']} 个披露点")
+            hr = nb["holding_ratio"]
+            t.add_row("持股比例", f"{hr.get('start')}% → {hr.get('end')}%（Δ{hr.get('change')}）")
+            t.add_row("窗口价格变动", f"{nb.get('price_return')}")
+            t.add_row("与价格背离", nb.get("divergence") or "无")
+            console.print(t)
+
+    # ── 资金合力 / 分歧 ──
+    cons = report.get("consensus")
+    if cons is not None:
+        t = Table(title=f"资金合力 / 分歧 — {cons['verdict']}", border_style="green")
+        t.add_column("资金路", style="cyan")
+        t.add_column("方向")
+        t.add_column("依据")
+        color = {"buy": "red", "sell": "green", "no_data": "dim", "flat": "yellow"}
+        for name, v in cons["routes"].items():
+            t.add_row(name, f"[{color.get(v['direction'],'')}]{v['direction']}[/]",
+                      v["note"])
+        console.print(t)
+
+    # ── 数据附录 ──
+    appendix = report.get("data_appendix") or []
+    if appendix:
+        t = Table(title="数据附录", border_style="dim")
+        for c in ("数据模块", "来源接口", "查询窗口", "行数", "备注"):
+            t.add_column(c)
+        for a in appendix:
+            t.add_row(a.get("module", ""), a.get("source", ""), a.get("window", ""),
+                      str(a.get("rows", "")), str(a.get("notes", "")))
+        console.print(t)
+
+    for note in report.get("notes", []):
+        console.print(f"[dim]· {note}[/dim]")
+    console.print(f"[dim]{report['disclaimer']}[/dim]")
 
 
 def cmd_update_all():
@@ -1666,6 +1865,10 @@ def cmd_data_status():
     ind_last = sorted(ind_dates)[-1] if ind_dates else None
     rows.append(("moneyflow/industry", ind_last))
 
+    for _dt in ("top_inst", "block_trade"):
+        _dates = store_mf.list_dates(_dt)
+        rows.append((f"moneyflow/{_dt}", sorted(_dates)[-1] if _dates else None))
+
     for dtype in ("bond_yield", "pmi", "m2"):
         d = store_macro.last_date(dtype)
         if d:
@@ -1887,16 +2090,50 @@ if __name__ == "__main__":
     p_init_mf.add_argument("--stock-start", default="2010-01-01",
                            help="个股资金流起始日期（默认2010-01-01）")
     p_init_mf.add_argument("--types", nargs="*",
-                           default=["stock", "top_list", "margin", "industry", "market", "northbound"],
-                           choices=["stock", "top_list", "margin", "industry", "market", "northbound"],
+                           default=["stock", "top_list", "top_inst", "block_trade",
+                                    "margin", "industry", "market", "northbound"],
+                           choices=["stock", "top_list", "top_inst", "block_trade",
+                                    "margin", "industry", "market", "northbound"],
                            help="下载类型（默认全部）")
 
     # update-moneyflow
     p_upd_mf = sub.add_parser("update-moneyflow", help="增量更新 moneyflow 域")
     p_upd_mf.add_argument("--types", nargs="*",
-                          default=["stock", "top_list", "margin", "industry", "market", "northbound"],
-                          choices=["stock", "top_list", "margin", "industry", "market", "northbound"],
+                          default=["stock", "top_list", "top_inst", "block_trade",
+                                   "margin", "industry", "market", "northbound"],
+                          choices=["stock", "top_list", "top_inst", "block_trade",
+                                   "margin", "industry", "market", "northbound"],
                           help="更新类型（默认全部）")
+
+    # update-hk-hold（北向个股持股，按代码）
+    p_upd_hkh = sub.add_parser("update-hk-hold",
+                               help="按需下载北向个股持股（Tushare hk_hold，季度披露）")
+    p_upd_hkh.add_argument("--codes", nargs="*", default=None,
+                           help="股票代码（空格分隔），如 --codes 000001 600519")
+    p_upd_hkh.add_argument("--from-portfolio", action="store_true",
+                           help="标的取自 data/portfolio.json 当前持仓")
+    p_upd_hkh.add_argument("--from-lhb", type=int, default=None, metavar="N",
+                           help="标的取自最近 N 个龙虎榜上榜交易日涉及的股票")
+
+    # smart-money（资金主体行为画像）
+    p_sm = sub.add_parser("smart-money", help="资金主体行为画像（谁在买卖 + 跨期行为模式）")
+    p_sm.add_argument("target", nargs="?", default=None,
+                      help="股票代码/名称，或席位名称（如 机构专用）；--rank 时可省略")
+    p_sm.add_argument("--type", dest="target_type", default="auto",
+                      choices=["auto", "stock", "seat"], help="主体类型（默认自动判断）")
+    p_sm.add_argument("--mode", default="full",
+                      choices=["full", "seat", "northbound", "consensus"],
+                      help="画像范围（默认完整三支柱；seat=仅席位身份与画像）")
+    p_sm.add_argument("--window", type=int, default=12, help="回溯月数（默认12）")
+    p_sm.add_argument("--horizons", default="5,10,20",
+                      help="事后验证窗口（交易日，逗号分隔，默认5,10,20）")
+    p_sm.add_argument("--fetch", action="store_true",
+                      help="北向持股缺失时按需联网下载（Tushare hk_hold）")
+    p_sm.add_argument("--rank", action="store_true",
+                      help="列出近期活跃资金主体榜（活动名册，非买入清单）")
+    p_sm.add_argument("--top", type=int, default=20, help="--rank 展示条数（默认20）")
+    p_sm.add_argument("--json", dest="as_json", action="store_true", help="输出原始 JSON")
+    p_sm.add_argument("--markdown", dest="as_markdown", action="store_true", help="输出 Markdown")
 
     # init-hk（港股）
     p_init_hk = sub.add_parser("init-hk", help="首次全量下载港股 K 线（默认仅港股通标的）")
@@ -2050,6 +2287,16 @@ if __name__ == "__main__":
         )
     elif args.command == "update-moneyflow":
         cmd_update_moneyflow(types=args.types)
+    elif args.command == "update-hk-hold":
+        cmd_update_hk_hold(codes=args.codes,
+                           from_portfolio=args.from_portfolio,
+                           from_lhb=args.from_lhb)
+    elif args.command == "smart-money":
+        cmd_smart_money(target=args.target, target_type=args.target_type,
+                        mode=args.mode, window_months=args.window,
+                        horizons=args.horizons, fetch=args.fetch,
+                        as_json=args.as_json, as_markdown=args.as_markdown,
+                        rank=args.rank, top_n=args.top)
     elif args.command == "init-hk":
         cmd_init_hk(start=args.start, end=args.end,
                     force=args.force, connect_only=args.connect_only)

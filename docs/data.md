@@ -1,7 +1,8 @@
 # Alpha量化 — 数据层文档
 
 > 数据层接口、各域结构、数据源说明、待办缺口。
-> 最后更新：2026-09-23（港股数据批次1：资金流 `update-hk-moneyflow`、财务 5 表 `update-hk-financials`、分红事件 `update-hk-events`、PCF 估值；store_moneyflow/store_fundamental 增加 market 维度；A股 pcf_ttm 补充 `update-cn-pcf`）
+> 最后更新：2026-09-28（moneyflow 域新增资金主体数据 `top_inst` 龙虎榜席位明细 / `block_trade` 大宗交易 / `hk_hold` 北向个股持股；下载器 `init_top_inst`/`init_block_trade`/`update_hk_hold`）
+> 2026-09-23（港股数据批次1：资金流 `update-hk-moneyflow`、财务 5 表 `update-hk-financials`、分红事件 `update-hk-events`、PCF 估值；store_moneyflow/store_fundamental 增加 market 维度；A股 pcf_ttm 补充 `update-cn-pcf`）
 >
 > 2026-09-22（macro 域修复：`update_db()` 补齐汇率/境外指标 + 新增 `update-macro` CLI；换源 CPI/PPI→东财、社融→Tushare `sf_month`、汇率→外管局中间价、DXY→东财 100.UDI 直连、WTI→新浪外盘 CL，修复 oil_wti 误存黄金数据；补齐 `copper_lme`（新浪 CAD，LME 铜）与 `fed_rate`（东财数据中心利率目标），macro 14 项全部落地。）
 >
@@ -73,7 +74,10 @@ data/moneyflow/
   market.parquet         大盘资金流（Tushare 东财，单文件）
   northbound.parquet     北向资金（AKShare，日频，2024起）
   margin/                融资融券明细（Tushare，按code分片）
-  top_list/              龙虎榜（Tushare，按date分片）
+  top_list/              龙虎榜汇总（Tushare，按date分片）
+  top_inst/              龙虎榜席位明细（Tushare top_inst，按date分片；资金主体识别）
+  block_trade/           大宗交易（Tushare block_trade，按date分片；大宗买方）
+  hk_hold/               北向个股持股（Tushare hk_hold，按code分片；普通积分账户季度披露）
   hk/stock/              港股个股资金流（东财，主力/超大/大/中/小单净额+占比，滚动约100个交易日）
 
 data/events/
@@ -236,9 +240,19 @@ store_mf.stats() -> dict
 ```
 
 `data_type` 取值：
-- code分片：`stock`（个股资金流）/ `margin`（融资融券）
-- date分片：`industry`（行业资金流）/ `top_list`（龙虎榜）
+- code分片：`stock`（个股资金流）/ `margin`（融资融券）/ `hk_hold`（北向个股持股）
+- date分片：`industry`（行业资金流）/ `top_list`（龙虎榜汇总）/ `top_inst`（龙虎榜席位明细）/ `block_trade`（大宗交易）
 - 单文件：`market`（大盘资金流）/ `northbound`（北向资金）
+
+**资金主体域字段说明**（来源 Tushare，供 `agents/smart_money_agent.py` 三支柱画像）：
+
+| 类型 | 来源接口 | 关键字段 | 说明 |
+|---|---|---|---|
+| top_inst | `top_inst` | trade_date, ts_code, exalter, buy, buy_rate, sell, sell_rate, net_buy, side, reason | 龙虎榜买卖席位明细；`exalter` 为席位名（含机构专用/股通专用/营业部），`side` 为买卖榜分组，存在买卖榜镜像重复行，需按 (date,ts_code,exalter,reason,buy,sell) 去重 |
+| block_trade | `block_trade` | trade_date, ts_code, price, vol, amount, buyer, seller | 大宗交易逐笔（买卖双方席位）；用于大宗买方资金方向 |
+| hk_hold | `hk_hold` | trade_date, ts_code, code, name, vol, ratio, exchange | 北向个股持股（vol/ratio）；**普通积分账户为季度披露**（2025Q1 起），非日频，需按披露点解读 streak |
+
+> 口径：`net = Σbuy - Σsell`（已排除 `side` 镜像重复）；席位标签来自规则匹配/推断，非官方认定。
 
 **margin（D7 情绪因子）字段说明**（来源 Tushare `margin_detail`，均为个股级别；字段需求来源见 `docs/requirements.md` D7 节）：
 
@@ -427,6 +441,18 @@ TushareDownloader().init_margin(start="2024-01-01")
 TushareDownloader().update_db()                     # 每日增量更新全域
 ```
 
+moneyflow 域下载器（`data/downloader_moneyflow.py`）新增资金主体类接口：
+
+```python
+from data.downloader_moneyflow import MoneyflowDownloader
+
+dl = MoneyflowDownloader()
+dl.init_top_inst(start="2024-01-01")        # 龙虎榜席位明细（按交易日分片）
+dl.init_block_trade(start="2024-01-01")     # 大宗交易（按交易日分片）
+dl.update_hk_hold(["000001", "600519"])     # 北向个股持股（按代码，季度披露，逐只拉取）
+# update_db() 已包含 top_inst / block_trade；hk_hold 按需单独拉取（未纳入默认流程）
+```
+
 events 域下载器为函数式接口（非类）：
 
 ```python
@@ -472,7 +498,7 @@ fetcher.get_financial(code) -> DataFrame
 
 ### 已完成（接口已实现并执行）
 
-factor 域 `moneyflow`（AKShare 近60天）/ `moneyflow_sector`；tushare 域 `daily` / `daily_basic` / `top_list` / `margin` / `moneyflow`(2010起) / `moneyflow_ind` / `moneyflow_mkt`；macro 域全部 14 项（`cny_usd` / `shrongji` / `vix` / `dxy` / `oil_wti` / `copper_lme` / `sp500` / `hsi` / `fed_rate` / `us_bond_yield` 等，含 `bond_yield` 内的美债字段）；events 域 E1 日历 + E2 减持/质押/分红 + E3 结构；**港股 K 线下载器 `downloader_hk.py`（`init-hk`/`update-hk`，港股通标的优先，AKShare Sina 主源）**。
+moneyflow 域 `stock` / `margin` / `top_list` / `top_inst` / `block_trade` / `hk_hold` / `industry` / `market` / `northbound`；macro 域全部 14 项（`cny_usd` / `shrongji` / `vix` / `dxy` / `oil_wti` / `copper_lme` / `sp500` / `hsi` / `fed_rate` / `us_bond_yield` 等，含 `bond_yield` 内的美债字段）；events 域 E1 日历 + E2 减持/质押/分红 + E3 结构；**港股 K 线下载器 `downloader_hk.py`（`init-hk`/`update-hk`，港股通标的优先，AKShare Sina 主源）**。
 
 ### 待下载（仍未实现下载器或未接入）
 
@@ -498,3 +524,4 @@ factor 域 `moneyflow`（AKShare 近60天）/ `moneyflow_sector`；tushare 域 `
 | `store.py:trading_days_since_ipo` | 用自然日而非交易日，命名有误导性 | 低 |
 | `fetcher.py:__del__` | `_bs_logged_in` 永远是 False，析构时不执行 BaoStock logout | 低 |
 | `downloader.py:_is_trading_day` | 只排除周末，节假日会触发无效更新 | 中 |
+| `downloader_moneyflow.py:fetch_hk_hold` | Tushare 普通积分账户北向持股为季度披露（非日频），streak 只能按披露点计数 | 低 |

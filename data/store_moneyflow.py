@@ -3,10 +3,13 @@ moneyflow 域存储层
 
 目录结构:
   data/moneyflow/
-    stock/   {code}.parquet      个股资金流（日频，2010起）
-    margin/  {code}.parquet      融资融券（按股票代码）
-    industry/{date}.parquet      行业资金流（东财，按日期分片）
-    top_list/{date}.parquet      龙虎榜（按日期分片）
+    stock/    {code}.parquet     个股资金流（日频，2010起）
+    margin/   {code}.parquet     融资融券（按股票代码）
+    hk_hold/  {code}.parquet     北向个股持股（Tushare hk_hold，按股票代码）
+    industry/ {date}.parquet     行业资金流（东财，按日期分片）
+    top_list/ {date}.parquet     龙虎榜汇总（按日期分片）
+    top_inst/ {date}.parquet     龙虎榜席位明细（按日期分片）
+    block_trade/{date}.parquet   大宗交易（按日期分片）
     market.parquet               大盘资金流（单文件）
     northbound.parquet           北向资金（单文件）
 
@@ -29,8 +32,8 @@ logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).parent / "moneyflow"
 
-_CODE_TYPES = ("stock", "margin")
-_DATE_TYPES = ("industry", "top_list")
+_CODE_TYPES = ("stock", "margin", "hk_hold")
+_DATE_TYPES = ("industry", "top_list", "top_inst", "block_trade")
 _SINGLE_TYPES = ("market", "northbound")
 
 for _d in _CODE_TYPES + _DATE_TYPES:

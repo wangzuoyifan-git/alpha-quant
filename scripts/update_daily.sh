@@ -90,7 +90,9 @@ run_step "[1/10] 更新 A 股 K 线数据" \
 # 2. meta 域（行业分类 + 申万指数 + 交易日历）
 run_step "[2/10] 更新 meta 域" update_meta
 
-# 3. moneyflow 域（个股/龙虎榜/两融/行业/大盘/北向）
+# 3. moneyflow 域（个股/龙虎榜汇总/龙虎榜席位明细/大宗交易/两融/行业/大盘/北向）
+#    注：席位明细 top_inst 与大宗交易 block_trade 已包含在 update-moneyflow 默认类型中
+#    北向个股持股 hk_hold 为季度披露、按代码逐只拉取，不在此每日脚本，见季度脚本
 run_step "[3/10] 更新 moneyflow 域" \
   "${PYTHON}" main.py update-moneyflow
 

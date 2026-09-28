@@ -27,7 +27,8 @@ def tmp_mf_dir(tmp_path, monkeypatch):
     original = smf.BASE_DIR
     smf.BASE_DIR = tmp_path / "moneyflow"
     smf.BASE_DIR.mkdir(parents=True, exist_ok=True)
-    for sub in ("stock", "margin", "industry", "top_list"):
+    for sub in ("stock", "margin", "hk_hold", "industry", "top_list",
+                "top_inst", "block_trade"):
         (smf.BASE_DIR / sub).mkdir(parents=True, exist_ok=True)
     yield smf.BASE_DIR
     smf.BASE_DIR = original
@@ -234,6 +235,50 @@ class TestMoneyflowAux:
         smf.save("stock", None, code="600519")
         smf.save("stock", pd.DataFrame(), code="600519")
         assert smf.load("stock", code="600519") is None
+
+
+class TestMoneyflowSmartMoney:
+    """资金主体域：top_inst / block_trade（date 分片）+ hk_hold（code）"""
+
+    def test_top_inst_date_roundtrip(self, tmp_mf_dir):
+        df = pd.DataFrame({
+            "trade_date": ["20260922", "20260922"],
+            "ts_code": ["000001.SZ", "000001.SZ"],
+            "exalter": ["机构专用", "深股通专用"],
+            "buy": [1e8, 5e7],
+            "sell": [1e7, 2e7],
+        })
+        smf.save("top_inst", df, date="2026-09-22")
+        loaded = smf.load("top_inst", date="2026-09-22")
+        assert loaded is not None
+        assert len(loaded) == 2
+        assert isinstance(loaded.index, pd.DatetimeIndex)
+
+    def test_block_trade_date_roundtrip(self, tmp_mf_dir):
+        df = pd.DataFrame({
+            "trade_date": ["20260922"],
+            "ts_code": ["600330.SH"],
+            "price": [29.12],
+            "amount": [320.32],
+            "buyer": ["某营业部"],
+            "seller": ["某营业部"],
+        })
+        smf.save("block_trade", df, date="2026-09-22")
+        loaded = smf.load("block_trade", date="2026-09-22")
+        assert loaded is not None and len(loaded) == 1
+
+    def test_hk_hold_code_roundtrip(self, tmp_mf_dir):
+        dates = ["2025-03-31", "2025-06-30", "2025-09-30"]
+        df = pd.DataFrame({
+            "date": dates,
+            "ts_code": ["000001.SZ"] * 3,
+            "ratio": [3.79, 2.94, 3.23],
+            "vol": [7.3e8, 5.7e8, 6.2e8],
+        })
+        smf.save("hk_hold", df, code="000001")
+        loaded = smf.load("hk_hold", code="000001")
+        assert loaded is not None and len(loaded) == 3
+        assert smf.last_date("hk_hold", code="000001") == "2025-09-30"
 
 
 class TestMoneyflowMarket:

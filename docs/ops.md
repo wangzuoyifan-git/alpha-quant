@@ -72,6 +72,9 @@ python3 main.py update-events                     # 增量更新事件域（E1 �
 python3 main.py init-moneyflow                    # 资金流与情绪（stock 2010起，其余 2024起）
 python3 main.py init-moneyflow --types stock      # 只下载个股资金流
 python3 main.py update-moneyflow                  # 增量更新 moneyflow 域
+python3 main.py update-hk-hold --codes 000001 600519   # 北向个股持股（hk_hold，季度披露，按代码）
+python3 main.py update-hk-hold --from-portfolio       # 标的取自当前持仓
+python3 main.py update-hk-hold --from-lhb 30          # 标的取自最近30个龙虎榜上榜交易日
 python3 main.py init-hk                           # 首次下载港股 K 线（默认仅港股通标的）
 python3 main.py update-hk                         # 增量更新港股 K 线
 python3 main.py update-hk-valuation               # 更新港股 PE/PB/PCF（港股通，合并进 K 线）
@@ -181,6 +184,30 @@ python3 main.py backtest --strategy ma_cross
 python3 main.py backtest --strategy ma_cross --start 2024-01-02 --end 2026-06-16
 python3 main.py backtest --strategy etf_momentum --codes 510300 159919  # ETF回测
 # 输出：总收益/年化/最大回撤/夏普/胜率/盈亏比 + 基准收益/超额收益(alpha)/beta
+```
+
+### 资金主体画像（smart-money）
+
+> 描述性行为追踪：识别"谁在买卖"与"他们一贯怎么做"，非预测信号，不构成投资建议。
+> 依赖数据：`top_inst`（席位明细）、`block_trade`（大宗）、`hk_hold`（北向个股持股）。
+> 前置：`update-moneyflow --types top_inst block_trade`；北向持股按需 `update-hk-hold --codes ...` 或加 `--fetch`。
+
+```bash
+# 个股完整三支柱画像（席位身份 + 北向跨期 + 资金合力/分歧）
+python3 main.py smart-money 600721
+python3 main.py smart-money 600721 --window 6            # 回溯6个月
+python3 main.py smart-money 600721 --fetch               # 北向持股缺失时按需联网下载
+python3 main.py smart-money 600721 --mode consensus      # 只看资金合力/分歧
+python3 main.py smart-money 600721 --mode northbound     # 只看北向跨期行为
+python3 main.py smart-money 600721 --markdown            # 输出 Markdown 报告
+python3 main.py smart-money 600721 --json                # 输出原始 JSON
+
+# 按资金主体（席位）画像：上榜频次/累计净买卖/上榜后N日胜率/持有周期/偏好板块
+python3 main.py smart-money 机构专用 --type seat
+python3 main.py smart-money 深股通专用 --type seat --horizons 5,10,20
+
+# 近期活跃资金主体榜（活动名册，非买入清单）
+python3 main.py smart-money --rank --window 3 --top 20
 ```
 
 ### 交易辅助
@@ -342,10 +369,13 @@ python3 tools/test_init_flow.py                                 # init 流程端
 
 ```bash
 scripts/update_daily.sh
-# 执行：[1]market K线 → [2]meta(周一init/其余update) → [3]moneyflow → [4]events(约1h)
+# 执行：[1]market K线 → [2]meta(周一init/其余update) → [3]moneyflow
+#         (个股/龙虎榜汇总+席位明细 top_inst/大宗 block_trade/两融/行业/大盘/北向)
+#       → [4]events(约1h)
 #       → [5]macro(含汇率/境外) → [6]update-hk(港股通) → [7]update-hk-valuation(约30m)
 #       → [8]update-hk-moneyflow(约15m) → [9]update-hk-events(约15m)
 #       → [10]factor(台阶二前空跑) → scan(stock，默认注释)
+# 注：北向个股持股 hk_hold 为季度披露且按代码逐只，不在每日脚本，见季度脚本
 # 注：单步失败不中断，末尾汇总，有失败时退出码 1；输出同时写入 logs/update_daily.log
 #     脚本带 flock 并发锁（上一轮未结束时新执行直接退出）
 #     港股 4 个步骤（K线/估值/资金流/分红）在 16:15 前统一跳过（避免盘中残缺 bar）
@@ -365,7 +395,8 @@ scripts/update_weekly.sh
 
 ```bash
 scripts/update_quarterly.sh
-# 执行：A股 fundamental 域 update_db（更新财务数据）
+# 执行：[1]A股 fundamental 域 update_db（更新财务数据）
+#       → [2]北向个股持股 update-hk-hold --from-portfolio --from-lhb 30（季度披露，约数百只）
 # 注：港股财务在每周脚本中更新；单步失败不中断，末尾汇总；带 flock 并发锁
 ```
 

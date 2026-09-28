@@ -2,12 +2,15 @@
 moneyflow 域下载器
 
 负责下载资金流与情绪类数据：
-  - stock      个股历史资金流向（Tushare moneyflow，2010起，日频）
-  - industry   行业资金流（Tushare moneyflow_ind_dc，东财，按日期分片）
-  - market     大盘资金流（Tushare moneyflow_mkt_dc，东财，单文件）
-  - margin     融资融券明细（Tushare margin_detail，按股票代码，日频）
-  - top_list   龙虎榜（Tushare top_list，按日期）
-  - northbound 北向资金（AKShare stock_hsgt_hist_em，无需 Tushare token）
+  - stock       个股历史资金流向（Tushare moneyflow，2010起，日频）
+  - industry    行业资金流（Tushare moneyflow_ind_dc，东财，按日期分片）
+  - market      大盘资金流（Tushare moneyflow_mkt_dc，东财，单文件）
+  - margin      融资融券明细（Tushare margin_detail，按股票代码，日频）
+  - top_list    龙虎榜汇总（Tushare top_list，按日期）
+  - top_inst    龙虎榜席位明细（Tushare top_inst，按日期；资金主体识别用）
+  - block_trade 大宗交易（Tushare block_trade，按日期；大宗买方用）
+  - hk_hold     北向个股持股（Tushare hk_hold，按股票代码；北向行为用）
+  - northbound  北向资金（AKShare stock_hsgt_hist_em，无需 Tushare token）
 
 接口限流说明（Tushare 默认）：
   - 每分钟最多 200 次（普通积分）
@@ -20,9 +23,11 @@ moneyflow 域下载器
   dl.update_db()                  # 每日增量更新
   dl.init_stock(start='2010-01-01')      # 单独初始化个股资金流
   dl.init_northbound()                   # 单独初始化北向资金（AKShare）
+  dl.update_hk_hold(['000001', '600519'])  # 按需下载北向个股持股（季度披露）
 
-注意：northbound 用 AKShare，不需要 TUSHARE_TOKEN；其余 5 类需要 token，
+注意：northbound 用 AKShare，不需要 TUSHARE_TOKEN；其余 7 类需要 token，
       token 在首次调用 Tushare 接口时惰性初始化。
+注意：hk_hold 为按股票代码逐只拉取，非每日全量，未纳入 update_db 默认流程。
 """
 import logging
 import os
@@ -82,6 +87,16 @@ def _to_dash_date(d: str) -> str:
     if len(d) == 8 and "-" not in d:
         return f"{d[:4]}-{d[4:6]}-{d[6:]}"
     return d
+
+
+def _to_ts_code(code: str) -> str:
+    """6 位 A 股代码 -> Tushare ts_code（带交易所后缀）。已带后缀则原样返回。"""
+    code = str(code)
+    if "." in code:
+        return code
+    if code.startswith(("6", "9")):
+        return f"{code}.SH"
+    return f"{code}.SZ"
 
 
 def _retry(func, max_retries: int = 3, wait_base: float = 2.0):
@@ -179,22 +194,28 @@ class MoneyflowDownloader:
         _log(f"                    个股资金流起始: {stock_start}")
         _log("=" * 60)
 
-        _log("[1/6] 初始化个股资金流（stock）...")
+        _log("[1/8] 初始化个股资金流（stock）...")
         self.init_stock(start=stock_start)
 
-        _log("[2/6] 初始化龙虎榜（top_list）...")
+        _log("[2/8] 初始化龙虎榜汇总（top_list）...")
         self.init_top_list(start=start)
 
-        _log("[3/6] 初始化融资融券（margin）...")
+        _log("[3/8] 初始化龙虎榜席位明细（top_inst）...")
+        self.init_top_inst(start=start)
+
+        _log("[4/8] 初始化大宗交易（block_trade）...")
+        self.init_block_trade(start=start)
+
+        _log("[5/8] 初始化融资融券（margin）...")
         self.init_margin(start=start)
 
-        _log("[4/6] 初始化行业资金流（industry）...")
+        _log("[6/8] 初始化行业资金流（industry）...")
         self.init_industry(start=start)
 
-        _log("[5/6] 初始化大盘资金流（market）...")
+        _log("[7/8] 初始化大盘资金流（market）...")
         self.init_market(start=start)
 
-        _log("[6/6] 初始化北向资金（northbound，AKShare）...")
+        _log("[8/8] 初始化北向资金（northbound，AKShare）...")
         self.init_northbound()
 
         _log("Moneyflow 域初始化完成！")
@@ -204,22 +225,28 @@ class MoneyflowDownloader:
         today = datetime.now().strftime(_FMT_DASH)
         _log(f"Moneyflow 域增量更新  目标日期: {today}")
 
-        _log("[1/6] 更新个股资金流...")
+        _log("[1/8] 更新个股资金流...")
         self._update_stock()
 
-        _log("[2/6] 更新龙虎榜...")
+        _log("[2/8] 更新龙虎榜汇总...")
         self._update_top_list()
 
-        _log("[3/6] 更新融资融券...")
+        _log("[3/8] 更新龙虎榜席位明细...")
+        self._update_top_inst()
+
+        _log("[4/8] 更新大宗交易...")
+        self._update_block_trade()
+
+        _log("[5/8] 更新融资融券...")
         self._update_margin()
 
-        _log("[4/6] 更新行业资金流...")
+        _log("[6/8] 更新行业资金流...")
         self._update_industry()
 
-        _log("[5/6] 更新大盘资金流...")
+        _log("[7/8] 更新大盘资金流...")
         self._update_market()
 
-        _log("[6/6] 更新北向资金（AKShare）...")
+        _log("[8/8] 更新北向资金（AKShare）...")
         self._update_northbound()
 
         _log("Moneyflow 域更新完成！")
@@ -461,6 +488,95 @@ class MoneyflowDownloader:
                 time.sleep(1.5)
 
         _log(f"  top_list 更新完成: 有数据={ok} 空日={skip} 失败={fail}")
+
+    # ==================================================================
+    # top_inst / block_trade — 按交易日分片（资金主体识别用）
+    # ==================================================================
+
+    def _pull_date_shards(self, data_type: str, fetch_fn, start: str,
+                          forward_only: bool = False) -> None:
+        """按交易日逐日拉取并按日期分片保存。
+
+        跳过已存在日期（含空日占位），避免重复保存与索引去重误伤多行分片。
+        fetch_fn(trade_date) 返回该日 DataFrame。
+
+        forward_only=False（init）：从 start 起补齐所有缺失交易日，支持回溯补历史；
+        forward_only=True（update）：只从已有最新日期之后向前增量。
+        """
+        pro = self._ensure_pro()
+        end = datetime.now().strftime(_FMT_DASH)
+        existing = set(d.replace("-", "") for d in store.list_dates(data_type))
+        if forward_only and existing:
+            last = max(existing)
+            fetch_start = (
+                datetime.strptime(_to_dash_date(last), _FMT_DASH) + timedelta(days=1)
+            ).strftime(_FMT_DASH)
+        else:
+            fetch_start = start
+        if fetch_start > end:
+            _log(f"  {data_type}：已是最新")
+            return
+
+        trade_dates = _retry(lambda: _get_trade_dates(pro, fetch_start, end))
+        dates_todo = [d for d in trade_dates if d not in existing]
+        if not dates_todo:
+            _log(f"  {data_type}：已是最新")
+            return
+
+        _log(f"  {data_type}: 待下载 {len(dates_todo)} 个交易日")
+        ok = skip = fail = 0
+        t0 = time.time()
+        for i, td in enumerate(dates_todo):
+            date_dash = _to_dash_date(td)
+            try:
+                df = _retry(lambda d=td: fetch_fn(d))
+                if df is None or df.empty:
+                    store.save(data_type,
+                               pd.DataFrame(columns=["trade_date"]),
+                               date=date_dash)
+                    skip += 1
+                else:
+                    store.save(data_type, df, date=date_dash)
+                    ok += 1
+                time.sleep(0.4)
+            except Exception as e:
+                logger.debug(f"{data_type} {td} 失败: {e}")
+                fail += 1
+                time.sleep(1.5)
+
+            if (i + 1) % 100 == 0:
+                _log(f"  {data_type} 进度: {i+1}/{len(dates_todo)} "
+                     f"有数据:{ok} 空日:{skip} 失败:{fail}  {time.time()-t0:.0f}s")
+
+        _log(f"  {data_type} 完成: 有数据={ok} 空日={skip} 失败={fail}  {time.time()-t0:.0f}s")
+
+    def init_top_inst(self, start: str = DEFAULT_START) -> None:
+        """初始化/补齐龙虎榜席位明细（从 start 起补齐缺失交易日）。"""
+        pro = self._ensure_pro()
+        self._pull_date_shards("top_inst",
+                               lambda d: pro.top_inst(trade_date=d), start,
+                               forward_only=False)
+
+    def _update_top_inst(self) -> None:
+        """增量更新龙虎榜席位明细（只向前补最新）。"""
+        pro = self._ensure_pro()
+        self._pull_date_shards("top_inst",
+                               lambda d: pro.top_inst(trade_date=d),
+                               DEFAULT_START, forward_only=True)
+
+    def init_block_trade(self, start: str = DEFAULT_START) -> None:
+        """初始化/补齐大宗交易（从 start 起补齐缺失交易日）。"""
+        pro = self._ensure_pro()
+        self._pull_date_shards("block_trade",
+                               lambda d: pro.block_trade(trade_date=d), start,
+                               forward_only=False)
+
+    def _update_block_trade(self) -> None:
+        """增量更新大宗交易（只向前补最新）。"""
+        pro = self._ensure_pro()
+        self._pull_date_shards("block_trade",
+                               lambda d: pro.block_trade(trade_date=d),
+                               DEFAULT_START, forward_only=True)
 
     # ==================================================================
     # margin — 融资融券
@@ -755,6 +871,70 @@ class MoneyflowDownloader:
                 _log("  market：无新数据")
         except Exception as e:
             logger.warning(f"market 更新失败: {e}")
+
+    # ==================================================================
+    # hk_hold — 北向个股持股（Tushare hk_hold，按股票代码）
+    # ==================================================================
+
+    def fetch_hk_hold(self, code: str,
+                      start: Optional[str] = None,
+                      end: Optional[str] = None) -> Optional[pd.DataFrame]:
+        """拉取单只 A 股的北向持股历史并落盘（store: hk_hold/{code}.parquet）。
+
+        注意：Tushare hk_hold 为沪深港通持股明细，普通积分账户按季度披露
+        （2025Q1 起），因此序列粒度可能为季度而非日频；上层分析需据此说明。
+        """
+        pro = self._ensure_pro()
+        code6 = str(code).split(".")[0]
+        ts_code = _to_ts_code(code6)
+        end = end or datetime.now().strftime(_FMT_DASH)
+        start = start or DEFAULT_START
+
+        def _fetch():
+            return pro.hk_hold(
+                ts_code=ts_code,
+                start_date=_to_ts_date(start),
+                end_date=_to_ts_date(end),
+            )
+
+        df = _retry(_fetch)
+        if df is None or df.empty:
+            return None
+        df = df.copy()
+        # 统一用 6 位 A 股代码作为落盘键（字段 code 在 hk_hold 中为港股内部码）
+        if "ts_code" in df.columns:
+            df["code"] = df["ts_code"].astype(str).str.split(".").str[0]
+        store.save("hk_hold", df, code=code6)
+        return df
+
+    def update_hk_hold(self, codes: list[str],
+                       start: Optional[str] = None,
+                       end: Optional[str] = None) -> dict:
+        """批量下载北向个股持股（按代码逐只，0.5s 间隔）。返回统计字典。"""
+        ok = skip = fail = 0
+        t0 = time.time()
+        for code in codes or []:
+            code6 = str(code).split(".")[0]
+            ld = store.last_date("hk_hold", code=code6)
+            # 仅在显式指定 end 且已有数据覆盖到该日时跳过（季度披露，默认总是刷新）
+            if ld and end and ld >= end:
+                skip += 1
+                continue
+            try:
+                df = self.fetch_hk_hold(code6, start=start, end=end)
+                if df is None or df.empty:
+                    skip += 1
+                else:
+                    ok += 1
+                time.sleep(0.5)
+            except Exception as e:
+                logger.debug(f"hk_hold {code6} 失败: {e}")
+                fail += 1
+                time.sleep(1.0)
+        result = {"ok": ok, "skip": skip, "fail": fail,
+                  "elapsed": round(time.time() - t0, 1)}
+        _log(f"  hk_hold 完成: 新增={ok} 跳过={skip} 失败={fail}  {result['elapsed']}s")
+        return result
 
     # ==================================================================
     # northbound — 北向资金（AKShare，无需 token）

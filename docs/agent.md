@@ -256,6 +256,32 @@ def notify_signals(signals: list[dict], title: str = None) -> dict:
     """推送信号到配置的渠道（企微/邮件/Telegram）"""
 ```
 
+### 3.5 smart_money_tools.py
+
+资金主体识别与跨期画像 Tools（薄封装 `agents/smart_money_agent.py`）。定位为**描述性行为追踪**，不产因子、不做拥挤评级、不做单日全市场复盘、不给买卖指令。
+
+```python
+def get_seat_identity(agency: str) -> dict
+    # 席位身份规则标签（机构专用/陆股通通道/游资(推断)/量化(推断)/营业部/未分类）
+
+def get_seat_profile(agency: str, window_months: int = 12, horizons="5,10,20") -> dict
+    # 席位跨股画像：上榜频次/累计净买卖/上榜后N日胜率/平均持有周期/偏好板块
+
+def get_stock_smart_money(code: str, mode: str = "full",
+                          window_months: int = 12, horizons="5,10,20",
+                          fetch: bool = False) -> dict
+    # 个股资金主体画像（full/seat/northbound/consensus），含 markdown 渲染
+
+def get_capital_consensus(code: str, window_months: int = 6, fetch: bool = False) -> dict
+    # 北向 × 机构席位 × 融资盘 × 大宗买方 的合力/分歧判定
+
+def get_northbound_behavior(code: str, window_months: int = 12, fetch: bool = False) -> dict
+    # 北向跨期持股 streak / 集中度变化 / 与价格背离
+
+def rank_smart_money_seats(window_months: int = 12, top_n: int = 20, horizons="5,10,20") -> dict
+    # 近期活跃资金主体榜（活动名册，非买入清单）
+```
+
 ---
 
 ## 四、Agent 实现
@@ -351,6 +377,27 @@ graph.add_conditional_edges("check_data", route_after_check, {...})
 - 消费方：`portfolio` 命令 `theme_etf` 出场路径展示主题综合评分 + 持/减/加建议。
 
 > 信息流：`L1宏观(5种) → L2行业评分(131个) → 细分主题评分(ETF代理) → L3个股选择`。ETF 评估双向影响：向上补充 L2 行业池（强势主题），向下指导 L3 在细分主题内选股。
+
+### 4.7 Smart Money Agent（agents/smart_money_agent.py）✅ 已实现（规则版，2026-09 新增）
+
+职责：识别 A 股**资金主体**并刻画其**跨期行为模式**（参考开源 skill-smart-money-profiler 的三支柱设计）。回答两件事：**谁在买卖**、**他们一贯怎么做**。描述性追踪，非预测信号。
+
+三大支柱：
+
+1. **席位身份与画像**：对 `top_inst` 席位名做规则归类（机构专用 / 陆股通通道 / 知名游资(推断) / 量化(推断) / 普通营业部 / 未分类），并按席位累计「上榜频次、累计净买卖、上榜后 5/10/20 个交易日胜率、平均持有周期、偏好板块」。标签来自规则匹配，统一带 `label_basis`，明确非官方认定。
+2. **北向跨期行为**：基于 `hk_hold` 个股持股序列，计算加/减仓 streak、持股比例（集中度）变化、与价格是否背离。**注意普通积分账户为季度披露**，streak 以披露点计数。
+3. **多源资金合力 / 分歧**：在同一标的、同一窗口下对齐北向（hk_hold Δratio）× 机构席位（top_inst 机构专用净额）× 融资盘（margin Δrzye）× 大宗买方（block_trade 机构专用净额），判定「资金合力 / 资金分歧 / 证据不足」，并列出全部四路（含「无数据」）。
+
+持久化：`data/smart_money/seats.json`（append/update，按 (code,date) 幂等去重，从累计 episode 重新推导度量）；别名字典可维护于 `data/smart_money/seat_aliases.json`。
+
+- `build_profile(target, target_type, mode, window_months, horizons, fetch, update_seat_archive)`：完整结构化报告 + `report_to_markdown`
+- `profile_stock_seats` / `profile_seat` / `rank_active_seats`：支柱一
+- `profile_northbound`：支柱二
+- `assess_consensus` / `classify_consensus`：支柱三
+- `classify_seat`：席位身份规则
+- 消费方：CLI `smart-money`；Tool `agent_tools/smart_money_tools.py`
+
+> 边界：不产出可回测因子（IC/RankIC/分组回测）、不做过热/拥挤风险评级、不做单日全市场复盘。
 
 ---
 
