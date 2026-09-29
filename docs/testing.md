@@ -57,8 +57,9 @@
 | **`tests/test_analysis.py`** | **A2 辅助分析聚合（技术面/资金流/基本面 P0 + 推送/看板格式化，阶段C新增）** | **✅ 14 passed** |
 | **`tests/test_scanner_filters.py`** | **S4 扫描过滤（北交所/新股/ST/成交额 GAP-02/03/04）** | **✅ 9 passed** |
 | **`tests/test_smart_money.py`** | **资金主体识别与跨期画像（席位身份/画像/北向 streak/合力分歧/盘前龙虎榜扫描/archive/tools，2026-09 新增）** | **✅ 33 passed** |
-| **`tests/test_seat_profiler.py`** | **席位字典（xlsx 硬标签导入/四特征/聚类纯度门槛/字典构建/classify 接入，2026-09 新增）** | **✅ 6 passed** |
-| **`tests/test_capital_profiler.py`** | **资金画像 Phase1 个股级（已判定/S1停牌/S3缺席/S4矛盾/level 占位/文本渲染，2026-09 新增）** | **✅ 7 passed** |
+| **`tests/test_seat_profiler.py`** | **席位字典（xlsx 硬标签导入/四特征/聚类纯度门槛/字典构建/快照/classify 接入，2026-09 新增）** | **✅ 7 passed** |
+| **`tests/test_capital_profiler.py`** | **资金画像 Phase1（已判定/S1停牌/S3缺席/S4矛盾/feedback/回购/席位×主力/事件流/level 占位/文本）** | **✅ 15 passed** |
+| **`tests/test_downloader_events.py`** | **events 下载器（Tushare repurchase 回购解析/区间过滤，2026-09 新增）** | **✅ 2 passed** |
 
 ### 2.1 分层决策测试覆盖（2026-06-11 新增）
 

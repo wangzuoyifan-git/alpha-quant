@@ -68,7 +68,7 @@ python3 main.py init-fundamental                  # 季频财务数据（2024起
 python3 main.py init-fundamental --start-year 2022
 python3 main.py init-macro                        # 宏观经济数据
 python3 main.py update-macro                      # 增量更新宏观（含汇率/境外指标）
-python3 main.py update-events                     # 增量更新事件域（E1 日历 + E2 企业事件）
+python3 main.py update-events                     # 增量更新事件域（E1 日历 + E2 减持/增持/质押/分红/回购）
 python3 main.py init-moneyflow                    # 资金流与情绪（stock 2010起，其余 2024起）
 python3 main.py init-moneyflow --types stock      # 只下载个股资金流
 python3 main.py update-moneyflow                  # 增量更新 moneyflow 域
@@ -409,7 +409,7 @@ python3 tools/test_init_flow.py                                 # init 流程端
 scripts/update_daily.sh
 # 执行：[1]market K线 → [2]meta(周一init/其余update) → [3]moneyflow
 #         (个股/龙虎榜汇总+席位明细 top_inst/大宗 block_trade/两融/行业/大盘/北向)
-#       → [4]events(约1h)
+#       → [4]events(约1.5h；E2 含回购)
 #       → [5]macro(含汇率/境外) → [6]update-hk(港股通) → [7]update-hk-valuation(约30m)
 #       → [8]update-hk-moneyflow(约15m) → [9]update-hk-events(约15m)
 #       → [10]factor(台阶二前空跑) → scan(stock，默认注释)

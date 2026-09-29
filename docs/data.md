@@ -1,7 +1,8 @@
 # Alpha量化 — 数据层文档
 
 > 数据层接口、各域结构、数据源说明、待办缺口。
-> 最后更新：2026-09-28（moneyflow 域新增资金主体数据 `top_inst` 龙虎榜席位明细 / `block_trade` 大宗交易 / `hk_hold` 北向个股持股；下载器 `init_top_inst`/`init_block_trade`/`update_hk_hold`）
+> 最后更新：2026-09-29（events E2 新增回购 `buyback`（Tushare `repurchase`）；moneyflow 域资金主体数据 `top_inst`/`block_trade`/`hk_hold`）
+> 2026-09-28（moneyflow 域新增资金主体数据 `top_inst` 龙虎榜席位明细 / `block_trade` 大宗交易 / `hk_hold` 北向个股持股；下载器 `init_top_inst`/`init_block_trade`/`update_hk_hold`）
 > 2026-09-23（港股数据批次1：资金流 `update-hk-moneyflow`、财务 5 表 `update-hk-financials`、分红事件 `update-hk-events`、PCF 估值；store_moneyflow/store_fundamental 增加 market 维度；A股 pcf_ttm 补充 `update-cn-pcf`）
 >
 > 2026-09-22（macro 域修复：`update_db()` 补齐汇率/境外指标 + 新增 `update-macro` CLI；换源 CPI/PPI→东财、社融→Tushare `sf_month`、汇率→外管局中间价、DXY→东财 100.UDI 直连、WTI→新浪外盘 CL，修复 oil_wti 误存黄金数据；补齐 `copper_lme`（新浪 CAD，LME 铜）与 `fed_rate`（东财数据中心利率目标），macro 14 项全部落地。）

@@ -1,7 +1,8 @@
 # Alpha量化 — 项目总览
 
 > 所有 Session 的共同基础参考。专项内容见各模块文档。
-> 最后更新：2026-09-29（资金画像 Phase1 增强：席位×主力一致性；产业资本接入 Tushare `repurchase`（E2 `buyback`））
+> 最后更新：2026-09-29（资金画像 Phase1 增强：席位×主力一致性 + 席位级事件流合力/分歧子信号；产业资本接入 Tushare `repurchase`（E2 `buyback`）；`--hidden-main` 默认关闭）
+> 2026-09-29（资金画像 Phase1 增强：席位×主力一致性；产业资本接入 Tushare `repurchase`（E2 `buyback`））
 > 2026-09-29（席位字典软标签收紧 + 来源标注：纯度门槛 0.6、软标签最低置信 0.7、身份列带 `[硬]/[软]/[规则]/[推断]` 前缀）
 > 2026-09-29（资金画像 Phase 1：`agents/capital_profiler.py` 个股级（主导资金/反馈/持续性/结构评分/无法判断）+ `capital-profiler` CLI + 设计文档 `docs/capital_profiler.md`）
 > 2026-09-29（席位字典（游资/量化）：`agents/seat_profiler.py` 三层（xlsx 硬标签 + 四特征聚类软标签 + 次日跟投回测）+ `seat-dict` CLI + 每周脚本重估；盘前龙虎榜扫描 `smart-money --recent-lhb`）
@@ -174,7 +175,7 @@ Agent 层内部实现**三层决策架构**，每层职责如下：
 | factor | `data/factor/` | 重新定位 | 计算型因子（动量/价值/质量等衍生值），台阶二前暂空 |
 | macro | `data/macro/` | 完成 | 国内 6 项 + 境外 8 项（含美债 `us_bond_yield` 派生、`copper_lme`、`fed_rate`）全部落地；`update_db()`/`update-macro` 覆盖全部下载项 |
 | moneyflow | `data/moneyflow/` | 完成 | 资金流与情绪域：stock/industry/market/northbound/margin/top_list + 资金主体类 top_inst/block_trade/hk_hold；行业资金流用东财BK体系（覆盖申万L1全部/L2约95%） |
-| events | `data/events/` | 已建设 | E1 定期事件日历、E2 企业事件（减持/质押/分红）、E3 突发事件归档 |
+| events | `data/events/` | 已建设 | E1 定期事件日历、E2 企业事件（减持/增持/质押/分红/回购）、E3 突发事件归档 |
 
 > 详细接口和数据结构见 `docs/data.md`
 
