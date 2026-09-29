@@ -280,6 +280,10 @@ def get_northbound_behavior(code: str, window_months: int = 12, fetch: bool = Fa
 
 def rank_smart_money_seats(window_months: int = 12, top_n: int = 20, horizons="5,10,20") -> dict
     # 近期活跃资金主体榜（活动名册，非买入清单）
+
+def get_recent_lhb_smart_money(days: int = 1, history_months: int = 0,
+                               top_n: int = 10, horizons="5,10,20") -> dict
+    # 盘前扫描最近 N 个龙虎榜披露日标的：本次席位 + 席位跨股历史画像 + 本股历史其他上榜
 ```
 
 ---
@@ -391,6 +395,7 @@ graph.add_conditional_edges("check_data", route_after_check, {...})
 持久化：`data/smart_money/seats.json`（append/update，按 (code,date) 幂等去重，从累计 episode 重新推导度量：上榜频次/累计净买卖/上榜后 N 日胜率/平均持有周期）；别名字典可维护于 `data/smart_money/seat_aliases.json`。注意档案的 `avg_hold_days` 基于累积 episode（上限 100 条/席位），与实时画像（全窗口跨股）可能略有差异。
 
 - `build_profile(target, target_type, mode, window_months, horizons, fetch, update_seat_archive)`：完整结构化报告 + `report_to_markdown`
+- `scan_recent_lhb(days, history_months, top_n, horizons)`：盘前扫描最近 N 个龙虎榜披露日的标的，输出每个标的「本次席位 + 席位跨股历史画像 + 该席位在本股的历史其他上榜」；`recent_lhb_to_markdown` 渲染。CLI：`smart-money --recent-lhb --days N`
 - `profile_stock_seats` / `profile_seat` / `rank_active_seats`：支柱一
 - `profile_northbound`：支柱二
 - `assess_consensus` / `classify_consensus`：支柱三

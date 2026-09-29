@@ -83,6 +83,19 @@ def get_northbound_behavior(code: str, window_months: int = 12,
         return {"success": False, "error": str(e)}
 
 
+def get_recent_lhb_smart_money(days: int = 1, history_months: int = 0,
+                               top_n: int = 10, horizons="5,10,20") -> dict:
+    """盘前扫描最近 N 个龙虎榜披露日标的：本次席位 + 席位跨股历史画像 + 本股历史其他上榜。"""
+    try:
+        result = sma.scan_recent_lhb(days=days, history_months=history_months,
+                                     top_n=top_n,
+                                     horizons=sma.parse_horizons(horizons))
+        return _ok({"report": result, "markdown": sma.recent_lhb_to_markdown(result)})
+    except Exception as e:
+        logger.error(f"get_recent_lhb_smart_money 失败: {e}")
+        return {"success": False, "error": str(e)}
+
+
 def rank_smart_money_seats(window_months: int = 12, top_n: int = 20,
                            horizons="5,10,20") -> dict:
     """近期活跃资金主体榜（活动名册，非买入清单），按 |累计净买卖| 排序。"""

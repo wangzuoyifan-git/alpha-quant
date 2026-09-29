@@ -214,11 +214,15 @@ def aggregate_seat_episodes(rows: pd.DataFrame) -> pd.DataFrame:
     cols = ["date", "code", "agency", "buy", "sell", "net", "reasons"]
     if rows is None or rows.empty:
         return pd.DataFrame(columns=cols)
-    g = rows.groupby(["date", "code", "agency"], as_index=False).agg(
+    key = ["date", "code", "agency"]
+    g = rows.groupby(key, as_index=False).agg(
         buy=("buy", "sum"),
         sell=("sell", "sum"),
-        reasons=("reason", lambda s: sorted({str(x) for x in s if str(x)})),
     )
+    # reasons：取代表性 reason（首个）。避免对数十万组跑 per-group python 聚合。
+    rep = rows.drop_duplicates(subset=key, keep="first")[key + ["reason"]]
+    g = g.merge(rep, on=key, how="left")
+    g["reasons"] = [[str(x)] if str(x) else [] for x in g["reason"].tolist()]
     g["net"] = g["buy"] - g["sell"]
     return g[cols]
 
@@ -265,6 +269,9 @@ class PriceCache:
     def __init__(self, loader=None):
         self._loader = loader or _default_price_loader
         self._cache: dict = {}
+        self._close_cache: dict = {}
+        self._pos_cache: dict = {}
+        self._vals_cache: dict = {}
         self._fwd_cache: dict = {}
 
     def get(self, code: str):
@@ -278,11 +285,39 @@ class PriceCache:
         return self._cache[code]
 
     def _close(self, code: str):
+        code = _norm_code6(code)
+        if code in self._close_cache:
+            return self._close_cache[code]
         df = self.get(code)
-        if df is None or df.empty or "close" not in df.columns:
-            return None
-        close = pd.to_numeric(df["close"], errors="coerce").dropna()
-        return close if len(close) >= 2 else None
+        close = None
+        if df is not None and not df.empty and "close" in df.columns:
+            s = pd.to_numeric(df["close"], errors="coerce").dropna()
+            if len(s) >= 2:
+                close = s
+        self._close_cache[code] = close
+        return close
+
+    def _pos_map(self, code: str) -> dict:
+        """该股票「日期字符串 -> 行号」映射（供 O(1) 定位，避免 pandas 日期解析）。"""
+        code = _norm_code6(code)
+        if code in self._pos_cache:
+            return self._pos_cache[code]
+        close = self._close(code)
+        m = {}
+        if close is not None:
+            ss = close.index.strftime("%Y-%m-%d")
+            m = dict(zip(ss.tolist(), range(len(ss)), strict=False))
+        self._pos_cache[code] = m
+        return m
+
+    def _vals(self, code: str):
+        code = _norm_code6(code)
+        if code in self._vals_cache:
+            return self._vals_cache[code]
+        close = self._close(code)
+        v = close.to_numpy() if close is not None else None
+        self._vals_cache[code] = v
+        return v
 
     def forward_return(self, code: str, date: str, horizon: int):
         """上榜日 T 起，T+horizon 个交易日收益 = close[T+h]/close[T]-1。"""
@@ -290,17 +325,14 @@ class PriceCache:
         if cache_key in self._fwd_cache:
             return self._fwd_cache[cache_key]
         result = None
-        close = self._close(code)
-        if close is not None:
-            try:
-                pos = close.index.searchsorted(pd.Timestamp(date))
-            except Exception:
-                pos = None
-            if pos is not None and pos < len(close):
+        vals = self._vals(code)
+        if vals is not None:
+            pos = self._pos_map(code).get(str(date))
+            if pos is not None:
                 tgt = pos + int(horizon)
-                base = float(close.iloc[pos])
-                if tgt < len(close) and base > 0:
-                    result = float(close.iloc[tgt]) / base - 1
+                base = float(vals[pos])
+                if tgt < len(vals) and base > 0:
+                    result = float(vals[tgt]) / base - 1
         self._fwd_cache[cache_key] = result
         return result
 
@@ -308,10 +340,10 @@ class PriceCache:
         close = self._close(code)
         if close is None:
             return None
-        try:
-            p1 = min(close.index.searchsorted(pd.Timestamp(d1)), len(close) - 1)
-            p2 = min(close.index.searchsorted(pd.Timestamp(d2)), len(close) - 1)
-        except Exception:
+        m = self._pos_map(code)
+        p1 = m.get(str(d1))
+        p2 = m.get(str(d2))
+        if p1 is None or p2 is None:
             return None
         return int(p2 - p1)
 
@@ -331,8 +363,18 @@ class PriceCache:
 
 
 def _default_price_loader(code: str):
+    """只读 close 列，减少 IO（画像仅需收盘价）。异常时回退完整加载。"""
     import data.store as store
-    return store.load(code, asset_type="stock", market="cn")
+    try:
+        p = store._path(code, "cn", "stock")
+        if not p.exists():
+            return None
+        df = pd.read_parquet(p, engine="pyarrow", columns=["close"])
+        if not isinstance(df.index, pd.DatetimeIndex):
+            df.index = pd.to_datetime(df.index)
+        return df
+    except Exception:
+        return store.load(code, asset_type="stock", market="cn")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -369,29 +411,46 @@ def _sector_of(code: str) -> str:
 
 def _win_rate(episodes: pd.DataFrame, prices: PriceCache, horizons: tuple) -> dict:
     """对净买入 episode 计算上榜后 N 个交易日胜率（含样本数）。"""
-    buy_eps = episodes[episodes["net"] > 0]
-    out = {"samples": len(buy_eps)}
+    out = {"samples": 0}
+    if episodes is None or episodes.empty or "net" not in episodes.columns:
+        for h in horizons:
+            out[f"d{h}"] = None
+            out[f"d{h}_n"] = 0
+        return out
+    buy = episodes[episodes["net"] > 0]
+    out["samples"] = len(buy)
+    if buy.empty:
+        for h in horizons:
+            out[f"d{h}"] = None
+            out[f"d{h}_n"] = 0
+        return out
+    codes = buy["code"].tolist()
+    dates = buy["date"].tolist()
     for h in horizons:
-        rets = []
-        for _, r in buy_eps.iterrows():
-            fr = prices.forward_return(r["code"], r["date"], h)
-            if fr is not None:
-                rets.append(fr)
-        out[f"d{h}"] = (round(statistics.mean(x > 0 for x in rets), 3) if rets else None)
-        out[f"d{h}_n"] = len(rets)
+        wins = cnt = 0
+        for c, d in zip(codes, dates, strict=False):
+            r = prices.forward_return(c, d, h)
+            if r is not None:
+                cnt += 1
+                wins += 1 if r > 0 else 0
+        out[f"d{h}"] = round(wins / cnt, 3) if cnt else None
+        out[f"d{h}_n"] = cnt
     return out
 
 
 def _avg_hold_days(episodes: pd.DataFrame, prices: PriceCache):
     """席位在同一标的「先买后卖」的相邻配对，取交易日间隔均值（近似）。"""
+    if episodes is None or episodes.empty:
+        return None
     gaps = []
     for code, g in episodes.sort_values("date").groupby("code"):
         last_buy = None
-        for _, r in g.iterrows():
-            if r["net"] > 0:
-                last_buy = r["date"]
-            elif r["net"] < 0 and last_buy is not None:
-                days = prices.trading_days_between(code, last_buy, r["date"])
+        for d, net in zip(g["date"].tolist(), g["net"].tolist(), strict=False):
+            net = net or 0
+            if net > 0:
+                last_buy = d
+            elif net < 0 and last_buy is not None:
+                days = prices.trading_days_between(code, last_buy, d)
                 if days is not None and days > 0:
                     gaps.append(days)
                 last_buy = None
@@ -422,11 +481,7 @@ def _profile_from_group(agency: str,
 
     buy_n = int((sub["net"] > 0).sum())
     sell_n = int((sub["net"] < 0).sum())
-    sectors: dict = {}
-    for c in sub["code"]:
-        s = _sector_of(c)
-        sectors[s] = sectors.get(s, 0) + 1
-    fav = sorted(sectors.items(), key=lambda kv: kv[1], reverse=True)[:5]
+    fav = list(sub["code"].map(_sector_of).value_counts().head(5).items())
 
     recent = []
     for _, r in sub.tail(max_recent).iloc[::-1].iterrows():
@@ -558,6 +613,166 @@ def rank_active_seats(window_months: int = DEFAULT_WINDOW_MONTHS,
              for a, g in eps.groupby("agency")]
     cards.sort(key=lambda c: abs(c["cum_net_value"]), reverse=True)
     return cards[:top_n]
+
+
+# ═══════════════════════════════════════════════════════════════
+# 盘前龙虎榜标的扫描（近期标的 + 席位历史画像）
+# ═══════════════════════════════════════════════════════════════
+
+_name_cache = None
+
+
+def _stock_name(code: str) -> str:
+    global _name_cache
+    if _name_cache is None:
+        try:
+            import data.store as store
+            ipo = store.load_ipo_dates()
+            _name_cache = {k.split(":")[-1]: (v.get("name") or "")
+                           for k, v in ipo.items() if v.get("type") == "stock"}
+        except Exception:
+            _name_cache = {}
+    return _name_cache.get(_norm_code6(code), "")
+
+
+def scan_recent_lhb(days: int = 1,
+                    history_months: int = 0,
+                    top_n: int = 10,
+                    horizons=HORIZONS,
+                    prices: PriceCache = None) -> dict:
+    """
+    盘前扫描最近 N 个龙虎榜披露日的标的，并给出每个标的相关席位的
+    跨股历史画像 + 该席位在本股的历史其他上榜记录。
+
+    :param days: 取最近 N 个「有 top_inst 数据的交易日」（默认 1 = 最近一日）
+    :param history_months: 席位历史画像回溯窗口（0 = 用全部本地 top_inst）
+    :param top_n: 每个标的展示的席位数（按 |本次净额| 降序）
+    """
+    prices = prices or PriceCache()
+    all_dates = sorted(store_mf.list_dates("top_inst"))
+    notes = []
+    if not all_dates:
+        notes.append("无龙虎榜席位明细（top_inst），请先运行 update-moneyflow --types top_inst")
+        return {"available": False, "days": days, "dates": [], "targets": [],
+                "notes": notes, "target_count": 0, "seat_count": 0}
+
+    days = max(int(days), 1)
+    recent_dates = all_dates[-days:]
+    end = all_dates[-1]
+    start = (_window_start(history_months, end)
+             if history_months and int(history_months) > 0 else all_dates[0])
+
+    hist_eps = load_seat_episodes(start=start, end=end)
+    if hist_eps.empty:
+        notes.append(f"窗口内无龙虎榜席位明细（top_inst，窗口 {start}~{end}）")
+        return {"available": False, "days": days, "dates": recent_dates, "targets": [],
+                "notes": notes, "target_count": 0, "seat_count": 0,
+                "window": {"start": start, "end": end}}
+
+    recent = hist_eps[hist_eps["date"].isin(set(recent_dates))]
+    involved = set(recent["agency"]) if not recent.empty else set()
+    grouped = {a: g.sort_values("date") for a, g in hist_eps.groupby("agency")
+               if a in involved}
+    profiles = {a: _profile_from_group(a, grouped.get(a), horizons, prices)
+                for a in involved}
+
+    pct_map = {}
+    for d in recent_dates:
+        tl = store_mf.load("top_list", date=d)
+        if tl is not None and not tl.empty and "ts_code" in tl.columns:
+            for ts, pct in zip(tl["ts_code"].astype(str), tl["pct_change"], strict=False):
+                pct_map[(d, _norm_code6(ts))] = _safe_float(pct)
+
+    # 本股历史索引：只对本次涉及的股票建表，避免逐席位全量过滤
+    target_codes = set(recent["code"])
+    hist_sub = hist_eps[hist_eps["code"].isin(target_codes)]
+    stock_hist_map = {
+        (c, a): list(zip(g["date"].tolist(), g["net"].tolist(), strict=False))
+        for (c, a), g in hist_sub.groupby(["code", "agency"])
+    }
+
+    targets = []
+    for (date, code), g in recent.groupby(["date", "code"]):
+        seats = []
+        for agency, sg in g.groupby("agency"):
+            p = profiles.get(agency, {})
+            info = classify_seat(agency)
+            sh = [(d, n) for d, n in stock_hist_map.get((code, agency), []) if d != date]
+            seats.append({
+                "agency": agency,
+                "label": p.get("label") or info["label"],
+                "label_basis": p.get("label_basis") or info["label_basis"],
+                "this_net": round(float(sg["net"].sum()), 2),
+                "this_buy": round(float(sg["buy"].sum()), 2),
+                "this_sell": round(float(sg["sell"].sum()), 2),
+                "history": {k: p.get(k) for k in (
+                    "appearance_count", "cum_net_value", "win_rate",
+                    "avg_hold_days", "fav_sectors", "data_window")},
+                "stock_history": [
+                    {"date": d, "net": _safe_float(n)} for d, n in sh
+                ],
+            })
+        seats.sort(key=lambda s: abs(s["this_net"]), reverse=True)
+        targets.append({
+            "date": date, "code": code, "name": _stock_name(code),
+            "pct_change": pct_map.get((date, code)),
+            "net": round(float(g["net"].sum()), 2),
+            "buy": round(float(g["buy"].sum()), 2),
+            "sell": round(float(g["sell"].sum()), 2),
+            "reasons": sorted({rr for lst in g["reasons"] for rr in lst}),
+            "seat_total": len(seats),
+            "seats": seats[:top_n],
+        })
+
+    targets.sort(key=lambda t: (t["date"], abs(t["net"])), reverse=True)
+    seat_count = sum(t["seat_total"] for t in targets)
+    return {
+        "available": bool(targets),
+        "days": days,
+        "dates": recent_dates,
+        "window": {"start": start, "end": end},
+        "horizons": list(horizons),
+        "target_count": len(targets),
+        "seat_count": seat_count,
+        "targets": targets,
+        "notes": notes + ["席位标签来自规则匹配/推断，不等于官方认定"],
+        "disclaimer": DISCLAIMER,
+        "data_appendix": [
+            {"module": "近期龙虎榜标的", "source": "top_inst", "window": end,
+             "rows": len(targets), "notes": f"最近 {days} 个披露日"},
+            {"module": "席位历史画像", "source": "top_inst",
+             "window": f"{start}~{end}", "rows": len(involved), "notes": "规则匹配"},
+        ],
+    }
+
+
+def recent_lhb_to_markdown(result: dict) -> str:
+    """把盘前龙虎榜扫描结果渲染为 Markdown。"""
+    lines = ["# 盘前龙虎榜标的与席位画像"]
+    lines.append(f"- 披露日: {', '.join(result.get('dates', []))}")
+    lines.append(f"- 标的数: {result.get('target_count', 0)}；涉及席位: {result.get('seat_count', 0)}")
+    lines.append("")
+    for t in result.get("targets", []):
+        pct = f"{t['pct_change']:+.2f}%" if t.get("pct_change") is not None else "-"
+        lines.append(f"## {t['date']} {t['code']} {t['name']}（{pct}，净额 {t['net']/1e8:+.2f}亿）")
+        lines.append(f"- 上榜原因: {'；'.join(t.get('reasons', [])) or '-'}")
+        lines.append("")
+        lines.append("| 席位 | 身份 | 本次净额(亿) | 历史上榜(买/卖) | 历史累计净买卖(亿) | 5/10/20日胜率 | 平均持有(日) | 本股历史其他上榜 |")
+        lines.append("|---|---|---|---|---|---|---|---|")
+        for s in t["seats"]:
+            h = s.get("history") or {}
+            ac = h.get("appearance_count") or {}
+            wr = h.get("win_rate") or {}
+            wr_s = "/".join(str(wr.get(f"d{x}")) for x in result.get("horizons", HORIZONS))
+            sh = s.get("stock_history") or []
+            sh_s = "；".join(f"{e['date']} {e['net']/1e8:+.2f}亿" for e in sh[-3:]) or "-"
+            lines.append(
+                f"| {s['agency']} | {s['label']}({s['label_basis']}) | {s['this_net']/1e8:+.2f} | "
+                f"{ac.get('buy', 0)}/{ac.get('sell', 0)} | {(h.get('cum_net_value') or 0)/1e8:+.2f} | "
+                f"{wr_s} | {h.get('avg_hold_days') if h.get('avg_hold_days') else '样本不足'} | {sh_s} |")
+        lines.append("")
+    lines.append(f"> {result.get('disclaimer', DISCLAIMER)}")
+    return "\n".join(lines)
 
 
 # ═══════════════════════════════════════════════════════════════

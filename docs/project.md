@@ -1,7 +1,8 @@
 # Alpha量化 — 项目总览
 
 > 所有 Session 的共同基础参考。专项内容见各模块文档。
-> 最后更新：2026-09-28（新增资金主体画像：moneyflow 域 top_inst/block_trade/hk_hold + `agents/smart_money_agent.py` 三支柱 + `agent_tools/smart_money_tools.py` + `smart-money` CLI）
+> 最后更新：2026-09-29（盘前龙虎榜扫描：`smart-money --recent-lhb --days N` 输出近期标的 + 席位跨股历史画像 + 本股历史其他上榜记录；画像计算向量化提速）
+> 2026-09-28（新增资金主体画像：moneyflow 域 top_inst/block_trade/hk_hold + `agents/smart_money_agent.py` 三支柱 + `agent_tools/smart_money_tools.py` + `smart-money` CLI）
 > 2026-09-22（macro 域修复：`update_db()` 补齐汇率/境外指标 + `update-macro` CLI；CPI/PPI、社融、汇率、DXY、WTI 换源，修复 oil_wti 误存黄金数据）
 > 2026-08-13（港股 K 线接入：`data/downloader_hk.py` + `init-hk/update-hk`，港股通标的优先，AKShare Sina 主源）
 > 2026-06-21（L2行业评分升级到申万L2/131个细分行业；ETF独立三维评分体系 agents/etf_agent.py + data/etf_config.json；portfolio theme_etf 出场路径；L3联动强势主题ETF补入选股池；阶段A~D：成交额过滤/行业排除修复/Tool契约对齐/A2辅助分析 agent_tools/analysis.py）

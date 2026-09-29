@@ -208,6 +208,13 @@ python3 main.py smart-money 深股通专用 --type seat --horizons 5,10,20
 
 # 近期活跃资金主体榜（活动名册，非买入清单）
 python3 main.py smart-money --rank --window 3 --top 20
+
+# 盘前：最近龙虎榜标的 + 席位历史画像（本次席位 / 跨股历史画像 / 本股历史其他上榜）
+python3 main.py smart-money --recent-lhb --days 1              # 最近1个龙虎榜披露日
+python3 main.py smart-money --recent-lhb --days 3 --top 10     # 近3日，每股前10席位
+python3 main.py smart-money --recent-lhb --days 1 --markdown   # 输出 Markdown
+python3 main.py smart-money --recent-lhb --days 1 --json       # 输出原始 JSON
+# 注：--history-months 控制席位历史画像回溯窗口，0=全部本地 top_inst（默认0，数据多时略慢）
 ```
 
 ### 交易辅助

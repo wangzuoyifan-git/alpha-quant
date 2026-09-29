@@ -965,14 +965,75 @@ def cmd_smart_money(target: str = None, target_type: str = "auto", mode: str = "
                     window_months: int = 12, horizons: str = "5,10,20",
                     fetch: bool = False, as_json: bool = False,
                     as_markdown: bool = False, rank: bool = False,
-                    top_n: int = 20):
+                    top_n: int = 20, recent_lhb: bool = False,
+                    days: int = 1, history_months: int = 0):
     """资金主体行为画像：识别谁在买卖 + 跨期行为模式（描述性，不构成投资建议）"""
     from rich.console import Console
     from rich.table import Table
     from rich.panel import Panel
-    from agents.smart_money_agent import build_profile, report_to_markdown
+    from agents.smart_money_agent import (
+        build_profile, report_to_markdown, scan_recent_lhb, recent_lhb_to_markdown,
+        parse_horizons)
 
     console = Console()
+
+    # ── 盘前龙虎榜标的扫描（近期标的 + 席位历史画像）──
+    if recent_lhb:
+        result = scan_recent_lhb(days=days, history_months=history_months,
+                                 top_n=top_n, horizons=parse_horizons(horizons))
+        if as_json:
+            import json
+            console.print_json(json.dumps(result, ensure_ascii=False, default=str))
+            return
+        if as_markdown:
+            console.print(recent_lhb_to_markdown(result))
+            return
+        if not result.get("available"):
+            console.print(f"[yellow]{'; '.join(result.get('notes', [])) or '无数据'}[/yellow]")
+            return
+        console.print(Panel(
+            f"[bold cyan]盘前龙虎榜标的与席位画像[/bold cyan]\n"
+            f"披露日: [yellow]{', '.join(result['dates'])}[/yellow]  "
+            f"标的: [yellow]{result['target_count']}[/yellow]  "
+            f"涉及席位: [yellow]{result['seat_count']}[/yellow]  "
+            f"席位历史窗口: [yellow]{result['window']['start']}~{result['window']['end']}[/yellow]",
+            expand=False))
+        ov = Table(title="标的概览", border_style="green")
+        for c in ("日期", "代码", "名称", "涨跌%", "龙虎榜净额(亿)", "买卖(亿)", "席位数"):
+            ov.add_column(c)
+        for t in result["targets"]:
+            pct = f"{t['pct_change']:+.2f}" if t.get("pct_change") is not None else "-"
+            ov.add_row(t["date"], t["code"], t["name"], pct,
+                       f"{t['net']/1e8:+.2f}", f"{t['buy']/1e8:+.2f}/{t['sell']/1e8:+.2f}",
+                       str(t["seat_total"]))
+        console.print(ov)
+        for t in result["targets"]:
+            st = Table(
+                title=f"{t['date']} {t['code']} {t['name']}｜席位画像（{t['seat_total']} 席，展示前{len(t['seats'])}）",
+                border_style="magenta")
+            for c in ("席位", "身份", "本次净额(亿)", "历史上榜(买/卖)",
+                      "历史累计(亿)", "5/10/20日胜率", "平均持有(日)", "本股历史其他上榜"):
+                st.add_column(c)
+            for s in t["seats"]:
+                h = s.get("history") or {}
+                ac = h.get("appearance_count") or {}
+                wr = h.get("win_rate") or {}
+                wr_s = "/".join(
+                    (f"{wr.get(f'd{x}'):.0%}" if wr.get(f"d{x}") is not None else "NA")
+                    for x in result["horizons"])
+                hold = f"{h.get('avg_hold_days')}" if h.get("avg_hold_days") else "样本不足"
+                sh = s.get("stock_history") or []
+                sh_s = "；".join(f"{e['date']} {e['net']/1e8:+.2f}亿" for e in sh[-2:]) or "-"
+                st.add_row(s["agency"][:20], f"{s['label']}({s['label_basis']})",
+                           f"{s['this_net']/1e8:+.2f}",
+                           f"{ac.get('buy', 0)}/{ac.get('sell', 0)}",
+                           f"{(h.get('cum_net_value') or 0)/1e8:+.2f}", wr_s, hold, sh_s)
+            console.print(st)
+            if t.get("reasons"):
+                console.print(f"[dim]上榜原因: {'；'.join(t['reasons'])}[/dim]")
+        console.print("[dim]席位标签来自规则匹配/推断，不等于官方认定[/dim]")
+        console.print(f"[dim]{result.get('disclaimer', '')}[/dim]")
+        return
 
     # ── 近期活跃资金主体榜 ──
     if rank:
@@ -2136,7 +2197,14 @@ if __name__ == "__main__":
                       help="北向持股缺失时按需联网下载（Tushare hk_hold）")
     p_sm.add_argument("--rank", action="store_true",
                       help="列出近期活跃资金主体榜（活动名册，非买入清单）")
-    p_sm.add_argument("--top", type=int, default=20, help="--rank 展示条数（默认20）")
+    p_sm.add_argument("--recent-lhb", action="store_true",
+                      help="盘前扫描最近龙虎榜标的 + 席位历史画像（不用 target）")
+    p_sm.add_argument("--days", type=int, default=1,
+                      help="--recent-lhb 取最近 N 个龙虎榜披露日（默认1）")
+    p_sm.add_argument("--history-months", type=int, default=0,
+                      help="--recent-lhb 席位历史画像回溯月数（0=全部本地，默认0）")
+    p_sm.add_argument("--top", type=int, default=20,
+                      help="--rank 榜单条数 / --recent-lhb 每股席位数（默认20）")
     p_sm.add_argument("--json", dest="as_json", action="store_true", help="输出原始 JSON")
     p_sm.add_argument("--markdown", dest="as_markdown", action="store_true", help="输出 Markdown")
 
@@ -2301,7 +2369,9 @@ if __name__ == "__main__":
                         mode=args.mode, window_months=args.window,
                         horizons=args.horizons, fetch=args.fetch,
                         as_json=args.as_json, as_markdown=args.as_markdown,
-                        rank=args.rank, top_n=args.top)
+                        rank=args.rank, top_n=args.top,
+                        recent_lhb=args.recent_lhb, days=args.days,
+                        history_months=args.history_months)
     elif args.command == "init-hk":
         cmd_init_hk(start=args.start, end=args.end,
                     force=args.force, connect_only=args.connect_only)

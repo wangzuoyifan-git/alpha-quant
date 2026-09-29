@@ -404,6 +404,62 @@ class TestBuildProfile:
 
 
 # ══════════════════════════════════════════════════════════════
+# 盘前龙虎榜扫描
+# ══════════════════════════════════════════════════════════════
+
+class TestRecentLhb:
+    def _rows(self):
+        return pd.DataFrame({
+            "date": ["2026-08-01", "2026-08-01", "2026-08-15", "2026-08-20", "2026-08-20"],
+            "ts_code": ["000001.SZ", "000001.SZ", "000001.SZ", "000001.SZ", "000002.SZ"],
+            "exalter": ["机构专用", "华泰证券股份有限公司南京民智路证券营业部",
+                        "机构专用", "机构专用", "机构专用"],
+            "buy": [1e8, 2e7, 5e7, 4e7, 6e7],
+            "sell": [2e7, 3e7, 1e7, 1e7, 1e7],
+            "reason": ["涨幅", "换手", "涨停", "涨幅", "涨幅"],
+            "side": [0, 0, 0, 0, 0],
+        })
+
+    def test_days1(self, fake_store, monkeypatch):
+        monkeypatch.setattr(sma, "_sector_of", lambda c: "测试行业")
+        fake_store.top_inst = self._rows()
+        r = sma.scan_recent_lhb(days=1, history_months=0, top_n=5,
+                                prices=FakePrices())
+        assert r["available"] is True
+        assert r["dates"] == ["2026-08-20"]
+        assert r["target_count"] == 2
+        t = next(x for x in r["targets"] if x["code"] == "000001")
+        s = t["seats"][0]
+        assert s["agency"] == "机构专用"
+        assert s["this_net"] == pytest.approx(3e7)
+        # 本股历史其他上榜（排除当日）
+        assert [e["date"] for e in s["stock_history"]] == ["2026-08-01", "2026-08-15"]
+        # 跨股历史画像覆盖 4 次上榜（000001 三次 + 000002 一次）
+        assert s["history"]["appearance_count"]["total"] == 4
+        assert "d5" in s["history"]["win_rate"]
+
+    def test_days2(self, fake_store, monkeypatch):
+        monkeypatch.setattr(sma, "_sector_of", lambda c: "测试行业")
+        fake_store.top_inst = self._rows()
+        r = sma.scan_recent_lhb(days=2, top_n=5, prices=FakePrices())
+        assert r["dates"] == ["2026-08-15", "2026-08-20"]
+        assert r["target_count"] == 3
+
+    def test_empty(self, fake_store):
+        r = sma.scan_recent_lhb(days=1, prices=FakePrices())
+        assert r["available"] is False
+        assert r["notes"]
+
+    def test_markdown(self, fake_store, monkeypatch):
+        monkeypatch.setattr(sma, "_sector_of", lambda c: "测试行业")
+        fake_store.top_inst = self._rows()
+        r = sma.scan_recent_lhb(days=1, prices=FakePrices())
+        md = sma.recent_lhb_to_markdown(r)
+        assert "# 盘前龙虎榜标的与席位画像" in md
+        assert "平均持有(日)" in md
+
+
+# ══════════════════════════════════════════════════════════════
 # Tool 封装
 # ══════════════════════════════════════════════════════════════
 
@@ -428,6 +484,9 @@ class TestTools:
         r = tools.get_stock_smart_money("000001", mode="seat", window_months=3)
         assert r["success"] is True
         assert "markdown" in r
+        rt = tools.get_recent_lhb_smart_money(days=1)
+        assert rt["success"] is True
+        assert "markdown" in rt
 
     def test_tool_error_captured(self, monkeypatch):
         from agent_tools.smart_money_tools import get_seat_profile
