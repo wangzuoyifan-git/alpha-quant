@@ -7,6 +7,7 @@ test_capital_profiler.py — 资金画像（Phase 1 个股级）单元测试
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -99,6 +100,35 @@ class TestUndetermined:
         r = cp.profile("sector_etf", "512760")
         assert r["answer"]["status"] == "undetermined"
         assert "尚未实现" in r["answer"]["undetermined_reason"]
+
+
+class TestFeedback:
+    def _prices_and_flow(self):
+        idx = pd.date_range("2026-01-01", periods=30, freq="B")
+        closes, base = [], 10.0
+        for i in range(30):
+            base *= (1 + (0.01 if i % 2 == 0 else -0.01))
+            closes.append(base)
+        price = pd.DataFrame({"close": closes}, index=idx)
+        ret = pd.Series(closes, index=idx).pct_change()
+        flow = pd.Series(np.where(ret > 0, 1000.0, -1000.0), index=idx)
+        return price, flow
+
+    def test_prefers_lg_elg(self, monkeypatch):
+        price, flow = self._prices_and_flow()
+        mf = pd.DataFrame({
+            "buy_lg_amount": flow.clip(lower=0), "buy_elg_amount": 0.0,
+            "sell_lg_amount": (-flow).clip(lower=0), "sell_elg_amount": 0.0,
+            "net_mf_amount": -flow,  # 与主力口径相反：若误用 net_mf 会得到负相关
+        })
+        monkeypatch.setattr(cp.store_mf, "load", lambda *a, **k: mf)
+        assert cp._detect_feedback("000001", price) == "strong_positive"
+
+    def test_fallback_net_mf(self, monkeypatch):
+        price, flow = self._prices_and_flow()
+        mf = pd.DataFrame({"net_mf_amount": flow})  # 无 lg/elg 列
+        monkeypatch.setattr(cp.store_mf, "load", lambda *a, **k: mf)
+        assert cp._detect_feedback("000001", price) == "strong_positive"
 
 
 class TestRender:

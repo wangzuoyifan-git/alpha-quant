@@ -214,15 +214,30 @@ def _industrial(code6: str, start: str, end: str):
 # ═══════════════════════════════════════════════════════════════
 
 def _detect_feedback(code6: str, prices: pd.DataFrame) -> str:
-    """价格日收益 vs 资金流代理(moneyflow/stock net_mf_amount) 的相关性。"""
+    """
+    价格日收益 vs 主力资金净流入的相关性。
+
+    口径：优先用 moneyflow/stock 的「大单+超大单」净额（主力口径），字段缺失时回退 net_mf_amount。
+    注意：moneyflow/stock 按**单笔金额档位**分类，不区分席位/资金主体；
+    席位级方向由 dominant_capital（席位字典等）负责，此处仅作价量反馈的连续代理。
+    """
     start = prices.index.min().strftime("%Y-%m-%d")
     end = prices.index.max().strftime("%Y-%m-%d")
     mf = store_mf.load("stock", code=code6, start=start, end=end)
-    if mf is None or mf.empty or "net_mf_amount" not in mf.columns:
+    if mf is None or mf.empty:
+        return "unknown"
+    lg_cols = ["buy_lg_amount", "buy_elg_amount", "sell_lg_amount", "sell_elg_amount"]
+    if all(c in mf.columns for c in lg_cols):
+        flow = (pd.to_numeric(mf["buy_lg_amount"], errors="coerce")
+                + pd.to_numeric(mf["buy_elg_amount"], errors="coerce")
+                - pd.to_numeric(mf["sell_lg_amount"], errors="coerce")
+                - pd.to_numeric(mf["sell_elg_amount"], errors="coerce"))
+    elif "net_mf_amount" in mf.columns:
+        flow = pd.to_numeric(mf["net_mf_amount"], errors="coerce")
+    else:
         return "unknown"
     close = pd.to_numeric(prices["close"], errors="coerce")
     ret = close.pct_change()
-    flow = pd.to_numeric(mf["net_mf_amount"], errors="coerce")
     df = pd.concat([ret.rename("ret"), flow.rename("flow")], axis=1).dropna()
     if len(df) < 10 or df["ret"].std() == 0 or df["flow"].std() == 0:
         return "unknown"

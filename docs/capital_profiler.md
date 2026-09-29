@@ -86,8 +86,10 @@
 direction 取值：`buy` / `sell` / `mixed` / `stable`(有数据但低于阈值) / `absent`(窗口内无该信号) / `unknown`。
 
 ### 3.2 反馈性质 `feedback`
-用窗口内**价格日收益**与**资金流代理序列**（`moneyflow/stock: net_mf_amount`）的滚动相关判定：
+用窗口内**价格日收益**与**主力资金净流入**（`moneyflow/stock`：`(buy_lg+buy_elg)-(sell_lg+sell_elg)`，缺则回退 `net_mf_amount`）的相关判定：
 `corr>0.6`→强正反馈；`corr<-0.4`→强负反馈；`-0.4~0.2`→中性；其余→条件依赖。输出中文标签。
+
+> 说明：`moneyflow/stock` 按**单笔成交金额档位**分类，**不区分席位/资金主体**；席位级方向由 `dominant_capital`（席位字典等）负责，feedback 只做价量反馈的连续代理。
 
 ### 3.3 持续性 `persistence`
 按「对象 × 主导资金 × 反馈」查表（沿用参考文档 2.4 节），Phase 1 覆盖个股级：
