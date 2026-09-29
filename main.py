@@ -1260,7 +1260,8 @@ def cmd_seat_dict(action: str = "list", window: int = 6, min_appearances: int = 
 
 def cmd_capital_profiler(action: str = "profile", level: str = "stock",
                          code: str = None, date: str = None,
-                         lookback_days: int = 60, fmt: str = "text"):
+                         lookback_days: int = 60, fmt: str = "text",
+                         hidden_main: bool = False):
     """资金画像（Phase 1：个股级）"""
     from rich.console import Console
     from agents.capital_profiler import profile, format_text
@@ -1272,7 +1273,8 @@ def cmd_capital_profiler(action: str = "profile", level: str = "stock",
     if not code:
         console.print("[yellow]请提供 --code（6位股票代码）[/yellow]")
         return
-    report = profile(level=level, code=code, date=date, lookback_days=lookback_days)
+    report = profile(level=level, code=code, date=date, lookback_days=lookback_days,
+                     allow_hidden_main=hidden_main)
     if fmt == "json":
         import json
         console.print_json(json.dumps(report, ensure_ascii=False, default=str))
@@ -2344,6 +2346,8 @@ if __name__ == "__main__":
     p_cp.add_argument("--code", default=None, help="股票代码（如 688256）")
     p_cp.add_argument("--date", default=None, help="分析日期 YYYY-MM-DD（默认最新）")
     p_cp.add_argument("--lookback", type=int, default=60, help="回看交易日（默认60）")
+    p_cp.add_argument("--hidden-main", dest="hidden_main", action="store_true",
+                      help="未上榜股票允许给“隐性主力（日频）”弱结论（默认关闭，走无法判断 S3）")
     p_cp.add_argument("--format", dest="fmt", default="text", choices=["text", "json"],
                       help="输出格式（默认 text）")
 
@@ -2519,7 +2523,8 @@ if __name__ == "__main__":
                       soft_min_conf=args.soft_min_conf)
     elif args.command == "capital-profiler":
         cmd_capital_profiler(action=args.action, level=args.level, code=args.code,
-                             date=args.date, lookback_days=args.lookback, fmt=args.fmt)
+                             date=args.date, lookback_days=args.lookback, fmt=args.fmt,
+                             hidden_main=args.hidden_main)
     elif args.command == "init-hk":
         cmd_init_hk(start=args.start, end=args.end,
                     force=args.force, connect_only=args.connect_only)

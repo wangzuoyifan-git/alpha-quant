@@ -242,6 +242,8 @@ python3 main.py seat-dict list --label 量化/程序化席位 --top 30
 python3 main.py capital-profiler profile --code 600519
 python3 main.py capital-profiler profile --code 688256 --date 2026-09-01 --lookback 60
 python3 main.py capital-profiler profile --code 000002 --format json    # JSON 输出
+python3 main.py capital-profiler profile --code 000002 --hidden-main    # 未上榜也给“隐性主力”弱结论
+# 输出含：主导资金/反馈/持续性 + 席位×主力一致性(合力/对倒/隐性吸筹) + 日频主力背景
 # 数据不足时如实返回“无法判断”（S1停牌/S3信号缺席/S4矛盾/S5样本不足）并给建议
 # 设计见 docs/capital_profiler.md；板块/大题为 Phase 2/3
 ```

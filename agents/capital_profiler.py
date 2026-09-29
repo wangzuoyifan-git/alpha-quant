@@ -106,13 +106,15 @@ def _col_of(details: dict, cat: str):
 # 资金明细
 # ═══════════════════════════════════════════════════════════════
 
-def _capital_details(code6: str, start: str, end: str, prices: pd.DataFrame) -> dict:
+def _capital_details(code6: str, start: str, end: str, prices: pd.DataFrame,
+                     eps: pd.DataFrame | None = None) -> dict:
     details = {}
-    try:
-        eps = load_seat_episodes(start=start, end=end, code=code6)
-    except Exception as e:
-        logger.debug(f"top_inst 加载失败 {code6}: {e}")
-        eps = pd.DataFrame()
+    if eps is None:
+        try:
+            eps = load_seat_episodes(start=start, end=end, code=code6)
+        except Exception as e:
+            logger.debug(f"top_inst 加载失败 {code6}: {e}")
+            eps = pd.DataFrame()
 
     def mk(cat, net, thr, metric, conf=0.8, note=""):
         details[cat] = {"net_buy": net, "direction": _direction(net, thr),
@@ -213,19 +215,18 @@ def _industrial(code6: str, start: str, end: str):
 # 反馈性质
 # ═══════════════════════════════════════════════════════════════
 
-def _detect_feedback(code6: str, prices: pd.DataFrame) -> str:
+def _main_flow_series(code6: str, prices: pd.DataFrame):
     """
-    价格日收益 vs 主力资金净流入的相关性。
+    主力资金净流入日频序列（万元）。
 
-    口径：优先用 moneyflow/stock 的「大单+超大单」净额（主力口径），字段缺失时回退 net_mf_amount。
-    注意：moneyflow/stock 按**单笔金额档位**分类，不区分席位/资金主体；
-    席位级方向由 dominant_capital（席位字典等）负责，此处仅作价量反馈的连续代理。
+    口径：优先「大单+超大单」净额 `(buy_lg+buy_elg)-(sell_lg+sell_elg)`，缺列回退 `net_mf_amount`。
+    注意：moneyflow/stock 按**单笔金额档位**分类，不区分席位/资金主体。
     """
     start = prices.index.min().strftime("%Y-%m-%d")
     end = prices.index.max().strftime("%Y-%m-%d")
     mf = store_mf.load("stock", code=code6, start=start, end=end)
     if mf is None or mf.empty:
-        return "unknown"
+        return None
     lg_cols = ["buy_lg_amount", "buy_elg_amount", "sell_lg_amount", "sell_elg_amount"]
     if all(c in mf.columns for c in lg_cols):
         flow = (pd.to_numeric(mf["buy_lg_amount"], errors="coerce")
@@ -235,6 +236,15 @@ def _detect_feedback(code6: str, prices: pd.DataFrame) -> str:
     elif "net_mf_amount" in mf.columns:
         flow = pd.to_numeric(mf["net_mf_amount"], errors="coerce")
     else:
+        return None
+    flow = pd.to_numeric(flow, errors="coerce").dropna()
+    return flow if not flow.empty else None
+
+
+def _detect_feedback(code6: str, prices: pd.DataFrame) -> str:
+    """价格日收益 vs 主力资金净流入（连续日频代理，不区分席位）的相关性。"""
+    flow = _main_flow_series(code6, prices)
+    if flow is None:
         return "unknown"
     close = pd.to_numeric(prices["close"], errors="coerce")
     ret = close.pct_change()
@@ -249,6 +259,84 @@ def _detect_feedback(code6: str, prices: pd.DataFrame) -> str:
     if -0.4 <= corr <= 0.2:
         return "neutral"
     return "conditional"
+
+
+def _main_flow_daily(flow) -> dict:
+    """近窗口主力净流入汇总与连续性（背景）。flow 为 _main_flow_series 的返回。"""
+    if flow is None or flow.empty:
+        return {"available": False}
+    total = float(flow.sum())
+    streak, sign = 0, 0
+    for v in reversed(flow.tolist()):
+        sg = 1 if v > 0 else -1 if v < 0 else 0
+        if sg == 0:
+            break
+        if sign == 0:
+            sign = sg
+        if sg == sign:
+            streak += 1
+        else:
+            break
+    return {"available": True, "sum_net_wan": round(total, 1),
+            "days": len(flow), "streak_days": streak,
+            "streak_dir": ("inflow" if sign > 0 else "outflow" if sign < 0 else "flat")}
+
+
+def _seat_combined_net(details: dict):
+    """席位类四类合计净额（游资+量化+机构+陆股通），无数据返回 None。"""
+    cats = ("hot_money", "quant", "institutional", "northbound")
+    vals = [details[c]["net_buy"] for c in cats
+            if details.get(c, {}).get("net_buy") is not None]
+    return sum(vals) if vals else None
+
+
+def _cross_seat_main(details: dict, main_flow: dict) -> dict | None:
+    """席位视图 × 主力视图 一致性四象限（窗口聚合）。"""
+    seat_net = _seat_combined_net(details)
+    if seat_net is None or not main_flow.get("available"):
+        return None
+    seat_dir = "buy" if seat_net > 0 else "sell" if seat_net < 0 else "flat"
+    msum = main_flow.get("sum_net_wan") or 0.0
+    main_dir = "inflow" if msum > 0 else "outflow" if msum < 0 else "flat"
+    if seat_dir == "buy" and main_dir == "inflow":
+        verdict = "合力向上"
+    elif seat_dir == "sell" and main_dir == "outflow":
+        verdict = "合力向下"
+    elif seat_dir == "buy" and main_dir == "outflow":
+        verdict = "对倒/诱多（席位买·主力流出）"
+    elif seat_dir == "sell" and main_dir == "inflow":
+        verdict = "隐性吸筹（席位卖·主力流入）"
+    else:
+        verdict = "中性"
+    return {"seat_direction": seat_dir, "seat_net": round(seat_net, 1),
+            "main_direction": main_dir, "main_sum_wan": round(msum, 1),
+            "verdict": verdict}
+
+
+def _pre_post_main(episodes: pd.DataFrame, prices: pd.DataFrame, flow: pd.Series,
+                   pre: int = 5, post: int = 5) -> list:
+    """上榜前后主力变化：上榜前净流入=提前吸筹；上榜后净流出=拉高出货风险。
+
+    flow: 已按 prices.index 对齐的主力净流入序列（万元）。
+    """
+    if episodes is None or episodes.empty or flow is None or flow.empty:
+        return []
+    idx = prices.index
+    signals = []
+    for t in sorted(set(episodes["date"])):
+        pos = int(idx.searchsorted(pd.Timestamp(t)))
+        if pos >= len(idx):
+            continue
+        seat_net_t = float(episodes[episodes["date"] == t]["net"].sum())
+        pre_sum = float(flow.iloc[max(0, pos - pre):pos].sum())
+        post_sum = float(flow.iloc[pos + 1:pos + 1 + post].sum())
+        if seat_net_t > 0 and pre_sum > 0:
+            signals.append({"signal": f"上榜前{pre}日主力已净流入", "verdict": "提前吸筹后上榜",
+                            "date": t})
+        if seat_net_t > 0 and post_sum < 0:
+            signals.append({"signal": f"上榜后{post}日主力转为净流出", "verdict": "拉高出货风险",
+                            "date": t})
+    return signals
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -336,7 +424,8 @@ def _undetermined(code6, name, date, lookback, scenario, partial=None):
 
 
 def profile(level: str = "stock", code: str | None = None, date: str | None = None,
-            lookback_days: int = LOOKBACK_DEFAULT) -> dict:
+            lookback_days: int = LOOKBACK_DEFAULT,
+            allow_hidden_main: bool = False) -> dict:
     code6 = _norm_code6(code or "")
     name = _stock_name(code6) if code6 else ""
     if level != "stock":
@@ -358,9 +447,19 @@ def profile(level: str = "stock", code: str | None = None, date: str | None = No
     start = eff.index.min().strftime("%Y-%m-%d")
     end = eff.index.max().strftime("%Y-%m-%d")
 
-    details = _capital_details(code6, start, end, eff)
+    try:
+        eps = load_seat_episodes(start=start, end=end, code=code6)
+    except Exception:
+        eps = pd.DataFrame()
+    details = _capital_details(code6, start, end, eff, eps=eps)
     feedback = _detect_feedback(code6, eff)
     dom_cat, dom_dir = _dominant(details)
+
+    # 日频主力视图（B）与席位视图（A）交叉
+    flow = _main_flow_series(code6, eff)
+    main_flow = _main_flow_daily(flow)
+    seat_vs_main = _cross_seat_main(details, main_flow)
+    pre_post = _pre_post_main(eps, eff, flow.reindex(eff.index) if flow is not None else None)
 
     available = sum(1 for c in _CAT_NAME if (details.get(c, {}).get("net_buy") is not None))
     active = [c for c in _CAT_NAME if details.get(c, {}).get("direction") in ("buy", "sell")]
@@ -370,21 +469,45 @@ def profile(level: str = "stock", code: str | None = None, date: str | None = No
     partial = {c: (details.get(c, {}) or {}).get("note") or
                f"{_CAT_NAME[c]} {details.get(c, {}).get('direction')}" for c in _CAT_NAME}
 
-    # 无法判断：信号全缺席 / 矛盾
+    # 无席位/无超阈信号：默认 S3；allow_hidden_main 时给“隐性主力（日频）”弱结论
     if not active:
-        return _undetermined(code6, name, date or "", lookback_days, "S3", partial)
+        if allow_hidden_main and _strong_main_flow(main_flow):
+            return _hidden_main_report(code6, name, end, lookback_days, main_flow,
+                                       seat_vs_main, feedback, details, eps)
+        r = _undetermined(code6, name, date or "", lookback_days, "S3", partial)
+        r["main_flow_daily"] = main_flow
+        return r
     if buys and sells:
         r = _undetermined(code6, name, date or "", lookback_days, "S4", partial)
         r["capital_details"] = details
+        r["main_flow_daily"] = main_flow
+        r["seat_vs_main"] = seat_vs_main
         r["data_quality"]["completeness"] = round(available / len(_CAT_NAME), 2)
         return r
     if dom_cat is None:
-        return _undetermined(code6, name, date or "", lookback_days, "S3", partial)
+        r = _undetermined(code6, name, date or "", lookback_days, "S3", partial)
+        r["main_flow_daily"] = main_flow
+        return r
 
     score, grade = _structure_score(details)
     dom_name = f"{_CAT_NAME[dom_cat]}（{'净买入' if dom_dir == 'buy' else '净卖出'}）"
-    key_signals = _key_signals(details, score)
-    warnings = _warnings(details)
+    key_signals, warnings = _key_signals(details, score), _warnings(details)
+    if seat_vs_main:
+        v = seat_vs_main["verdict"]
+        if v == "合力向上":
+            key_signals.append({"signal": f"席位×主力一致：{v}", "severity": "medium",
+                                "implication": "上榜买入与主力净流入同向，置信度提升"})
+        elif v == "对倒/诱多（席位买·主力流出）":
+            warnings.append("席位买入但主力整体净流出（对倒/诱多风险）")
+            key_signals.append({"signal": f"席位×主力背离：{v}", "severity": "high",
+                                "implication": "上榜买但大钱在走，警惕拉高出货"})
+        elif v == "隐性吸筹（席位卖·主力流入）":
+            key_signals.append({"signal": f"席位×主力背离：{v}", "severity": "medium",
+                                "implication": "上榜卖但主力净流入，可能换手/承接"})
+    for s in pre_post:
+        key_signals.append({"signal": f"{s['verdict']}（{s['date']}）：{s['signal']}",
+                            "severity": "medium",
+                            "implication": "上榜前后主力方向变化，参考持续性"})
 
     return {
         "meta": {"level": "stock", "code": code6, "name": name, "date": end,
@@ -401,10 +524,48 @@ def profile(level: str = "stock", code: str | None = None, date: str | None = No
         "structure_score": score,
         "structure_grade": grade,
         "capital_details": details,
+        "main_flow_daily": main_flow,
+        "seat_vs_main": seat_vs_main,
+        "seat_main_signals": pre_post,
         "key_signals": key_signals,
         "warnings": warnings,
         "data_quality": {"completeness": round(available / len(_CAT_NAME), 2),
                          "accuracy": 0.98, "timeliness": "normal"},
+        "disclaimer": DISCLAIMER,
+    }
+
+
+def _strong_main_flow(main_flow: dict) -> bool:
+    return bool(main_flow.get("available") and abs(main_flow.get("sum_net_wan") or 0) > 0
+                and (main_flow.get("streak_days") or 0) >= 3)
+
+
+def _hidden_main_report(code6, name, end, lookback, main_flow, seat_vs_main,
+                        feedback, details, eps) -> dict:
+    """无席位数据时，仅凭日频主力给的弱结论（默认关闭，--hidden-main 开启）。"""
+    direction = "净流入" if (main_flow.get("sum_net_wan") or 0) > 0 else "净流出"
+    return {
+        "meta": {"level": "stock", "code": code6, "name": name, "date": end,
+                 "lookback_days": lookback},
+        "answer": {
+            "status": "resolved",
+            "dominant_capital": f"隐性主力（日频，弱推断，{direction}）",
+            "feedback": _FEEDBACK_CN.get(feedback, "未知"),
+            "persistence": "弱（1-3日）",
+            "undetermined_reason": None,
+            "suggestions": None,
+            "partial_findings": None,
+            "weak": True,
+        },
+        "structure_score": None, "structure_grade": None,
+        "capital_details": details,
+        "main_flow_daily": main_flow,
+        "seat_vs_main": seat_vs_main,
+        "key_signals": [{"signal": f"无龙虎榜席位数据；主力日频{direction}，连续"
+                                   f"{main_flow.get('streak_days')}日", "severity": "low",
+                         "implication": "未上榜，仅日频主力背景，弱结论"}],
+        "warnings": ["无龙虎榜席位数据，主导资金为日频弱推断"],
+        "data_quality": {"completeness": 0.2, "accuracy": 0.9, "timeliness": "normal"},
         "disclaimer": DISCLAIMER,
     }
 
@@ -456,6 +617,18 @@ def format_text(report: dict) -> str:
     lines.append("【资金明细】")
     for cat, d in (report.get("capital_details") or {}).items():
         lines.append(f"  {_CAT_NAME.get(cat, cat):<8} {d.get('direction'):<7} {d.get('note') or ''}")
+    mf = report.get("main_flow_daily") or {}
+    if mf.get("available"):
+        lines.append("")
+        lines.append("【日频主力（背景）】")
+        lines.append(f"  窗口主力净流入合计：{mf.get('sum_net_wan'):+.0f} 万元；"
+                     f"连续{mf.get('streak_days')}日{mf.get('streak_dir')}")
+    svm = report.get("seat_vs_main")
+    if svm:
+        lines.append(f"  席位×主力一致性：{svm.get('verdict')}"
+                     f"（席位{svm.get('seat_direction')} / 主力{svm.get('main_direction')}）")
+    for s in report.get("seat_main_signals") or []:
+        lines.append(f"  · {s.get('verdict')}（{s.get('date')}）：{s.get('signal')}")
     if report.get("warnings"):
         lines.append("")
         lines.append("【风险提示】")

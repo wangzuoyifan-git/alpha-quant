@@ -131,6 +131,35 @@ class TestFeedback:
         assert cp._detect_feedback("000001", price) == "strong_positive"
 
 
+class TestMainFlowCross:
+    def test_main_flow_daily_streak(self):
+        idx = pd.date_range("2026-01-01", periods=5, freq="B")
+        d = cp._main_flow_daily(pd.Series([1, 2, 3, 4, 5.0], index=idx))
+        assert d["available"] and d["streak_days"] == 5 and d["streak_dir"] == "inflow"
+        d2 = cp._main_flow_daily(pd.Series([1, -1, 2, 3, 4.0], index=idx))
+        assert d2["streak_days"] == 3 and d2["streak_dir"] == "inflow"
+
+    def test_cross_verdicts(self):
+        details = {"hot_money": {"net_buy": 1e8}, "quant": {"net_buy": None},
+                   "institutional": {"net_buy": None}, "northbound": {"net_buy": None}}
+        assert cp._cross_seat_main(details, {"available": True, "sum_net_wan": 5000})["verdict"] == "合力向上"
+        v = cp._cross_seat_main(details, {"available": True, "sum_net_wan": -5000})["verdict"]
+        assert "对倒" in v
+        assert cp._cross_seat_main({"hot_money": {"net_buy": None}},
+                                   {"available": True, "sum_net_wan": 1}) is None
+
+    def test_hidden_main_toggle(self, monkeypatch):
+        flow = pd.Series([1e6] * 60, index=pd.date_range("2026-06-01", periods=60, freq="B"))
+        monkeypatch.setattr(cp, "_main_flow_series", lambda code, p: flow.reindex(p.index))
+        _patch(monkeypatch, eps=pd.DataFrame(), margin_rate=0.0)
+        r1 = cp.profile("stock", "000001", allow_hidden_main=False)
+        assert r1["answer"]["status"] == "undetermined"
+        r2 = cp.profile("stock", "000001", allow_hidden_main=True)
+        assert r2["answer"]["status"] == "resolved"
+        assert "隐性主力" in r2["answer"]["dominant_capital"]
+        assert "日频主力" in cp.format_text(r2)
+
+
 class TestRender:
     def test_text(self, monkeypatch):
         eps = _episodes([("游资甲营业部", 2e8)])

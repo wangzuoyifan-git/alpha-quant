@@ -433,9 +433,11 @@ graph.add_conditional_edges("check_data", route_after_check, {...})
 
 - `profile(level="stock", code, date, lookback_days=60) -> dict`：输出 `meta / answer(dominant_capital,feedback,persistence,status) / structure_score / capital_details / key_signals / warnings / data_quality`
 - 六类资金代理（Phase 1）：`hot_money`（游资席位净买入）/ `quant`（量化席位）/ `institutional`（机构专用）/ `northbound`（陆股通席位，季度持股兜底）/ `margin`（融资余额变动率）/ `industrial_capital`（回购/增持 E2）
-- 反馈性质：价格日收益 vs `moneyflow/stock.net_mf_amount` 相关性
+- 反馈性质：价格日收益 vs 主力净流入（`moneyflow/stock` 大单+超大单净额）
+- **席位×主力一致性**：`main_flow_daily`（日频主力背景）+ `seat_vs_main`（四象限：合力向上/合力向下/对倒诱多/隐性吸筹）+ `seat_main_signals`（上榜前=提前吸筹 / 上榜后=拉高出货风险）
 - 无法判断：S1 停牌 / S2 数据缺失 / S3 信号全缺席 / S4 方向矛盾 / S5 样本不足 / S6 历史不足，均给出原因+建议+部分发现
-- CLI：`python main.py capital-profiler profile --code ... [--date --lookback --format]`
+- 未上榜：默认走 S3；`--hidden-main` 开启时，主力连续同向（≥3日）给“隐性主力（日频，弱推断）”
+- CLI：`python main.py capital-profiler profile --code ... [--date --lookback --hidden-main --format]`
 - 依赖：席位字典（`seat_profiler`）为主数据源之一；`level=sector_etf/sector_macro` 为 Phase 2/3 占位
 
 > 边界：Phase 1 仅个股级；不做板块/大类、不做 IC/IR 评估（Phase 3）。
