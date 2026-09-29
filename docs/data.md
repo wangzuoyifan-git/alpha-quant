@@ -87,6 +87,14 @@ data/events/
 
 data/etf_config.json     ← ETF 元数据与政策配置（手工维护，可进 git）
                             名称/跟踪指数/sw_l2_codes映射/政策展望/标签，供 etf_agent 三维评分
+
+data/smart_money/        ← 资金主体/席位字典（生成物多已 gitignore）
+  seat_aliases.json        席位别名字典（手工维护，可进 git）
+  seat_labels.json         席位硬标签（由 xlsx 导入，gitignore，可重建）
+  seat_dictionary.json     席位字典主表（硬标签+软标签，gitignore，可重建）
+  seat_dictionary.csv      席位字典 CSV（gitignore）
+  seat_dictionary_report.md 构建报告（gitignore）
+  seats.json               席位累计画像档案（gitignore）
 ```
 
 **行业资金流双体系说明：**

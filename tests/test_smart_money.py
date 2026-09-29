@@ -16,6 +16,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import agents.smart_money_agent as sma
 import data.store_moneyflow as store_mf
 
+
+@pytest.fixture(autouse=True)
+def _disable_seat_dictionary(monkeypatch):
+    """隔离已构建的席位字典，避免 classify_seat 规则单测被真实字典影响。"""
+    monkeypatch.setattr(sma, "_dict_lookup", lambda agency: None)
+
 # ══════════════════════════════════════════════════════════════
 # 测试替身
 # ══════════════════════════════════════════════════════════════

@@ -1174,6 +1174,74 @@ def cmd_smart_money(target: str = None, target_type: str = "auto", mode: str = "
     console.print(f"[dim]{report['disclaimer']}[/dim]")
 
 
+def cmd_seat_dict(action: str = "list", window: int = 6, min_appearances: int = 10,
+                  k: int = 3, t1_days: int = 2, label: str = None, top: int = 30,
+                  xlsx_path: str = None):
+    """席位字典（游资/量化识别）：build 构建 / list 查询"""
+    from rich.console import Console
+    from rich.table import Table
+    from rich.panel import Panel
+    from agents.seat_profiler import (
+        build_seat_dictionary, dictionary_to_rows, import_seat_labels_xlsx)
+
+    console = Console()
+
+    if action == "import":
+        res = import_seat_labels_xlsx(xlsx_path=xlsx_path)
+        labels = res.get("labels", [])
+        from collections import Counter
+        cnt = Counter(x["label"] for x in labels)
+        console.print(f"[green]已导入硬标签 {len(labels)} 条[/green] → data/smart_money/seat_labels.json")
+        console.print("  " + "，".join(f"{k}:{v}" for k, v in cnt.most_common()))
+        console.print("[dim]下一步: python main.py seat-dict build[/dim]")
+        return
+
+    if action == "build":
+        console.print(f"[dim]构建席位字典（窗口 {window} 月，最小上榜 {min_appearances}，"
+                      f"k={k}，T+1阈值 {t1_days} 交易日）...[/dim]")
+        res = build_seat_dictionary(window_months=window, min_appearances=min_appearances,
+                                    k=k, t1_days=t1_days)
+        seats = res.get("seats", [])
+        console.print(Panel(
+            f"[bold cyan]席位字典构建完成[/bold cyan]\n"
+            f"窗口: [yellow]{res['window']['start']}~{res['window']['end']}[/yellow]  "
+            f"入库席位: [yellow]{len(seats)}[/yellow]  "
+            f"硬标签: [yellow]{res.get('hard_label_count', 0)}[/yellow]\n"
+            f"输出: seat_dictionary.json / .csv / _report.md",
+            expand=False))
+        by = {}
+        for s in seats:
+            by.setdefault(s["label"], []).append(s)
+        t = Table(title="各标签数量与代表席位", border_style="magenta")
+        for c in ("标签", "数量", "代表席位(置信度)", "簇画像均值"):
+            t.add_column(c)
+        for lb, group in sorted(by.items(), key=lambda kv: -len(kv[1])):
+            group = sorted(group, key=lambda s: -s["confidence"])[:3]
+            reps = "；".join(f"{s['agency'][:16]}({s['confidence']})" for s in group)
+            t.add_row(lb, str(len(by[lb])), reps, "")
+        console.print(t)
+        return
+
+    rows = dictionary_to_rows()
+    if not rows:
+        console.print("[yellow]无席位字典，请先运行: python main.py seat-dict build[/yellow]")
+        return
+    if label:
+        rows = [s for s in rows if label in s["label"]]
+    rows = sorted(rows, key=lambda s: (-s["confidence"], -s["freq"]))[:top]
+    t = Table(title=f"席位字典（{label or '全部'}，展示 {len(rows)} 条）", border_style="magenta")
+    for c in ("席位", "标签", "依据", "置信度", "freq", "dispersion",
+              "同席率", "T+1兑现", "次日跟投胜率(1/3/5/10)"):
+        t.add_column(c)
+    for s in rows:
+        wr = "/".join(str(s.get(f"win_d{h}")) for h in (1, 3, 5, 10))
+        t.add_row(s["agency"][:22], s["label"], s["label_basis"], str(s["confidence"]),
+                  str(s["freq"]), str(s["dispersion"]), str(s["same_seat_rate"]),
+                  str(s["t1_exit_rate"]), wr)
+    console.print(t)
+    console.print("[dim]标签来自数据源硬标签或行为聚类软标签，非官方认定；建议每季度重估[/dim]")
+
+
 def cmd_update_all():
     """更新所有数据域（A股/港股 K线、meta、fundamental、factor、macro、moneyflow、events、估值）"""
     logger.info("开始全域增量更新...")
@@ -2208,6 +2276,22 @@ if __name__ == "__main__":
     p_sm.add_argument("--json", dest="as_json", action="store_true", help="输出原始 JSON")
     p_sm.add_argument("--markdown", dest="as_markdown", action="store_true", help="输出 Markdown")
 
+    # seat-dict（游资/量化席位字典）
+    p_sd = sub.add_parser("seat-dict", help="席位字典（游资/量化识别）：build 构建 / list 查询")
+    p_sd.add_argument("action", nargs="?", default="list",
+                      choices=["build", "list", "import"],
+                      help="build=构建字典，list=查询，import=从 xlsx 导入硬标签")
+    p_sd.add_argument("--window", type=int, default=6, help="build 回溯月数（默认6）")
+    p_sd.add_argument("--min-appearances", type=int, default=10,
+                      help="build 参与聚类的最小上榜次数（默认10）")
+    p_sd.add_argument("--k", type=int, default=3, help="build 聚类簇数（默认3）")
+    p_sd.add_argument("--t1-days", type=int, default=2,
+                      help="build T+1 兑现的交易日间隔阈值（默认2）")
+    p_sd.add_argument("--label", default=None, help="list 过滤标签（如 知名游资营业部）")
+    p_sd.add_argument("--top", type=int, default=30, help="list 展示条数（默认30）")
+    p_sd.add_argument("--xlsx", dest="xlsx_path", default=None,
+                      help="import 外部字典 xlsx 路径（默认 reference/A股龙虎榜席位资金画像字典.xlsx）")
+
     # init-hk（港股）
     p_init_hk = sub.add_parser("init-hk", help="首次全量下载港股 K 线（默认仅港股通标的）")
     p_init_hk.add_argument("--start", default="2020-01-02", help="起始日期（默认2020-01-02）")
@@ -2372,6 +2456,11 @@ if __name__ == "__main__":
                         rank=args.rank, top_n=args.top,
                         recent_lhb=args.recent_lhb, days=args.days,
                         history_months=args.history_months)
+    elif args.command == "seat-dict":
+        cmd_seat_dict(action=args.action, window=args.window,
+                      min_appearances=args.min_appearances, k=args.k,
+                      t1_days=args.t1_days, label=args.label, top=args.top,
+                      xlsx_path=args.xlsx_path)
     elif args.command == "init-hk":
         cmd_init_hk(start=args.start, end=args.end,
                     force=args.force, connect_only=args.connect_only)

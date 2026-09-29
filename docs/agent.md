@@ -404,6 +404,26 @@ graph.add_conditional_edges("check_data", route_after_check, {...})
 
 > 边界：不产出可回测因子（IC/RankIC/分组回测）、不做过热/拥挤风险评级、不做单日全市场复盘。
 
+### 4.8 Seat Profiler（agents/seat_profiler.py）✅ 已实现（规则版，2026-09 新增）
+
+职责：席位的**游资/量化识别**，产出带置信度、生效时间、衰减半衰期的席位字典，供 `smart_money_agent.classify_seat` 消费。三层设计：
+
+1. **硬标签**：`seat-dict import` 读取外部字典 xlsx → `data/smart_money/seat_labels.json`。
+   - 口径：以“资金类型”为准（游资/量化/疑似量化/散户集群），数据侧“游资别名”仅作 tag；低频/样本不足/聚合通道不导入；以营业部名称为键、席位ID 仅存档。
+2. **软标签**：对未标注席位做无监督聚类（scipy `kmeans2`，无需 sklearn）。四特征：
+   - `freq` 上榜频次、`dispersion` 分散度（股票数/次数）、`same_seat_rate` 买卖同席率、`t1_exit_rate` T+1 兑现率（净买入后紧邻下次上榜为净卖出且间隔≤K 交易日）。
+   - 命名：有硬标签则按簇内硬标签纯度（≥50%）锚定“游资/量化”，否则按行为签名启发式。
+3. **回测闭环**：次日跟投胜率（上榜后 1/3/5/10 交易日），作为校准/衰减度量写入字典。
+
+- `build_seat_dictionary(window_months, min_appearances, k, t1_days, follow_horizons, ...)`：构建并落盘 json/csv/md
+- `import_seat_labels_xlsx(xlsx_path)`：外部字典导入
+- `compute_seat_features` / `cluster_seats` / `load_hard_labels`
+- 产出字段：`label / label_basis / confidence / effective_date / half_life_days / tags / 四特征 / win_dN / seat_id / evidence`
+- CLI：`python main.py seat-dict import|build|list`；每周脚本自动重估
+
+> 口径声明：软标签为聚类推断，非官方认定；字典会衰减（`half_life_days=90`），建议每季度重估。
+> 决策记录见 `docs/capital_profiler_decisions.md`。
+
 ---
 
 ## 五、LLM 接入

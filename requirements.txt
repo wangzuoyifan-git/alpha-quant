@@ -10,6 +10,7 @@ tushare>=1.2.89          # 可选数据源（需 Token）
 pandas>=2.0.0
 numpy>=1.24.0
 scipy>=1.10.0
+openpyxl>=3.1.0          # 席位字典 xlsx 导入（reference/A股龙虎榜席位资金画像字典.xlsx）
 
 # ---- 可视化（回测图表）----
 matplotlib>=3.7.0

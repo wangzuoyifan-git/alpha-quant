@@ -217,6 +217,21 @@ python3 main.py smart-money --recent-lhb --days 1 --json       # 输出原始 JS
 # 注：--history-months 控制席位历史画像回溯窗口，0=全部本地 top_inst（默认0，数据多时略慢）
 ```
 
+### 席位字典（游资/量化识别）
+
+```bash
+# 从外部字典 xlsx 导入硬标签（默认 reference/A股龙虎榜席位资金画像字典.xlsx）
+python3 main.py seat-dict import
+# 构建/重估席位字典（硬标签锚定 + 行为聚类软标签；约 15-40s）
+python3 main.py seat-dict build --window 6 --min-appearances 10
+python3 main.py seat-dict build --window 3 --k 3 --t1-days 2     # 自定义窗口/簇数/T+1阈值
+# 查询
+python3 main.py seat-dict list --label 知名游资营业部 --top 30
+python3 main.py seat-dict list --label 量化/程序化席位 --top 30
+# 产出：data/smart_money/seat_dictionary.json/.csv/_report.md（已 gitignore，可重建）
+# 每周脚本 update_weekly.sh 已自动执行 import + build（字典会衰减，定期重估）
+```
+
 ### 交易辅助
 
 ```bash

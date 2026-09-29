@@ -42,6 +42,7 @@ DEFAULT_WINDOW_MONTHS = 12
 _BASE_DIR = Path(__file__).resolve().parent.parent / "data" / "smart_money"
 ARCHIVE_PATH = _BASE_DIR / "seats.json"
 SEAT_ALIAS_PATH = _BASE_DIR / "seat_aliases.json"
+SEAT_DICT_PATH = _BASE_DIR / "seat_dictionary.json"
 
 DISCLAIMER = "本报告基于公开数据与规则化分析生成，仅供研究参考，不构成任何投资建议。"
 
@@ -101,8 +102,41 @@ def _safe_float(v):
 
 
 # ═══════════════════════════════════════════════════════════════
-# ① 席位身份识别（规则匹配）
+# ① 席位身份识别（规则匹配 + 席位字典）
 # ═══════════════════════════════════════════════════════════════
+
+_seat_dict_cache = None
+
+
+def load_seat_dictionary() -> dict:
+    """读取席位字典 data/smart_money/seat_dictionary.json，返回 {agency: record}。"""
+    global _seat_dict_cache
+    if _seat_dict_cache is not None:
+        return _seat_dict_cache
+    if not SEAT_DICT_PATH.exists():
+        _seat_dict_cache = {}
+        return _seat_dict_cache
+    try:
+        raw = json.loads(SEAT_DICT_PATH.read_text(encoding="utf-8"))
+        _seat_dict_cache = {s.get("agency"): s for s in raw.get("seats", []) if s.get("agency")}
+    except Exception as e:
+        logger.warning(f"seat_dictionary.json 读取失败: {e}")
+        _seat_dict_cache = {}
+    return _seat_dict_cache
+
+
+def _dict_lookup(agency: str) -> dict | None:
+    d = load_seat_dictionary()
+    if not d or not agency:
+        return None
+    rec = d.get(agency)
+    if rec is not None:
+        return rec
+    for name, r in d.items():
+        if name and (name in agency or agency in name):
+            return r
+    return None
+
 
 _alias_cache = None
 
@@ -143,6 +177,16 @@ def classify_seat(agency: str) -> dict:
         return {"label": "个人投资者(汇总)", "label_basis": "规则匹配", "tags": []}
     if a in ("沪股通", "深股通") or "股通投资者" in a:
         return {"label": LABEL_NORTH, "label_basis": "规则匹配", "tags": []}
+    # 席位字典（硬标签优先，其次聚类软标签）—— 由 agents/seat_profiler.py 产出
+    rec = _dict_lookup(a)
+    if rec and rec.get("label"):
+        tags = [f"置信度{rec.get('confidence')}"] if rec.get("confidence") is not None else []
+        tags += list(rec.get("tags") or [])
+        return {
+            "label": rec["label"],
+            "label_basis": rec.get("label_basis", "字典(软标签)"),
+            "tags": tags,
+        }
     for rule in _alias_rules():
         m = str(rule.get("match", ""))
         if m and m in a:

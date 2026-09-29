@@ -10,6 +10,8 @@
 # 说明：
 #   - 单步失败不中断后续步骤，末尾汇总；有失败时退出码为 1
 #   - events 域已在每日脚本中更新；港股财务/A股 PCF 数据量大，放周更
+#   - 席位字典（游资/量化）会衰减，每周重建一次：先导入硬标签 xlsx（若有更新），
+#     再基于最新 top_inst 行为聚类重估
 # =============================================================
 
 set -uo pipefail
@@ -51,22 +53,28 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] 每周更新开始"
 echo "========================================"
 
 # 1. meta 域（行业分类 + 申万指数 + 交易日历）
-run_step "[1/4] 更新 meta 域" "${PYTHON}" -c "
+run_step "[1/6] 更新 meta 域" "${PYTHON}" -c "
 from data.downloader_meta import MetaDownloader
 MetaDownloader().update_db()
 "
 
 # 2. macro 域（月频数据 + 汇率/境外日频兜底）
-run_step "[2/4] 更新 macro 域" "${PYTHON}" -c "
+run_step "[2/6] 更新 macro 域" "${PYTHON}" -c "
 from data.downloader_macro import MacroDownloader
 MacroDownloader().update_db()
 "
 
 # 3. 港股财务（三大报表 + 成长/杜邦指标，逐只拉取；约 1 小时）
-run_step "[3/4] 更新港股财务" "${PYTHON}" main.py update-hk-financials
+run_step "[3/6] 更新港股财务" "${PYTHON}" main.py update-hk-financials
 
 # 4. A 股 PCF 补充（百度市现率，全市场约 1-1.5 小时）
-run_step "[4/4] 补充 A 股 PCF" "${PYTHON}" main.py update-cn-pcf
+run_step "[4/6] 补充 A 股 PCF" "${PYTHON}" main.py update-cn-pcf
+
+# 5. 席位字典硬标签导入（外部 xlsx；文件缺失则跳过，不阻断）
+run_step "[5/6] 导入席位字典硬标签（xlsx）" "${PYTHON}" main.py seat-dict import
+
+# 6. 席位字典重建（硬标签 + 行为聚类软标签；游资/量化识别，约 15-40s）
+run_step "[6/6] 重建席位字典（游资/量化）" "${PYTHON}" main.py seat-dict build --window 6 --min-appearances 10
 
 echo ""
 echo "========================================"
