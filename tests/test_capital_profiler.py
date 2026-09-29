@@ -9,6 +9,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -129,6 +130,26 @@ class TestFeedback:
         mf = pd.DataFrame({"net_mf_amount": flow})  # 无 lg/elg 列
         monkeypatch.setattr(cp.store_mf, "load", lambda *a, **k: mf)
         assert cp._detect_feedback("000001", price) == "strong_positive"
+
+
+class TestIndustrial:
+    def test_buyback_and_increase(self, monkeypatch):
+        import data.store_events as se
+        monkeypatch.setattr(se, "load_corp_events", lambda code: [
+            {"event_type": "buyback", "date": "2026-09-01",
+             "detail": {"amount": 2e8}},
+            {"event_type": "increase", "date": "2026-09-02",
+             "detail": {"change_vol": 1e6, "avg_price": 50.0}},
+        ])
+        amount, inc, red = cp._industrial("000001", "2026-08-01", "2026-09-30")
+        assert inc and not red and amount == pytest.approx(2e8 + 5e7)
+
+    def test_reduce_only(self, monkeypatch):
+        import data.store_events as se
+        monkeypatch.setattr(se, "load_corp_events", lambda code: [
+            {"event_type": "reduce", "date": "2026-09-01", "detail": {}}])
+        _, inc, red = cp._industrial("000001", "2026-08-01", "2026-09-30")
+        assert red and not inc
 
 
 class TestMainFlowCross:

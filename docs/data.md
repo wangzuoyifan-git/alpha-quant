@@ -326,7 +326,7 @@ store_events.load_market_shocks(date: str = None) -> list[dict]   # 可按 date 
 |---|---|---|
 | event_id | str | 唯一标识 |
 | code | str | 股票代码 |
-| event_type | str | reduce / increase / pledge / dividend / restructure |
+| event_type | str | reduce / increase / pledge / dividend / **buyback** / restructure |
 | date | str | 事件发生/公告日期 |
 | detail | dict | 结构化参数（如减持数量、价格区间） |
 | source | str | tushare / nlp |
@@ -469,7 +469,7 @@ from data.downloader_events import init_events, update_events, build_calendar, d
 init_events(year=None)            # E1 日历生成 + E2 企业事件全量下载
 update_events()                   # E1 补充 + E2 近3月增量
 build_calendar(year=None)         # 仅生成 E1 定期事件日历
-download_all_corp_events(codes=None, start="2024-01-01", end=None)  # E2 减持/质押/分红
+download_all_corp_events(codes=None, start="2024-01-01", end=None)  # E2 减持/增持/质押/分红/回购
 ```
 
 ---
@@ -506,7 +506,7 @@ fetcher.get_financial(code) -> DataFrame
 
 ### 已完成（接口已实现并执行）
 
-moneyflow 域 `stock` / `margin` / `top_list` / `top_inst` / `block_trade` / `hk_hold` / `industry` / `market` / `northbound`；macro 域全部 14 项（`cny_usd` / `shrongji` / `vix` / `dxy` / `oil_wti` / `copper_lme` / `sp500` / `hsi` / `fed_rate` / `us_bond_yield` 等，含 `bond_yield` 内的美债字段）；events 域 E1 日历 + E2 减持/质押/分红 + E3 结构；**港股 K 线下载器 `downloader_hk.py`（`init-hk`/`update-hk`，港股通标的优先，AKShare Sina 主源）**。
+moneyflow 域 `stock` / `margin` / `top_list` / `top_inst` / `block_trade` / `hk_hold` / `industry` / `market` / `northbound`；macro 域全部 14 项（`cny_usd` / `shrongji` / `vix` / `dxy` / `oil_wti` / `copper_lme` / `sp500` / `hsi` / `fed_rate` / `us_bond_yield` 等，含 `bond_yield` 内的美债字段）；events 域 E1 日历 + E2 减持/增持/质押/分红/**回购** + E3 结构；**港股 K 线下载器 `downloader_hk.py`（`init-hk`/`update-hk`，港股通标的优先，AKShare Sina 主源）**。
 
 ### 待下载（仍未实现下载器或未接入）
 

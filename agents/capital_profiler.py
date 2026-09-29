@@ -164,7 +164,7 @@ def _capital_details(code6: str, start: str, end: str, prices: pd.DataFrame,
         details["industrial_capital"] = {"net_buy": amount,
                                          "direction": _direction(amount, THR_INDUSTRIAL),
                                          "proxy_metric": "回购/增持公告", "confidence": 0.9,
-                                         "note": f"窗口内增持金额约 {amount/1e8:+.2f}亿"}
+                                         "note": f"窗口内回购/增持金额约 {amount/1e8:+.2f}亿"}
     elif has_reduce:
         details["industrial_capital"] = {"net_buy": -THR_INDUSTRIAL, "direction": "sell",
                                          "proxy_metric": "回购/减持公告", "confidence": 0.9,
@@ -193,6 +193,12 @@ def _industrial(code6: str, start: str, end: str):
         events = load_corp_events(code6)
     except Exception:
         return 0.0, False, False
+    def _num(v) -> float:
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return 0.0
+
     amount = 0.0
     inc = red = False
     for e in events or []:
@@ -201,11 +207,12 @@ def _industrial(code6: str, start: str, end: str):
             continue
         et = e.get("event_type", "")
         det = e.get("detail", {}) or {}
-        if et == "increase":
+        if et == "buyback":
             inc = True
-            vol = det.get("change_vol")
-            px = det.get("avg_price")
-            amount += float(vol) * (float(px) if px else 0.0) if vol else 0.0
+            amount += _num(det.get("amount"))
+        elif et == "increase":
+            inc = True
+            amount += _num(det.get("change_vol")) * _num(det.get("avg_price"))
         elif et in ("reduce", "decrease"):
             red = True
     return amount, inc, red

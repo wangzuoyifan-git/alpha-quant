@@ -140,9 +140,14 @@
 - **未上榜股票**：默认仍 S3；新增 `--hidden-main` 开关，开启且主力连续同向（≥3 日）时给“隐性主力（日频，弱推断）”弱结论（`answer.weak=true`）。**默认关闭**（保持“数据不足如实说”原则）。
 - 无上榜 = 无交叉（席位方向缺失时 `seat_vs_main=None`）。
 
+### D25. 产业资本“回购”数据源接入（2026-09-29）
+- 背景：原 `_industrial` 只有股东增减持（E2 `increase/reduce`），无独立“回购”。
+- 实测：**Tushare `repurchase`（股票回购）接口当前 token 可用**（返回 公告日/进度/数量/金额/价格上下限）；AKShare 亦有 `stock_repurchase_em` 可备选。
+- **决策：接入 Tushare `repurchase`** → events E2 新增 `event_type="buyback"`（`_fetch_repurchase`，按代码，随 `download_all_corp_events`/`update_events` 更新）；`capital_profiler._industrial` 计入回购金额（阈值沿用 1 亿）。
+- 产出：产业资本方向 = 回购/增持金额（≥1亿）为买入；有减持/质押为卖出。
+
 ---
 
 ## 五、待用户回来后确认的开放项
-1. 产业资本“回购”事件缺失，是否接入新数据源？
-2. `feedback`/一致性是否要进一步融合“席位级事件流”（龙虎榜+两融+大宗合成资金流）（D15 后续可选）？
-3. `--hidden-main` 的“隐性主力”阈值（连续≥3日）是否合适？是否要启用为默认为真？
+1. `feedback`/一致性是否要进一步融合“席位级事件流”（龙虎榜+两融+大宗合成资金流）（D15 后续可选）？
+2. `--hidden-main` 的“隐性主力”阈值（连续≥3日）是否合适？是否要启用为默认为真？

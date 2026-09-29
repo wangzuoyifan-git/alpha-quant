@@ -301,7 +301,8 @@ def download_all_corp_events(codes: list = None,
     pledge_limit = 26 if is_incremental else 52
     dividend_limit = 10 if is_incremental else 20
 
-    result = {"reduce": 0, "pledge": 0, "dividend": 0, "fail": 0}
+    repurchase_limit = 10 if is_incremental else 20
+    result = {"reduce": 0, "pledge": 0, "dividend": 0, "buyback": 0, "fail": 0}
     for i, ts_code in enumerate(codes):
         code6 = ts_code.split(".")[0]
         events = []
@@ -313,6 +314,14 @@ def download_all_corp_events(codes: list = None,
         except Exception as e:
             logger.debug(f"{ts_code} 减持失败: {e}")
             result["fail"] += 1
+
+        try:
+            ev = _fetch_repurchase(ts_code, start, end, max_records=repurchase_limit)
+            if ev:
+                events += ev
+                result["buyback"] += len(ev)
+        except Exception as e:
+            logger.debug(f"{ts_code} 回购失败: {e}")
 
         try:
             ev = _fetch_pledge(ts_code, max_records=pledge_limit)
@@ -337,9 +346,10 @@ def download_all_corp_events(codes: list = None,
         if (i + 1) % 500 == 0:
             _log(f"  E2进度: {i+1}/{total}  "
                  f"减持{result['reduce']} 质押{result['pledge']} 分红{result['dividend']} "
-                 f"失败{result['fail']}")
+                 f"回购{result['buyback']} 失败{result['fail']}")
 
-    _log(f"E2完成: 减持{result['reduce']} 质押{result['pledge']} 分红{result['dividend']} 失败{result['fail']}")
+    _log(f"E2完成: 减持{result['reduce']} 质押{result['pledge']} 分红{result['dividend']} "
+         f"回购{result['buyback']} 失败{result['fail']}")
     return result
 
 
@@ -442,6 +452,42 @@ def _fetch_pledge(ts_code: str, max_records: int = 52) -> list:
             "phase": 1,
         })
     return events
+
+
+def _fetch_repurchase(ts_code: str, start: str, end: str, max_records: int = 20) -> list:
+    """股票回购 (Tushare repurchase)，只保留公告日在 [start,end] 的最新 max_records 条。"""
+    pro = _get_pro()
+    df = pro.repurchase(
+        ts_code=ts_code,
+        start_date=start.replace("-", ""),
+        end_date=end.replace("-", ""),
+    )
+    if df is None or df.empty:
+        return []
+    events = []
+    for _, row in df.iterrows():
+        ann = _fmt_date(row.get("ann_date"))
+        if not ann or ann < start or ann > end:
+            continue
+        proc = str(row.get("proc", "") or "")
+        events.append({
+            "event_id": f"buyback_{ts_code}_{ann.replace('-', '')}_{proc}",
+            "code": ts_code.split(".")[0],
+            "event_type": "buyback",
+            "date": ann,
+            "end_date": _fmt_date(row.get("end_date")),
+            "detail": {
+                "proc": proc,
+                "vol": _fmt_float(row.get("vol")),
+                "amount": _fmt_float(row.get("amount")),
+                "high_limit": _fmt_float(row.get("high_limit")),
+                "low_limit": _fmt_float(row.get("low_limit")),
+            },
+            "source": "tushare",
+            "phase": 1,
+        })
+    events.sort(key=lambda e: e["date"], reverse=True)
+    return events[:max_records]
 
 
 def _fetch_dividend(ts_code: str, max_records: int = 20) -> list:
