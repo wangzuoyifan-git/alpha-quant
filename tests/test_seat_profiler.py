@@ -120,6 +120,19 @@ class TestBuildDictionary:
         assert "东北猛男" in seats["游资甲营业部"]["tags"]
         assert (tmp_path / "seat_dictionary.json").exists()
         assert (tmp_path / "seat_dictionary.csv").exists()
+        assert list((tmp_path / "snapshots").glob("seat_dictionary_*.json"))
+
+    def test_snapshot_asof(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sp, "LABELS_PATH", tmp_path / "labels.json")
+        monkeypatch.setattr(sp, "SNAPSHOT_DIR", tmp_path / "snapshots")
+        (tmp_path / "labels.json").write_text(json.dumps({"labels": []}), encoding="utf-8")
+        sp.build_seat_dictionary(window_months=6, min_appearances=2,
+                                 episodes=_episodes(), prices=FakePrices(),
+                                 output_dir=tmp_path)
+        snaps = sp.list_snapshots()
+        assert len(snaps) == 1
+        assert sp.load_snapshot_asof("2099-01-01")["seats"]
+        assert sp.load_snapshot_asof("2000-01-01") is None
 
     def test_hard_label_without_episode_kept(self, tmp_path, monkeypatch):
         monkeypatch.setattr(sp, "LABELS_PATH", tmp_path / "labels.json")

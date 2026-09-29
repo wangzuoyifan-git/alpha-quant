@@ -422,6 +422,7 @@ graph.add_conditional_edges("check_data", route_after_check, {...})
 - 产出字段：`label / label_basis / confidence / effective_date / half_life_days / tags / 四特征 / win_dN / seat_id / evidence`
 - CLI：`python main.py seat-dict import|build|list`；每周脚本自动重估
 - 展示：所有席位身份列带来源前缀 `[硬]/[软]/[规则]/[推断]`，明确区分数据源硬标签与聚类软标签
+- 快照：每次 build 落地 `data/smart_money/snapshots/seat_dictionary_YYYYMMDD.json`（保留最近 60 份），`list_snapshots()` / `load_snapshot_asof(date)` 支持按时间回看；完整“生效时间分段”待历史足够再上（见 decisions D23）
 
 > 口径声明：软标签为聚类推断，非官方认定；字典会衰减（`half_life_days=90`），建议每季度重估。
 > 决策记录见 `docs/capital_profiler_decisions.md`。

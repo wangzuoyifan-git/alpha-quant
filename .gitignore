@@ -39,6 +39,7 @@ data/smart_money/seat_dictionary.json
 data/smart_money/seat_dictionary.csv
 data/smart_money/seat_dictionary_report.md
 data/smart_money/seat_labels.json
+data/smart_money/snapshots/
 
 # 日志
 logs/

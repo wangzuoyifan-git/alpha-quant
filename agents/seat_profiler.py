@@ -44,6 +44,8 @@ DICT_PATH = _BASE_DIR / "seat_dictionary.json"
 CSV_PATH = _BASE_DIR / "seat_dictionary.csv"
 REPORT_PATH = _BASE_DIR / "seat_dictionary_report.md"
 LABELS_PATH = _BASE_DIR / "seat_labels.json"
+SNAPSHOT_DIR = _BASE_DIR / "snapshots"
+SNAPSHOT_KEEP = 60  # 保留最近 N 份带日期快照
 
 FEATURES = ("freq", "dispersion", "same_seat_rate", "t1_exit_rate")
 FOLLOW_HORIZONS = (1, 3, 5, 10)
@@ -299,7 +301,9 @@ def _name_clusters(feat: pd.DataFrame, k: int, hard: list, purity: float = 0.6) 
 
     def z(series):
         sd = series.std()
-        return (series - series.mean()) / (sd if sd else 1.0)
+        if not sd or pd.isna(sd):
+            sd = 1.0
+        return (series - series.mean()) / sd
 
     def hard_frac(label_keyword):
         counts = {}
@@ -513,8 +517,47 @@ def build_seat_dictionary(window_months: int = 6,
         ],
     }
     _write_outputs(result, dict_path, csv_path, report_path)
+    _write_snapshot(result, output_dir / "snapshots")
     logger.info(f"席位字典构建完成: {len(seats)} 席位 -> {dict_path}")
     return result
+
+
+def _write_snapshot(result: dict, snapshot_dir: Path) -> None:
+    """落地一份带日期的快照（同日重建覆盖为幂等），并裁剪只保留最近 SNAPSHOT_KEEP 份。"""
+    snapshot_dir = Path(snapshot_dir)
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    day = datetime.now().strftime("%Y%m%d")
+    p = snapshot_dir / f"seat_dictionary_{day}.json"
+    tmp = Path(str(p) + ".tmp")
+    tmp.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(p)
+    files = sorted(snapshot_dir.glob("seat_dictionary_*.json"))
+    for old in files[:-SNAPSHOT_KEEP]:
+        try:
+            old.unlink()
+        except OSError:
+            pass
+
+
+def list_snapshots() -> list:
+    """返回已有快照日期列表（升序 YYYYMMDD）。"""
+    if not SNAPSHOT_DIR.exists():
+        return []
+    return sorted(p.stem.replace("seat_dictionary_", "")
+                  for p in SNAPSHOT_DIR.glob("seat_dictionary_*.json"))
+
+
+def load_snapshot_asof(date: str) -> dict | None:
+    """取“截至 date（含）最近一次”的快照（用于按时间回看历史标签）。date: YYYY-MM-DD 或 YYYYMMDD。"""
+    day = str(date).replace("-", "")
+    dates = [d for d in list_snapshots() if d <= day]
+    if not dates:
+        return None
+    p = SNAPSHOT_DIR / f"seat_dictionary_{dates[-1]}.json"
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return None
 
 
 def _write_outputs(result: dict, dict_path: Path, csv_path: Path, report_path: Path) -> None:

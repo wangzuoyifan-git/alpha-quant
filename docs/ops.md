@@ -231,6 +231,7 @@ python3 main.py seat-dict build --window 3 --k 3 --t1-days 2     # 自定义窗�
 python3 main.py seat-dict list --label 知名游资营业部 --top 30
 python3 main.py seat-dict list --label 量化/程序化席位 --top 30
 # 产出：data/smart_money/seat_dictionary.json/.csv/_report.md（已 gitignore，可重建）
+#       并落地带日期快照 data/smart_money/snapshots/seat_dictionary_YYYYMMDD.json（保留最近60份）
 # 每周脚本 update_weekly.sh 已自动执行 import + build（字典会衰减，定期重估）
 ```
 
