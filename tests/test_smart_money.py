@@ -338,6 +338,7 @@ class TestArchive:
         rec = archive["seats"][0]
         assert rec["appearance_count"]["total"] == 2
         assert rec["cum_net_value"] == pytest.approx(1.3e8)
+        assert "avg_hold_days" in rec
 
     def test_accumulates_new_episode(self, tmp_path, monkeypatch):
         monkeypatch.setattr(sma, "ARCHIVE_PATH", tmp_path / "seats.json")
@@ -382,6 +383,18 @@ class TestBuildProfile:
         md = sma.report_to_markdown(report)
         assert sma.DISCLAIMER in md
         assert "# 资金主体行为画像" in md
+
+    def test_markdown_includes_hold_days_column(self, fake_store, monkeypatch):
+        monkeypatch.setattr(sma, "PriceCache", lambda: FakePrices())
+        monkeypatch.setattr(sma, "_sector_of", lambda c: "测试行业")
+        fake_store.top_inst = pd.DataFrame({
+            "date": ["2026-08-01"], "ts_code": ["000001.SZ"], "exalter": ["机构专用"],
+            "buy": [1e8], "sell": [1e7], "reason": ["涨幅"], "side": [0],
+        })
+        report = sma.build_profile("000001", mode="seat", window_months=3,
+                                   update_seat_archive=False)
+        md = sma.report_to_markdown(report)
+        assert "平均持有(交易日)" in md
 
     def test_parse_horizons(self):
         assert sma.parse_horizons("5,10") == (5, 10)

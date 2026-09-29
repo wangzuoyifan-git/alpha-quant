@@ -985,16 +985,19 @@ def cmd_smart_money(target: str = None, target_type: str = "auto", mode: str = "
             return
         t = Table(title=f"近期活跃资金主体榜（近 {window_months} 个月，活动名册非买入清单）",
                   border_style="magenta")
-        for c in ("席位", "身份", "上榜(买/卖)", "累计净买卖(亿)", "5/10/20日胜率", "偏好板块"):
+        for c in ("席位", "身份", "上榜(买/卖)", "累计净买卖(亿)", "5/10/20日胜率",
+                  "平均持有(日)", "偏好板块"):
             t.add_column(c)
         for s in cards:
             wr = s["win_rate"]
             wr_s = "/".join((f"{wr.get(f'd{h}'):.0%}" if wr.get(f"d{h}") is not None else "NA")
                             for h in parse_horizons(horizons))
+            hold = f"{s['avg_hold_days']}" if s.get("avg_hold_days") else "-"
             fav = ",".join(x["sector"] for x in s["fav_sectors"][:3]) or "-"
             ac = s["appearance_count"]
             t.add_row(s["agency"][:24], f"{s['label']}({s['label_basis']})",
-                      f"{ac['buy']}/{ac['sell']}", f"{s['cum_net_value']/1e8:+.2f}", wr_s, fav)
+                      f"{ac['buy']}/{ac['sell']}", f"{s['cum_net_value']/1e8:+.2f}",
+                      wr_s, hold, fav)
         console.print(t)
         console.print("[dim]席位标签来自规则匹配/推断，不等于官方认定[/dim]")
         return
@@ -1049,17 +1052,19 @@ def cmd_smart_money(target: str = None, target_type: str = "auto", mode: str = "
         else:
             t = Table(title=f"席位身份与画像（{len(seats['seats'])} 个席位，按|本股净额|降序，展示前20）",
                       border_style="magenta")
-            for c in ("席位", "身份", "本股净买卖(亿)", "累计净买卖(亿)", "5/10/20日胜率", "偏好板块"):
+            for c in ("席位", "身份", "本股净买卖(亿)", "累计净买卖(亿)",
+                      "5/10/20日胜率", "平均持有(日)", "偏好板块"):
                 t.add_column(c)
             for s in seats["seats"][:20]:
                 wr = s["win_rate"]
                 wr_s = "/".join(
                     (f"{wr.get(f'd{h}'):.0%}" if wr.get(f"d{h}") is not None else "NA")
                     for h in report["horizons"])
+                hold = f"{s['avg_hold_days']}" if s.get("avg_hold_days") else "样本不足"
                 fav = ",".join(x["sector"] for x in s["fav_sectors"][:3]) or "-"
                 t.add_row(s["agency"][:22], f"{s['label']}({s['label_basis']})",
                           f"{s['this_stock']['net']/1e8:+.2f}",
-                          f"{s['cum_net_value']/1e8:+.2f}", wr_s, fav)
+                          f"{s['cum_net_value']/1e8:+.2f}", wr_s, hold, fav)
             console.print(t)
 
     # ── 北向跨期行为 ──

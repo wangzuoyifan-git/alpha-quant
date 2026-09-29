@@ -388,7 +388,7 @@ graph.add_conditional_edges("check_data", route_after_check, {...})
 2. **北向跨期行为**：基于 `hk_hold` 个股持股序列，计算加/减仓 streak、持股比例（集中度）变化、与价格是否背离。**注意普通积分账户为季度披露**，streak 以披露点计数。
 3. **多源资金合力 / 分歧**：在同一标的、同一窗口下对齐北向（hk_hold Δratio）× 机构席位（top_inst 机构专用净额）× 融资盘（margin Δrzye）× 大宗买方（block_trade 机构专用净额），判定「资金合力 / 资金分歧 / 证据不足」，并列出全部四路（含「无数据」）。
 
-持久化：`data/smart_money/seats.json`（append/update，按 (code,date) 幂等去重，从累计 episode 重新推导度量）；别名字典可维护于 `data/smart_money/seat_aliases.json`。
+持久化：`data/smart_money/seats.json`（append/update，按 (code,date) 幂等去重，从累计 episode 重新推导度量：上榜频次/累计净买卖/上榜后 N 日胜率/平均持有周期）；别名字典可维护于 `data/smart_money/seat_aliases.json`。注意档案的 `avg_hold_days` 基于累积 episode（上限 100 条/席位），与实时画像（全窗口跨股）可能略有差异。
 
 - `build_profile(target, target_type, mode, window_months, horizons, fetch, update_seat_archive)`：完整结构化报告 + `report_to_markdown`
 - `profile_stock_seats` / `profile_seat` / `rank_active_seats`：支柱一

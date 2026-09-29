@@ -852,6 +852,10 @@ def update_archive(episodes: pd.DataFrame,
             win[f"d{h}"] = round(statistics.mean(x > 0 for x in vals), 3) if vals else None
             win[f"d{h}_n"] = len(vals)
         rec["win_rate"] = win
+        ep_df = pd.DataFrame(episodes_list)
+        if "net" in ep_df.columns:
+            ep_df["net"] = pd.to_numeric(ep_df["net"], errors="coerce").fillna(0.0)
+        rec["avg_hold_days"] = _avg_hold_days(ep_df, prices)
         rec["data_window"] = {
             "start": min(e["date"] for e in episodes_list),
             "end": max(e["date"] for e in episodes_list),
@@ -996,13 +1000,15 @@ def report_to_markdown(report: dict) -> str:
         if not seats.get("available"):
             lines.append(f"- {', '.join(seats.get('notes', [])) or '无数据'}")
         else:
-            lines.append("| 席位 | 身份 | 本股净买卖 | 累计净买卖 | 5/10/20日胜率 |")
-            lines.append("|---|---|---|---|---|")
+            lines.append("| 席位 | 身份 | 本股净买卖 | 累计净买卖 | 5/10/20日胜率 | 平均持有(交易日) |")
+            lines.append("|---|---|---|---|---|---|")
             for s in seats["seats"]:
                 wr = s["win_rate"]
                 wr_s = "/".join(str(wr.get(f"d{h}")) for h in report.get("horizons", HORIZONS))
+                hold = s.get("avg_hold_days")
                 lines.append(f"| {s['agency']} | {s['label']}({s['label_basis']}) | "
-                             f"{s['this_stock']['net']} | {s['cum_net_value']} | {wr_s} |")
+                             f"{s['this_stock']['net']} | {s['cum_net_value']} | {wr_s} | "
+                             f"{hold if hold is not None else '样本不足'} |")
         lines.append("")
 
     nb = report.get("northbound")
