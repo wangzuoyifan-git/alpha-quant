@@ -79,8 +79,36 @@
 
 ---
 
-## 三、待用户回来后确认的开放项
-1. 软标签污染风险：当前 199 席被软标为“量化”（硬标签纯度锚定后），是否收紧 min_appearances 或提高纯度门槛？
+## 四、Phase 1（个股级资金画像）实现决策
+
+### D14. 资金类别与阈值
+- **决策**：六类 = hot_money/quant/institutional/northbound/margin/industrial_capital。
+- 阈值：龙虎榜类 `|净额| ≥ 5000万`；陆股通 `≥ 3000万`；两融变动率 `≥ 3%`。低于阈值记 `stable`；窗口内无该信号记 `absent`；无数据记 `absent/unknown`。
+
+### D15. 反馈性质口径
+- **决策**：`feedback = corr(价格日收益, moneyflow/stock.net_mf_amount)`，取窗口内（≤lookback）日频对齐；`>0.6 强正 / <-0.4 强负 / -0.4~0.2 中性 / 其余 条件依赖`。
+- 理由：参考文档用“龙虎榜+两融+大宗”合成资金流，但龙虎榜稀疏；本项目改用连续日频的资金流代理更稳定。后续可切换/融合。
+
+### D16. 结构评分权重（无股东户数维度）
+- **决策**：`score = 0.40*(1-spec)*100 + 0.30*min(inst_ratio,1)*100 + 0.30*(1-|margin_rate|/0.15)*100`，可用维度不足时按权重重归一；无任何资金数据则 `None`（无法判断）。
+- 理由：参考文档原权重含 0.15 股东户数；本项目 Phase 1 无该数据，重归一。
+
+### D17. 主导资金选择
+- **决策**：对 direction ∈ {buy,sell} 的类别计算 `strength = |net|/阈值`，取 `strength ≥ 1 且最大` 者；若同时存在超阈买入与超阈卖出类别 → **S4 矛盾**（无法判断）。
+
+### D18. 产业资本口径
+- **决策**：用 events E2 的 `increase`（增持）/`reduce`（减持/质押）事件；有增持→买入方向（金额=change_vol×avg_price，缺失时仅方向）；有减持→卖出方向；无→absent。
+- 说明：数据源无独立“回购”事件类型，回购暂以增持近似/待补。
+
+### D19. CLI 命名与落位
+- **决策**：`main.py capital-profiler profile --level stock --code ... [--date --lookback --format json|text]`；实现于 `agents/capital_profiler.py`（非独立包）。
+- 理由：与项目“agents/ + main.py 子命令”惯例一致；`reference/资金画像0.1.md` 保留为参考原件。
+
+---
+
+## 五、待用户回来后确认的开放项
+1. 软标签污染风险：当前部分席位被软标为“量化”（硬标签纯度锚定后），是否收紧 min_appearances 或提高纯度门槛？
 2. 席位字典是否要按“生效时间分段”（外部 xlsx 目前只有 40 日窗口，未分段）？
-3. Phase 1 的 dominant_capital 判定阈值（游资/量化净买入额、两融变动率等）是否采用设计文档默认值？
-4. `feedback` 判定需要资金流序列，Phase 1 暂用“龙虎榜净额+两融变动+大宗”构造日频资金流代理，是否可接受？
+3. Phase 1 阈值/权重（D14/D16）是否采用当前默认值？
+4. `feedback` 用 `moneyflow/stock` 作资金流代理是否可接受（D15）？是否要融合龙虎榜+两融+大宗？
+5. 产业资本“回购”事件缺失，是否接入新数据源？

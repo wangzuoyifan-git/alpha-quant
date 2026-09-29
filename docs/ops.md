@@ -232,6 +232,17 @@ python3 main.py seat-dict list --label 量化/程序化席位 --top 30
 # 每周脚本 update_weekly.sh 已自动执行 import + build（字典会衰减，定期重估）
 ```
 
+### 资金画像（capital-profiler，Phase 1 个股级）
+
+```bash
+# 个股资金画像：主导资金 / 反馈性质 / 持续性 / 结构评分 / 资金明细
+python3 main.py capital-profiler profile --code 600519
+python3 main.py capital-profiler profile --code 688256 --date 2026-09-01 --lookback 60
+python3 main.py capital-profiler profile --code 000002 --format json    # JSON 输出
+# 数据不足时如实返回“无法判断”（S1停牌/S3信号缺席/S4矛盾/S5样本不足）并给建议
+# 设计见 docs/capital_profiler.md；板块/大题为 Phase 2/3
+```
+
 ### 交易辅助
 
 ```bash

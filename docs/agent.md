@@ -424,6 +424,19 @@ graph.add_conditional_edges("check_data", route_after_check, {...})
 > 口径声明：软标签为聚类推断，非官方认定；字典会衰减（`half_life_days=90`），建议每季度重估。
 > 决策记录见 `docs/capital_profiler_decisions.md`。
 
+### 4.9 Capital Profiler（agents/capital_profiler.py）✅ 已实现（Phase 1 个股级，2026-09 新增）
+
+职责：面向“个股”的**综合资金画像**上层应用，回答「被什么资金主导 / 正负反馈 / 持续性」。设计见 `docs/capital_profiler.md`（基于 `reference/资金画像0.1.md` 刷新，匹配本项目数据与接口）。
+
+- `profile(level="stock", code, date, lookback_days=60) -> dict`：输出 `meta / answer(dominant_capital,feedback,persistence,status) / structure_score / capital_details / key_signals / warnings / data_quality`
+- 六类资金代理（Phase 1）：`hot_money`（游资席位净买入）/ `quant`（量化席位）/ `institutional`（机构专用）/ `northbound`（陆股通席位，季度持股兜底）/ `margin`（融资余额变动率）/ `industrial_capital`（回购/增持 E2）
+- 反馈性质：价格日收益 vs `moneyflow/stock.net_mf_amount` 相关性
+- 无法判断：S1 停牌 / S2 数据缺失 / S3 信号全缺席 / S4 方向矛盾 / S5 样本不足 / S6 历史不足，均给出原因+建议+部分发现
+- CLI：`python main.py capital-profiler profile --code ... [--date --lookback --format]`
+- 依赖：席位字典（`seat_profiler`）为主数据源之一；`level=sector_etf/sector_macro` 为 Phase 2/3 占位
+
+> 边界：Phase 1 仅个股级；不做板块/大类、不做 IC/IR 评估（Phase 3）。
+
 ---
 
 ## 五、LLM 接入

@@ -1,7 +1,8 @@
 # Alpha量化 — 项目总览
 
 > 所有 Session 的共同基础参考。专项内容见各模块文档。
-> 最后更新：2026-09-29（席位字典（游资/量化）：`agents/seat_profiler.py` 三层（xlsx 硬标签 + 四特征聚类软标签 + 次日跟投回测）+ `seat-dict` CLI + 每周脚本重估；盘前龙虎榜扫描 `smart-money --recent-lhb`）
+> 最后更新：2026-09-29（资金画像 Phase 1：`agents/capital_profiler.py` 个股级（主导资金/反馈/持续性/结构评分/无法判断）+ `capital-profiler` CLI + 设计文档 `docs/capital_profiler.md`）
+> 2026-09-29（席位字典（游资/量化）：`agents/seat_profiler.py` 三层（xlsx 硬标签 + 四特征聚类软标签 + 次日跟投回测）+ `seat-dict` CLI + 每周脚本重估；盘前龙虎榜扫描 `smart-money --recent-lhb`）
 > 2026-09-29（盘前龙虎榜扫描：`smart-money --recent-lhb --days N` 输出近期标的 + 席位跨股历史画像 + 本股历史其他上榜记录；画像计算向量化提速）
 > 2026-09-28（新增资金主体画像：moneyflow 域 top_inst/block_trade/hk_hold + `agents/smart_money_agent.py` 三支柱 + `agent_tools/smart_money_tools.py` + `smart-money` CLI）
 > 2026-09-22（macro 域修复：`update_db()` 补齐汇率/境外指标 + `update-macro` CLI；CPI/PPI、社融、汇率、DXY、WTI 换源，修复 oil_wti 误存黄金数据）
@@ -75,7 +76,7 @@
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                    应用层 / CLI                          │
-│              main.py（argparse 分发，36个子命令）         │
+│              main.py（argparse 分发，37个子命令）         │
 │              web/（Flask 看板）                          │
 └──────────────────────┬──────────────────────────────────┘
                        │
@@ -261,6 +262,7 @@ alpha量化/
 │   ├── etf_agent.py             # ETF 独立三维评分（技术动量+估值代理+政策配置）
 │   ├── smart_money_agent.py     # 资金主体识别与跨期画像（龙虎榜席位/北向/合力分歧）
 │   ├── seat_profiler.py         # 席位字典（游资/量化）：硬标签+聚类软标签+回测
+│   ├── capital_profiler.py      # 资金画像（Phase1 个股级：主导资金/反馈/持续性）
 │   └── trade_agent.py
 │
 ├── notifier/push.py
@@ -328,5 +330,7 @@ chore:    构建/依赖/配置等杂项
 | `docs/agent.md` | Agent 层：架构设计、Tool Layer 规范、LLM 接入、阶段规划 |
 | `docs/testing.md` | 测试分层策略、覆盖缺口、运行规范 |
 | `docs/ops.md` | CLI 速查、定时脚本、环境变量配置 |
-| `reference/资金画像0.1.md` | 资金画像系统设计参考（个股/板块/大类三类对象，v3.3，未来扩展参考，非当前实现） |
+| `docs/capital_profiler.md` | 资金画像系统设计（本项目，Phase1 个股级；基于 reference/资金画像0.1.md 刷新） |
+| `docs/capital_profiler_decisions.md` | 资金画像/席位字典的备选方案与决策记录 |
+| `reference/资金画像0.1.md` | 资金画像系统设计参考（个股/板块/大类三类对象，v3.3，未来扩展参考） |
 | `docs/archive/` | 过程文档归档（不再维护） |

@@ -1242,6 +1242,28 @@ def cmd_seat_dict(action: str = "list", window: int = 6, min_appearances: int = 
     console.print("[dim]标签来自数据源硬标签或行为聚类软标签，非官方认定；建议每季度重估[/dim]")
 
 
+def cmd_capital_profiler(action: str = "profile", level: str = "stock",
+                         code: str = None, date: str = None,
+                         lookback_days: int = 60, fmt: str = "text"):
+    """资金画像（Phase 1：个股级）"""
+    from rich.console import Console
+    from agents.capital_profiler import profile, format_text
+
+    console = Console()
+    if action != "profile":
+        console.print("[yellow]目前仅支持 action=profile[/yellow]")
+        return
+    if not code:
+        console.print("[yellow]请提供 --code（6位股票代码）[/yellow]")
+        return
+    report = profile(level=level, code=code, date=date, lookback_days=lookback_days)
+    if fmt == "json":
+        import json
+        console.print_json(json.dumps(report, ensure_ascii=False, default=str))
+    else:
+        console.print(format_text(report))
+
+
 def cmd_update_all():
     """更新所有数据域（A股/港股 K线、meta、fundamental、factor、macro、moneyflow、events、估值）"""
     logger.info("开始全域增量更新...")
@@ -2292,6 +2314,19 @@ if __name__ == "__main__":
     p_sd.add_argument("--xlsx", dest="xlsx_path", default=None,
                       help="import 外部字典 xlsx 路径（默认 reference/A股龙虎榜席位资金画像字典.xlsx）")
 
+    # capital-profiler（资金画像 Phase 1：个股级）
+    p_cp = sub.add_parser("capital-profiler", help="资金画像（Phase1 个股级：主导资金/反馈/持续性）")
+    p_cp.add_argument("action", nargs="?", default="profile", choices=["profile"],
+                      help="profile=画像（默认）")
+    p_cp.add_argument("--level", default="stock",
+                      choices=["stock", "sector_etf", "sector_macro"],
+                      help="对象层级（Phase1 仅 stock）")
+    p_cp.add_argument("--code", default=None, help="股票代码（如 688256）")
+    p_cp.add_argument("--date", default=None, help="分析日期 YYYY-MM-DD（默认最新）")
+    p_cp.add_argument("--lookback", type=int, default=60, help="回看交易日（默认60）")
+    p_cp.add_argument("--format", dest="fmt", default="text", choices=["text", "json"],
+                      help="输出格式（默认 text）")
+
     # init-hk（港股）
     p_init_hk = sub.add_parser("init-hk", help="首次全量下载港股 K 线（默认仅港股通标的）")
     p_init_hk.add_argument("--start", default="2020-01-02", help="起始日期（默认2020-01-02）")
@@ -2461,6 +2496,9 @@ if __name__ == "__main__":
                       min_appearances=args.min_appearances, k=args.k,
                       t1_days=args.t1_days, label=args.label, top=args.top,
                       xlsx_path=args.xlsx_path)
+    elif args.command == "capital-profiler":
+        cmd_capital_profiler(action=args.action, level=args.level, code=args.code,
+                             date=args.date, lookback_days=args.lookback, fmt=args.fmt)
     elif args.command == "init-hk":
         cmd_init_hk(start=args.start, end=args.end,
                     force=args.force, connect_only=args.connect_only)
