@@ -74,7 +74,7 @@
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                    应用层 / CLI                          │
-│              main.py（argparse 分发，24个子命令）         │
+│              main.py（argparse 分发，35个子命令）         │
 │              web/（Flask 看板）                          │
 └──────────────────────┬──────────────────────────────────┘
                        │
@@ -245,7 +245,7 @@ alpha量化/
 │   ├── builtin/                 # 内置策略 + 注册表
 │   └── custom/                  # 自定义策略
 │
-├── agent_tools/                 # Tool Layer（已完成，24个工具）
+├── agent_tools/                 # Tool Layer（已完成，25个工具）
 │   ├── data_tools.py            # 数据相关 Tools
 │   ├── strategy_tools.py        # 策略/回测 Tools
 │   ├── trade_tools.py           # 交易/风控 Tools
@@ -326,4 +326,5 @@ chore:    构建/依赖/配置等杂项
 | `docs/agent.md` | Agent 层：架构设计、Tool Layer 规范、LLM 接入、阶段规划 |
 | `docs/testing.md` | 测试分层策略、覆盖缺口、运行规范 |
 | `docs/ops.md` | CLI 速查、定时脚本、环境变量配置 |
+| `reference/资金画像0.1.md` | 资金画像系统设计参考（个股/板块/大类三类对象，v3.3，未来扩展参考，非当前实现） |
 | `docs/archive/` | 过程文档归档（不再维护） |

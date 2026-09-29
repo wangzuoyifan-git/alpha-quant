@@ -56,7 +56,7 @@
 | **`tests/test_decision_log_enhanced.py`** | **L3 阶段三决策日志增强 + 节点审计（OB-R1/OB-R5）** | **✅ 9 passed** |
 | **`tests/test_analysis.py`** | **A2 辅助分析聚合（技术面/资金流/基本面 P0 + 推送/看板格式化，阶段C新增）** | **✅ 14 passed** |
 | **`tests/test_scanner_filters.py`** | **S4 扫描过滤（北交所/新股/ST/成交额 GAP-02/03/04）** | **✅ 9 passed** |
-| **`tests/test_smart_money.py`** | **资金主体识别与跨期画像（席位身份/画像/北向 streak/合力分歧/archive/tools，2026-09 新增）** | **✅ 28 passed** |
+| **`tests/test_smart_money.py`** | **资金主体识别与跨期画像（席位身份/画像/北向 streak/合力分歧/盘前龙虎榜扫描/archive/tools，2026-09 新增）** | **✅ 33 passed** |
 
 ### 2.1 分层决策测试覆盖（2026-06-11 新增）
 
