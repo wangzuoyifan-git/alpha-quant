@@ -79,7 +79,9 @@
 | `institutional` | 机构专用席位窗口净买卖 | top_inst | \|净额\|>5000万 |
 | `northbound` | 沪/深股通专用席位窗口净买入（日频代理）；季度持股变动兜底 | top_inst + hk_hold | \|净额\|>3000万 |
 | `margin` | 融资余额变动率 | margin | \|变动\|>3% |
-| `industrial_capital` | 回购/增持金额 | events E2 | 有增持/回购=买入方向 |
+| `industrial_capital` | 回购/增持金额 | events E2 | \|金额\|>1亿 |
+
+> 阈值对齐业界通用（`reference/资金画像0.1.md` 11.3 `thresholds.yaml`）：龙虎榜 5000万 / 陆股通 3000万 / 两融 3% / 回购增持 1亿。
 
 direction 取值：`buy` / `sell` / `mixed` / `stable`(有数据但低于阈值) / `absent`(窗口内无该信号) / `unknown`。
 
@@ -99,7 +101,8 @@ speculative_ratio   = |hot_money_net + quant_net| / total_flow
 institutional_ratio = |institutional_net + industrial_capital| / total_flow
 margin_ratio        = margin_change_rate
 score = w1*(1-spec)*100 + w2*inst*100 + w3*(1-margin_ratio/0.15)*100
-（w 依可用维度重归一，默认 0.35/0.40/0.25；无股东户数维度）
+（权重对齐参考文档 10.1：投机 0.30 / 机构 0.35 / 两融 0.20（+股东户数 0.15 本项无数据），
+ 依可用维度重归一）
 ```
 等级：80+ 健康 / 60-79 一般 / 40-59 脆弱 / <40 危险 / N/A 无法判断。
 

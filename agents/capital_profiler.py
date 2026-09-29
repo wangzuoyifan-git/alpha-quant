@@ -33,10 +33,11 @@ DISCLAIMER = "本画像基于公开数据与规则化分析生成，仅供研究
 LOOKBACK_DEFAULT = 60
 MIN_TRADING_DAYS = 20
 
-# 方向判定阈值
-THR_LHB = 5e7          # 龙虎榜类 5000 万
-THR_NORTH = 3e7        # 陆股通 3000 万
+# 方向判定阈值（业界通用，对齐 reference/资金画像0.1.md 11.3 thresholds.yaml）
+THR_LHB = 5e7          # 游资/量化/机构净额 5000 万
+THR_NORTH = 3e7        # 陆股通净买入 3000 万
 THR_MARGIN = 0.03      # 融资余额变动率 3%
+THR_INDUSTRIAL = 1e8   # 产业资本（回购/增持）1 亿
 
 _CAT_NAME = {
     "hot_money": "知名游资",
@@ -155,14 +156,15 @@ def _capital_details(code6: str, start: str, end: str, prices: pd.DataFrame) -> 
                              "proxy_metric": "个股融资余额变动率", "confidence": 0.9,
                              "note": f"融资余额变动 {rate*100:+.2f}%"}
 
-    # 产业资本（回购/增持）
+    # 产业资本（回购/增持；阈值 1 亿）
     amount, has_increase, has_reduce = _industrial(code6, start, end)
     if has_increase:
-        details["industrial_capital"] = {"net_buy": amount, "direction": "buy",
+        details["industrial_capital"] = {"net_buy": amount,
+                                         "direction": _direction(amount, THR_INDUSTRIAL),
                                          "proxy_metric": "回购/增持公告", "confidence": 0.9,
                                          "note": f"窗口内增持金额约 {amount/1e8:+.2f}亿"}
     elif has_reduce:
-        details["industrial_capital"] = {"net_buy": -abs(amount), "direction": "sell",
+        details["industrial_capital"] = {"net_buy": -THR_INDUSTRIAL, "direction": "sell",
                                          "proxy_metric": "回购/减持公告", "confidence": 0.9,
                                          "note": "窗口内有减持/质押事件"}
     else:
@@ -241,7 +243,8 @@ def _detect_feedback(code6: str, prices: pd.DataFrame) -> str:
 def _dominant(details: dict) -> tuple:
     """返回 (category, direction) 或 (None, None)。按“超阈强度”排序。"""
     thr = {"hot_money": THR_LHB, "quant": THR_LHB, "institutional": THR_LHB,
-           "northbound": THR_NORTH, "margin": THR_MARGIN, "industrial_capital": 1.0}
+           "northbound": THR_NORTH, "margin": THR_MARGIN,
+           "industrial_capital": THR_INDUSTRIAL}
     best, best_strength, best_dir = None, 0.0, None
     for cat in _ORDER:
         d = details.get(cat) or {}
@@ -271,14 +274,16 @@ def _structure_score(details: dict) -> tuple:
     lhb_total = abs(hot) + abs(quant) + abs(inst)
     if lhb_total == 0 and margin is None:
         return None, None
+    # 权重对齐 reference/资金画像0.1.md 10.1（0.30 投机 / 0.35 机构 / 0.20 两融 / 0.15 股东户数，
+    # 本项无股东户数数据，按可用维度重归一）
     comps = []
     if lhb_total > 0:
         spec = abs(hot + quant) / lhb_total
         inst_ratio = abs(inst + ind) / max(lhb_total, 1.0)
-        comps.append((0.40, (1 - spec) * 100))
-        comps.append((0.30, min(inst_ratio, 1.0) * 100))
+        comps.append((0.30, (1 - spec) * 100))
+        comps.append((0.35, min(inst_ratio, 1.0) * 100))
     if margin is not None:
-        comps.append((0.30, max(0.0, min(1.0, 1 - abs(margin) / 0.15)) * 100))
+        comps.append((0.20, max(0.0, min(1.0, 1 - abs(margin) / 0.15)) * 100))
     wsum = sum(w for w, _ in comps)
     score = sum(w * v for w, v in comps) / wsum if wsum else None
     if score is None:
