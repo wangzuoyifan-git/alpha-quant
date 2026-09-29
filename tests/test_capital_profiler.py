@@ -42,6 +42,7 @@ def _patch(monkeypatch, prices=None, eps=None, margin_rate=0.0, feedback="neutra
                         lambda a: {"label": (label_map or {}).get(a, sma.LABEL_BRANCH)})
     monkeypatch.setattr(cp, "_detect_feedback", lambda code, p: feedback)
     monkeypatch.setattr(cp, "_industrial", lambda *a: industrial)
+    monkeypatch.setattr(cp, "assess_consensus", lambda *a, **k: None)
 
     def _load(dt, code=None, start=None, end=None, **k):
         if dt == "margin":
@@ -68,6 +69,19 @@ class TestResolved:
         assert r["answer"]["persistence"] == "极弱（1日）"
         assert r["structure_score"] is not None
         assert r["capital_details"]["hot_money"]["direction"] == "buy"
+
+    def test_consensus_signal(self, monkeypatch):
+        eps = _episodes([("游资甲营业部", 2e8)])
+        _patch(monkeypatch, eps=eps, feedback="strong_positive",
+               label_map={"游资甲营业部": sma.LABEL_HOT})
+        monkeypatch.setattr(cp, "assess_consensus", lambda *a, **k: {
+            "verdict": "资金分歧（对打）",
+            "routes": {"北向": {"direction": "buy"}, "机构席位": {"direction": "sell"}},
+        })
+        r = cp.profile("stock", "000001")
+        assert r["consensus"]["verdict"].startswith("资金分歧")
+        assert any("席位级事件流" in s["signal"] for s in r["key_signals"])
+        assert any("席位级事件流" in w for w in r["warnings"])
 
     def test_margin_dominant(self, monkeypatch):
         _patch(monkeypatch, eps=pd.DataFrame(), margin_rate=-0.09)

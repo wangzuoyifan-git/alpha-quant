@@ -22,6 +22,7 @@ from agents.smart_money_agent import (
     LABEL_NORTH,
     LABEL_QUANT,
     _norm_code6,
+    assess_consensus,
     classify_seat,
     load_seat_episodes,
 )
@@ -467,6 +468,7 @@ def profile(level: str = "stock", code: str | None = None, date: str | None = No
     main_flow = _main_flow_daily(flow)
     seat_vs_main = _cross_seat_main(details, main_flow)
     pre_post = _pre_post_main(eps, eff, flow.reindex(eff.index) if flow is not None else None)
+    consensus = _consensus(code6, lookback_days)
 
     available = sum(1 for c in _CAT_NAME if (details.get(c, {}).get("net_buy") is not None))
     active = [c for c in _CAT_NAME if details.get(c, {}).get("direction") in ("buy", "sell")]
@@ -479,21 +481,26 @@ def profile(level: str = "stock", code: str | None = None, date: str | None = No
     # 无席位/无超阈信号：默认 S3；allow_hidden_main 时给“隐性主力（日频）”弱结论
     if not active:
         if allow_hidden_main and _strong_main_flow(main_flow):
-            return _hidden_main_report(code6, name, end, lookback_days, main_flow,
-                                       seat_vs_main, feedback, details, eps)
+            r = _hidden_main_report(code6, name, end, lookback_days, main_flow,
+                                    seat_vs_main, feedback, details, eps)
+            r["consensus"] = consensus
+            return r
         r = _undetermined(code6, name, date or "", lookback_days, "S3", partial)
         r["main_flow_daily"] = main_flow
+        r["consensus"] = consensus
         return r
     if buys and sells:
         r = _undetermined(code6, name, date or "", lookback_days, "S4", partial)
         r["capital_details"] = details
         r["main_flow_daily"] = main_flow
         r["seat_vs_main"] = seat_vs_main
+        r["consensus"] = consensus
         r["data_quality"]["completeness"] = round(available / len(_CAT_NAME), 2)
         return r
     if dom_cat is None:
         r = _undetermined(code6, name, date or "", lookback_days, "S3", partial)
         r["main_flow_daily"] = main_flow
+        r["consensus"] = consensus
         return r
 
     score, grade = _structure_score(details)
@@ -515,6 +522,15 @@ def profile(level: str = "stock", code: str | None = None, date: str | None = No
         key_signals.append({"signal": f"{s['verdict']}（{s['date']}）：{s['signal']}",
                             "severity": "medium",
                             "implication": "上榜前后主力方向变化，参考持续性"})
+    if consensus and consensus.get("verdict"):
+        cv = consensus["verdict"]
+        if cv.startswith("资金合力"):
+            key_signals.append({"signal": f"席位级事件流：{cv}", "severity": "medium",
+                                "implication": "多路席位/融资/大宗资金同向"})
+        elif cv.startswith("资金分歧"):
+            warnings.append(f"席位级事件流分歧：{cv}")
+            key_signals.append({"signal": f"席位级事件流：{cv}", "severity": "high",
+                                "implication": "多路资金对打，方向不明"})
 
     return {
         "meta": {"level": "stock", "code": code6, "name": name, "date": end,
@@ -534,6 +550,7 @@ def profile(level: str = "stock", code: str | None = None, date: str | None = No
         "main_flow_daily": main_flow,
         "seat_vs_main": seat_vs_main,
         "seat_main_signals": pre_post,
+        "consensus": consensus,
         "key_signals": key_signals,
         "warnings": warnings,
         "data_quality": {"completeness": round(available / len(_CAT_NAME), 2),
@@ -545,6 +562,16 @@ def profile(level: str = "stock", code: str | None = None, date: str | None = No
 def _strong_main_flow(main_flow: dict) -> bool:
     return bool(main_flow.get("available") and abs(main_flow.get("sum_net_wan") or 0) > 0
                 and (main_flow.get("streak_days") or 0) >= 3)
+
+
+def _consensus(code6: str, lookback_days: int) -> dict | None:
+    """席位级事件流合力/分歧（复用 smart_money_agent.assess_consensus 四路：北向/机构/融资/大宗）。"""
+    try:
+        months = max(1, round(lookback_days / 21))
+        return assess_consensus(code6, window_months=months, fetch=False)
+    except Exception as e:
+        logger.debug(f"consensus 失败 {code6}: {e}")
+        return None
 
 
 def _hidden_main_report(code6, name, end, lookback, main_flow, seat_vs_main,
@@ -636,6 +663,10 @@ def format_text(report: dict) -> str:
                      f"（席位{svm.get('seat_direction')} / 主力{svm.get('main_direction')}）")
     for s in report.get("seat_main_signals") or []:
         lines.append(f"  · {s.get('verdict')}（{s.get('date')}）：{s.get('signal')}")
+    cons = report.get("consensus")
+    if cons and cons.get("verdict"):
+        routes = "，".join(f"{k}:{v.get('direction')}" for k, v in (cons.get("routes") or {}).items())
+        lines.append(f"  席位级事件流：{cons['verdict']}（{routes}）")
     if report.get("warnings"):
         lines.append("")
         lines.append("【风险提示】")

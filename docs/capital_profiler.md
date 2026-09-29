@@ -113,6 +113,10 @@ direction 取值：`buy` / `sell` / `mixed` / `stable`(有数据但低于阈值)
 
 输出另含 `main_flow_daily`（窗口主力净流入合计、连续同向天数）作为背景。
 
+**席位级事件流合力/分歧**（`report["consensus"]`）：复用 `smart_money_agent.assess_consensus` 的四路
+（北向 / 机构席位 / 融资盘 / 大宗买方）方向，判定“资金合力 / 资金分歧 / 证据不足”，并入 `key_signals`/`warnings`。
+与 `seat_vs_main` 的区别：`seat_vs_main` = 席位事件 × 日频主力；`consensus` = 多路席位/融资/大宗事件之间。
+
 > 未上榜股票：默认仍走 S3；加 `--hidden-main` 时，若主力日频连续同向（≥3 日）则给“隐性主力（日频，弱推断）”弱结论（`answer.weak=true`）。
 
 ### 3.4 持续性 `persistence`

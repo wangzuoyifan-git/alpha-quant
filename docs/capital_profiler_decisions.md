@@ -146,8 +146,13 @@
 - **决策：接入 Tushare `repurchase`** → events E2 新增 `event_type="buyback"`（`_fetch_repurchase`，按代码，随 `download_all_corp_events`/`update_events` 更新）；`capital_profiler._industrial` 计入回购金额（阈值沿用 1 亿）。
 - 产出：产业资本方向 = 回购/增持金额（≥1亿）为买入；有减持/质押为卖出。
 
+### D26. 席位级事件流合力/分歧子信号（2026-09-29 用户同意）
+- **决策**：资金画像复用 `smart_money_agent.assess_consensus` 的四路（北向/机构席位/融资盘/大宗买方），作为“席位级事件流”子信号，输出 `report["consensus"]`（含 verdict 与各路方向）。
+- 消费：`key_signals`（资金合力→medium；资金分歧→high）+ `warnings`（分歧）。
+- 与 D24 的 `seat_vs_main` 区分：D24 是“席位事件 × 日频主力”；D26 是“多路席位/融资/大宗事件之间”的合力/分歧。两者并存。
+- 窗口：按 `lookback_days` 折算月数（`round(lookback/21)`）。
+
 ---
 
 ## 五、待用户回来后确认的开放项
-1. `feedback`/一致性是否要进一步融合“席位级事件流”（龙虎榜+两融+大宗合成资金流）（D15 后续可选）？
-2. `--hidden-main` 的“隐性主力”阈值（连续≥3日）是否合适？是否要启用为默认为真？
+1. `--hidden-main` 的“隐性主力”阈值（当前：连续≥3日）与是否默认开启？（我方建议：默认关闭、维持连续≥3日）
