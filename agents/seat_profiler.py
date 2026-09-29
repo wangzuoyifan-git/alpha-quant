@@ -293,7 +293,7 @@ def cluster_seats(feat: pd.DataFrame, k: int = 3, seed: int = 42) -> pd.DataFram
     return out
 
 
-def _name_clusters(feat: pd.DataFrame, k: int, hard: list) -> dict:
+def _name_clusters(feat: pd.DataFrame, k: int, hard: list, purity: float = 0.6) -> dict:
     """给每个簇命名（游资/量化/普通）。有硬标签则按多数锚定，否则按行为特征打分。"""
     cluster_mean = feat.groupby("cluster")[list(FEATURES)].mean()
 
@@ -319,9 +319,9 @@ def _name_clusters(feat: pd.DataFrame, k: int, hard: list) -> dict:
                 hard_total[r["cluster"]] = hard_total.get(r["cluster"], 0) + 1
         hot_purity = {c: hot_counts.get(c, 0) / (hard_total.get(c) or 1) for c in range(k)}
         quant_purity = {c: quant_counts.get(c, 0) / (hard_total.get(c) or 1) for c in range(k)}
-        hot_cluster = max(hot_purity, key=hot_purity.get) if max(hot_purity.values()) >= 0.5 else None
+        hot_cluster = max(hot_purity, key=hot_purity.get) if max(hot_purity.values()) >= purity else None
         quant_cluster = (max(quant_purity, key=quant_purity.get)
-                         if max(quant_purity.values()) >= 0.5 else None)
+                         if max(quant_purity.values()) >= purity else None)
         if quant_cluster is not None and quant_cluster == hot_cluster:
             # 同一簇同时最高：归给纯度更高者
             if quant_purity[quant_cluster] > hot_purity.get(hot_cluster, 0):
@@ -363,6 +363,8 @@ def build_seat_dictionary(window_months: int = 6,
                           k: int = 3,
                           t1_days: int = DEFAULT_T1_DAYS,
                           follow_horizons=FOLLOW_HORIZONS,
+                          purity: float = 0.6,
+                          soft_min_conf: float = 0.7,
                           episodes: pd.DataFrame | None = None,
                           prices: PriceCache | None = None,
                           output_dir: Path | None = None) -> dict:
@@ -417,7 +419,7 @@ def build_seat_dictionary(window_months: int = 6,
         eligible = feat.copy()
 
     clustered = cluster_seats(eligible, k=k)
-    naming = _name_clusters(clustered, k, hard)
+    naming = _name_clusters(clustered, k, hard, purity=purity)
     clustered["soft_label"] = clustered["cluster"].map(naming)
 
     # 汇总：每个簇的特征均值（用于报告）
@@ -446,6 +448,8 @@ def build_seat_dictionary(window_months: int = 6,
             margin = float(c.iloc[0]["posterior_margin"])
             sample = 1.0 - math.exp(-r["freq"] / max(min_appearances, 1))
             conf = round(min(0.95, max(0.30, 0.35 + 0.40 * sample + 0.25 * margin)), 2)
+            if conf < soft_min_conf:
+                continue  # 软标签置信不足：不入库（回落为普通营业部）
             source = "cluster"
             as_of = end
         else:
@@ -496,6 +500,7 @@ def build_seat_dictionary(window_months: int = 6,
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "window": {"start": start, "end": end, "months": window_months},
         "params": {"min_appearances": min_appearances, "k": k, "t1_days": t1_days,
+                   "purity": purity, "soft_min_conf": soft_min_conf,
                    "follow_horizons": list(follow_horizons)},
         "hard_label_count": len(hard),
         "cluster_profile": {str(c): {kk: round(float(vv), 3) for kk, vv in prof.items()}

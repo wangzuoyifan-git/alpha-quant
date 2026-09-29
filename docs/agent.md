@@ -412,7 +412,8 @@ graph.add_conditional_edges("check_data", route_after_check, {...})
    - 口径：以“资金类型”为准（游资/量化/疑似量化/散户集群），数据侧“游资别名”仅作 tag；低频/样本不足/聚合通道不导入；以营业部名称为键、席位ID 仅存档。
 2. **软标签**：对未标注席位做无监督聚类（scipy `kmeans2`，无需 sklearn）。四特征：
    - `freq` 上榜频次、`dispersion` 分散度（股票数/次数）、`same_seat_rate` 买卖同席率、`t1_exit_rate` T+1 兑现率（净买入后紧邻下次上榜为净卖出且间隔≤K 交易日）。
-   - 命名：有硬标签则按簇内硬标签纯度（≥50%）锚定“游资/量化”，否则按行为签名启发式。
+   - 命名：有硬标签则按簇内硬标签纯度（默认 **≥60%**）锚定“游资/量化”，否则按行为签名启发式。
+   - 软化：软标签置信 < `soft_min_conf`（默认 0.7）不入库，回落为“普通营业部”，降低误标。
 3. **回测闭环**：次日跟投胜率（上榜后 1/3/5/10 交易日），作为校准/衰减度量写入字典。
 
 - `build_seat_dictionary(window_months, min_appearances, k, t1_days, follow_horizons, ...)`：构建并落盘 json/csv/md
@@ -420,6 +421,7 @@ graph.add_conditional_edges("check_data", route_after_check, {...})
 - `compute_seat_features` / `cluster_seats` / `load_hard_labels`
 - 产出字段：`label / label_basis / confidence / effective_date / half_life_days / tags / 四特征 / win_dN / seat_id / evidence`
 - CLI：`python main.py seat-dict import|build|list`；每周脚本自动重估
+- 展示：所有席位身份列带来源前缀 `[硬]/[软]/[规则]/[推断]`，明确区分数据源硬标签与聚类软标签
 
 > 口径声明：软标签为聚类推断，非官方认定；字典会衰减（`half_life_days=90`），建议每季度重估。
 > 决策记录见 `docs/capital_profiler_decisions.md`。

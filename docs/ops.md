@@ -225,6 +225,8 @@ python3 main.py seat-dict import
 # 构建/重估席位字典（硬标签锚定 + 行为聚类软标签；约 15-40s）
 python3 main.py seat-dict build --window 6 --min-appearances 10
 python3 main.py seat-dict build --window 3 --k 3 --t1-days 2     # 自定义窗口/簇数/T+1阈值
+# 软标签收紧参数：--purity 0.6（硬标签纯度门槛）--soft-min-conf 0.7（软标签最低置信，低于不入库）
+# 席位身份列带来源前缀：[硬]=数据源硬标签 / [软]=聚类软标签 / [规则]=规则匹配 / [推断]=别名推断
 # 查询
 python3 main.py seat-dict list --label 知名游资营业部 --top 30
 python3 main.py seat-dict list --label 量化/程序化席位 --top 30

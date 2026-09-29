@@ -47,6 +47,20 @@ logging.basicConfig(
 logger = logging.getLogger("alpha")
 
 
+def _seat_basis_mark(basis: str) -> str:
+    """席位标签来源短标记：[硬]=数据源硬标签，[软]=行为聚类软标签，[规则]/[推断]=规则识别。"""
+    b = str(basis or "")
+    if "软标签" in b:
+        return "[软]"
+    if "硬标签" in b:
+        return "[硬]"
+    if b == "规则匹配":
+        return "[规则]"
+    if b == "推断":
+        return "[推断]"
+    return f"[{b}]" if b else ""
+
+
 # ============================================================
 # 全局组件初始化
 # ============================================================
@@ -1024,7 +1038,7 @@ def cmd_smart_money(target: str = None, target_type: str = "auto", mode: str = "
                 hold = f"{h.get('avg_hold_days')}" if h.get("avg_hold_days") else "样本不足"
                 sh = s.get("stock_history") or []
                 sh_s = "；".join(f"{e['date']} {e['net']/1e8:+.2f}亿" for e in sh[-2:]) or "-"
-                st.add_row(s["agency"][:20], f"{s['label']}({s['label_basis']})",
+                st.add_row(s["agency"][:20], f"{_seat_basis_mark(s['label_basis'])}{s['label']}",
                            f"{s['this_net']/1e8:+.2f}",
                            f"{ac.get('buy', 0)}/{ac.get('sell', 0)}",
                            f"{(h.get('cum_net_value') or 0)/1e8:+.2f}", wr_s, hold, sh_s)
@@ -1056,7 +1070,7 @@ def cmd_smart_money(target: str = None, target_type: str = "auto", mode: str = "
             hold = f"{s['avg_hold_days']}" if s.get("avg_hold_days") else "-"
             fav = ",".join(x["sector"] for x in s["fav_sectors"][:3]) or "-"
             ac = s["appearance_count"]
-            t.add_row(s["agency"][:24], f"{s['label']}({s['label_basis']})",
+            t.add_row(s["agency"][:24], f"{_seat_basis_mark(s['label_basis'])}{s['label']}",
                       f"{ac['buy']}/{ac['sell']}", f"{s['cum_net_value']/1e8:+.2f}",
                       wr_s, hold, fav)
         console.print(t)
@@ -1094,7 +1108,7 @@ def cmd_smart_money(target: str = None, target_type: str = "auto", mode: str = "
         t = Table(title=f"席位画像 — {seat['agency']}", show_header=False, border_style="blue")
         t.add_column("项", style="bold cyan")
         t.add_column("值")
-        t.add_row("身份", f"{seat['label']}（{seat['label_basis']}，非官方认定）")
+        t.add_row("身份", f"{_seat_basis_mark(seat['label_basis'])}{seat['label']}（{seat['label_basis']}，非官方认定）")
         t.add_row("上榜频次", str(seat["appearance_count"]))
         t.add_row("累计净买卖", f"{seat['cum_net_value']/1e8:+.2f}亿")
         wr = seat["win_rate"]
@@ -1123,7 +1137,7 @@ def cmd_smart_money(target: str = None, target_type: str = "auto", mode: str = "
                     for h in report["horizons"])
                 hold = f"{s['avg_hold_days']}" if s.get("avg_hold_days") else "样本不足"
                 fav = ",".join(x["sector"] for x in s["fav_sectors"][:3]) or "-"
-                t.add_row(s["agency"][:22], f"{s['label']}({s['label_basis']})",
+                t.add_row(s["agency"][:22], f"{_seat_basis_mark(s['label_basis'])}{s['label']}",
                           f"{s['this_stock']['net']/1e8:+.2f}",
                           f"{s['cum_net_value']/1e8:+.2f}", wr_s, hold, fav)
             console.print(t)
@@ -1176,7 +1190,8 @@ def cmd_smart_money(target: str = None, target_type: str = "auto", mode: str = "
 
 def cmd_seat_dict(action: str = "list", window: int = 6, min_appearances: int = 10,
                   k: int = 3, t1_days: int = 2, label: str = None, top: int = 30,
-                  xlsx_path: str = None):
+                  xlsx_path: str = None, purity: float = 0.6,
+                  soft_min_conf: float = 0.7):
     """席位字典（游资/量化识别）：build 构建 / list 查询"""
     from rich.console import Console
     from rich.table import Table
@@ -1200,7 +1215,8 @@ def cmd_seat_dict(action: str = "list", window: int = 6, min_appearances: int = 
         console.print(f"[dim]构建席位字典（窗口 {window} 月，最小上榜 {min_appearances}，"
                       f"k={k}，T+1阈值 {t1_days} 交易日）...[/dim]")
         res = build_seat_dictionary(window_months=window, min_appearances=min_appearances,
-                                    k=k, t1_days=t1_days)
+                                    k=k, t1_days=t1_days, purity=purity,
+                                    soft_min_conf=soft_min_conf)
         seats = res.get("seats", [])
         console.print(Panel(
             f"[bold cyan]席位字典构建完成[/bold cyan]\n"
@@ -1235,7 +1251,7 @@ def cmd_seat_dict(action: str = "list", window: int = 6, min_appearances: int = 
         t.add_column(c)
     for s in rows:
         wr = "/".join(str(s.get(f"win_d{h}")) for h in (1, 3, 5, 10))
-        t.add_row(s["agency"][:22], s["label"], s["label_basis"], str(s["confidence"]),
+        t.add_row(s["agency"][:22], f"{_seat_basis_mark(s['label_basis'])}{s['label']}", s["label_basis"], str(s["confidence"]),
                   str(s["freq"]), str(s["dispersion"]), str(s["same_seat_rate"]),
                   str(s["t1_exit_rate"]), wr)
     console.print(t)
@@ -2311,6 +2327,10 @@ if __name__ == "__main__":
                       help="build T+1 兑现的交易日间隔阈值（默认2）")
     p_sd.add_argument("--label", default=None, help="list 过滤标签（如 知名游资营业部）")
     p_sd.add_argument("--top", type=int, default=30, help="list 展示条数（默认30）")
+    p_sd.add_argument("--purity", type=float, default=0.6,
+                      help="build 硬标签纯度门槛（默认0.6，越高软标签越保守）")
+    p_sd.add_argument("--soft-min-conf", type=float, default=0.7,
+                      help="build 软标签最低置信度（默认0.7，低于则不入库）")
     p_sd.add_argument("--xlsx", dest="xlsx_path", default=None,
                       help="import 外部字典 xlsx 路径（默认 reference/A股龙虎榜席位资金画像字典.xlsx）")
 
@@ -2495,7 +2515,8 @@ if __name__ == "__main__":
         cmd_seat_dict(action=args.action, window=args.window,
                       min_appearances=args.min_appearances, k=args.k,
                       t1_days=args.t1_days, label=args.label, top=args.top,
-                      xlsx_path=args.xlsx_path)
+                      xlsx_path=args.xlsx_path, purity=args.purity,
+                      soft_min_conf=args.soft_min_conf)
     elif args.command == "capital-profiler":
         cmd_capital_profiler(action=args.action, level=args.level, code=args.code,
                              date=args.date, lookback_days=args.lookback, fmt=args.fmt)
