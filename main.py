@@ -993,7 +993,9 @@ def cmd_smart_money(target: str = None, target_type: str = "auto", mode: str = "
                     as_markdown: bool = False, rank: bool = False,
                     top_n: int = 20, recent_lhb: bool = False,
                     days: int = 1, history_months: int = 0,
-                    with_capital: bool = False, capital_top: int = 10):
+                    with_capital: bool = False, capital_top: int = 10,
+                    scan_sort: str = "date", scan_order: str = "desc",
+                    scan_limit: int = 0):
     """资金主体行为画像：识别谁在买卖 + 跨期行为模式（描述性，不构成投资建议）"""
     from rich.console import Console
     from rich.table import Table
@@ -1007,7 +1009,9 @@ def cmd_smart_money(target: str = None, target_type: str = "auto", mode: str = "
     # ── 盘前龙虎榜标的扫描（近期标的 + 席位历史画像）──
     if recent_lhb:
         result = scan_recent_lhb(days=days, history_months=history_months,
-                                 top_n=top_n, horizons=parse_horizons(horizons))
+                                 top_n=top_n, horizons=parse_horizons(horizons),
+                                 sort_by=scan_sort, ascending=(scan_order == "asc"),
+                                 limit=scan_limit)
         if as_json:
             import json
             console.print_json(json.dumps(result, ensure_ascii=False, default=str))
@@ -2474,6 +2478,12 @@ if __name__ == "__main__":
     p_cp_scan.add_argument("--history-months", type=int, default=0,
                            help="席位历史画像回溯月数（0=全部本地）")
     p_cp_scan.add_argument("--horizons", default="5,10,20", help="事后验证窗口（交易日）")
+    p_cp_scan.add_argument("--sort", dest="sort", default="date", choices=["date", "pct", "net"],
+                           help="标的排序：date(默认)/pct(涨跌幅)/net(净额绝对值)")
+    p_cp_scan.add_argument("--order", dest="order", default="desc", choices=["desc", "asc"],
+                           help="排序方向（默认 desc；涨跌幅降序=涨幅榜）")
+    p_cp_scan.add_argument("--limit", type=int, default=0,
+                           help="只显示前 N 个标的（默认0=全部）；配 --sort pct 即涨幅/降幅前N")
     p_cp_scan.add_argument("--with-capital", action="store_true",
                            help="对每个标的附综合画像结论（主导/反馈/持续性）")
     p_cp_scan.add_argument("--capital-top", type=int, default=10,
@@ -2684,7 +2694,8 @@ if __name__ == "__main__":
             cmd_smart_money(recent_lhb=True, days=args.days, top_n=args.top,
                             history_months=args.history_months, horizons=args.horizons,
                             as_json=args.as_json, as_markdown=args.markdown,
-                            with_capital=args.with_capital, capital_top=args.capital_top)
+                            with_capital=args.with_capital, capital_top=args.capital_top,
+                            scan_sort=args.sort, scan_order=args.order, scan_limit=args.limit)
         else:
             print("用法: capital-profiler {stock|sector|actor|rank|scan} ... "
                   "（-h 查看帮助）")

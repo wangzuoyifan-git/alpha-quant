@@ -683,7 +683,10 @@ def scan_recent_lhb(days: int = 1,
                     history_months: int = 0,
                     top_n: int = 10,
                     horizons=HORIZONS,
-                    prices: PriceCache = None) -> dict:
+                    prices: PriceCache = None,
+                    sort_by: str = "date",
+                    ascending: bool = False,
+                    limit: int = 0) -> dict:
     """
     盘前扫描最近 N 个龙虎榜披露日的标的，并给出每个标的相关席位的
     跨股历史画像 + 该席位在本股的历史其他上榜记录。
@@ -768,7 +771,16 @@ def scan_recent_lhb(days: int = 1,
             "seats": seats[:top_n],
         })
 
-    targets.sort(key=lambda t: (t["date"], abs(t["net"])), reverse=True)
+    # 排序：date（默认，日期降序+净额降序）/ pct（涨跌幅）/ net（|净额|）；None 恒排最后
+    if sort_by == "pct":
+        targets.sort(key=lambda t: (t.get("pct_change") is None, t.get("pct_change") or 0.0),
+                     reverse=not ascending)
+    elif sort_by == "net":
+        targets.sort(key=lambda t: abs(t["net"]), reverse=not ascending)
+    else:
+        targets.sort(key=lambda t: (t["date"], abs(t["net"])), reverse=not ascending)
+    if limit and limit > 0:
+        targets = targets[:limit]
     seat_count = sum(t["seat_total"] for t in targets)
     return {
         "available": bool(targets),

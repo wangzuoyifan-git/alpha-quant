@@ -67,6 +67,7 @@ def fake_store(monkeypatch):
     handle.hk_hold = {}
     handle.margin = {}
     handle.block_trade = pd.DataFrame(columns=["date", "ts_code", "price", "vol", "amount", "buyer", "seller"])
+    handle.top_list = pd.DataFrame(columns=["ts_code", "pct_change"])
 
     def list_dates(dt, **kw):
         if dt == "top_inst":
@@ -88,6 +89,13 @@ def fake_store(monkeypatch):
             if d.empty:
                 return None
             out = d.drop(columns=["date"]).copy()
+            out.index = pd.to_datetime([date] * len(out))
+            out.index.name = "date"
+            return out
+        if dt == "top_list":
+            if handle.top_list.empty:
+                return None
+            out = handle.top_list.copy()
             out.index = pd.to_datetime([date] * len(out))
             out.index.name = "date"
             return out
@@ -463,6 +471,22 @@ class TestRecentLhb:
         md = sma.recent_lhb_to_markdown(r)
         assert "# 盘前龙虎榜标的与席位画像" in md
         assert "平均持有(日)" in md
+
+    def test_sort_by_pct_and_limit(self, fake_store, monkeypatch):
+        monkeypatch.setattr(sma, "_sector_of", lambda c: "测试行业")
+        fake_store.top_inst = self._rows()
+        # 2026-08-20 有 000001、000002 两只
+        fake_store.top_list = pd.DataFrame({
+            "ts_code": ["000001.SZ", "000002.SZ"],
+            "pct_change": [-5.0, 9.9],
+        })
+        r = sma.scan_recent_lhb(days=1, prices=FakePrices(), sort_by="pct",
+                                ascending=False, limit=1)
+        assert len(r["targets"]) == 1
+        assert r["targets"][0]["code"] == "000002"   # 涨幅更高
+        r2 = sma.scan_recent_lhb(days=1, prices=FakePrices(), sort_by="pct",
+                                 ascending=True, limit=1)
+        assert r2["targets"][0]["code"] == "000001"  # 降幅更大
 
 
 # ══════════════════════════════════════════════════════════════

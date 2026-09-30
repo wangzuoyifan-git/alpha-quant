@@ -240,8 +240,12 @@ python3 main.py capital-profiler rank --window 3 --top 20
 # ── 盘前：最近龙虎榜标的 + 席位历史画像（本次席位/跨股画像/本股历史其他上榜）
 python3 main.py capital-profiler scan --days 1                      # 最近1个披露日
 python3 main.py capital-profiler scan --days 3 --top 10             # 近3日，每股前10席位
+python3 main.py capital-profiler scan --days 1 --sort pct --order desc --limit 10  # 涨幅前10
+python3 main.py capital-profiler scan --days 1 --sort pct --order asc  --limit 10  # 降幅前10
+python3 main.py capital-profiler scan --days 1 --sort net --limit 10               # |龙虎榜净额| 前10
 python3 main.py capital-profiler scan --days 1 --with-capital --capital-top 10   # 附综合画像
 python3 main.py capital-profiler scan --days 1 --markdown|--json
+# --sort date(默认)/pct/net  --order desc/asc  --limit N（标的数，0=全部）
 
 # 输出含：主导资金/反馈/持续性 + 席位×主力一致性(合力/对倒/隐性吸筹) + 日频主力背景
 # 数据不足时如实返回“无法判断”（S1停牌/S3信号缺席/S4矛盾/S5样本不足）并给建议
