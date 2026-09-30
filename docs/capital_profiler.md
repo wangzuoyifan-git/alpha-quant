@@ -12,7 +12,7 @@
 
 | 对象 | level | 核心问题 | 输入示例 |
 |---|---|---|---|
-| 个股 | `stock` | 当前被什么资金主导？正/负反馈？持续性？ | `capital-profiler profile --level stock --code 688256 --date 2026-09-01` |
+| 个股 | `stock` | 当前被什么资金主导？正/负反馈？持续性？ | `capital-profiler stock --code 688256 --date 2026-09-01` |
 | 板块/ETF | `sector_etf` | 同上（Phase 2） | `--level sector_etf --code 512760` |
 | 大类 | `sector_macro` | 同上（Phase 3） | `--level sector_macro --code tech` |
 
@@ -163,7 +163,7 @@ agents/capital_profiler.py        # 画像引擎（Phase 1）
 ├── _persistence(...)             # 持续性
 ├── _structure_score(...)         # 结构评分
 └── _undetermined(...)            # S1~S6 处理
-main.py  capital-profiler profile --level stock --code ... --date ... [--format json|text]
+main.py  capital-profiler {stock|sector|actor|rank|scan} ...   # 统一入口，见 ops.md
 ```
 
 消费：席位字典（`seat_profiler`）→ 游资/量化净额；`smart_money_agent` 的 `load_seat_episodes` 复用。
@@ -211,7 +211,7 @@ main.py  capital-profiler profile --level stock --code ... --date ... [--format 
 - **反馈**：板块指数/ETF 收益 vs 成员股资金流聚合（`moneyflow/stock.net_mf_amount` 求和）。
 - **无法判断**：沿用 S1~S6（板块版；无成分映射 → S2）。
 - **数据落位**：`data/store_fund.py`（basic/share/nav/index_weight/etf_index_map）+ `data/downloader_fund.py`；聚合层 `agents/sector_aggregator.py`。
-- **CLI**：`python main.py capital-profiler profile --level sector_etf --code 801080 [--sector-level L1]` / `--code 510300`；`--fetch` 表示 ETF 数据缺失时按需联网拉取（份额/净值/指数权重）。
+- **CLI**：`python main.py capital-profiler sector --code 801080 [--sector-level L1]` / `--code 510300`；`--fetch` 表示 ETF 数据缺失时按需联网拉取（份额/净值/指数权重）。
 
 ---
 

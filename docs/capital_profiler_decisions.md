@@ -181,6 +181,13 @@
 - **决策**：`capital-profiler --level sector_etf --fetch` 时，ETF 数据缺失自动拉取（ETF列表/映射 + fund_share/fund_nav + index_weight）；默认关闭（只用本地），与 `smart-money --fetch` 一致。
 - 实现：`_ensure_etf_data()`（缺失才拉）；`etf_index_map` 键统一为 6 位 ETF 代码。
 
+### D33. smart-money 与 capital-profiler 融合（2026-09-30 用户决定）
+- 目标：消除两个 CLI 的重复，统一入口。
+- 备选：A 统一入口+保留模块分层；B 文件级大合并。
+- **决策：A**。入口统一为 `capital-profiler`，子命令 `stock / sector / actor / rank / scan`；`smart-money` 保留为别名（转发+提示）；引擎模块（smart_money_agent/seat_profiler/capital_profiler）**不合并**。
+- 个股画像可用 `--with-seats / --with-northbound / --with-consensus` 嵌入 smart-money 视角；`scan --with-capital --capital-top K` 对前 K 只标的附综合画像。
+- 理由：重复只在外壳，底层本就复用；文件级合并风险大、收益小。
+
 ---
 
 ## 五、待用户回来后确认的开放项

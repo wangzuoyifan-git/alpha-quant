@@ -992,7 +992,8 @@ def cmd_smart_money(target: str = None, target_type: str = "auto", mode: str = "
                     fetch: bool = False, as_json: bool = False,
                     as_markdown: bool = False, rank: bool = False,
                     top_n: int = 20, recent_lhb: bool = False,
-                    days: int = 1, history_months: int = 0):
+                    days: int = 1, history_months: int = 0,
+                    with_capital: bool = False, capital_top: int = 10):
     """资金主体行为画像：识别谁在买卖 + 跨期行为模式（描述性，不构成投资建议）"""
     from rich.console import Console
     from rich.table import Table
@@ -1017,21 +1018,61 @@ def cmd_smart_money(target: str = None, target_type: str = "auto", mode: str = "
         if not result.get("available"):
             console.print(f"[yellow]{'; '.join(result.get('notes', [])) or '无数据'}[/yellow]")
             return
+
+        # 可选：对净额前 K 只标的附综合画像结论
+        capital_map = {}
+        if with_capital:
+            from agents.capital_profiler import profile as _cp_profile
+            top = sorted(result["targets"], key=lambda t: abs(t["net"]), reverse=True)[:capital_top]
+            for t in top:
+                try:
+                    r = _cp_profile(level="stock", code=t["code"], date=t["date"],
+                                    lookback_days=60)
+                    a = r["answer"]
+                    capital_map[f"{t['code']}|{t['date']}"] = {
+                        "status": a["status"],
+                        "dominant": a.get("dominant_capital") or a.get("undetermined_reason"),
+                        "persistence": a.get("persistence"),
+                        "score": r.get("structure_score"),
+                    }
+                except Exception:
+                    capital_map[f"{t['code']}|{t['date']}"] = {"status": "error", "dominant": "-"}
+            for t in result["targets"]:
+                t["capital"] = capital_map.get(f"{t['code']}|{t['date']}")
+
+        if as_json:
+            import json
+            console.print_json(json.dumps(result, ensure_ascii=False, default=str))
+            return
+
         console.print(Panel(
             f"[bold cyan]盘前龙虎榜标的与席位画像[/bold cyan]\n"
             f"披露日: [yellow]{', '.join(result['dates'])}[/yellow]  "
             f"标的: [yellow]{result['target_count']}[/yellow]  "
             f"涉及席位: [yellow]{result['seat_count']}[/yellow]  "
-            f"席位历史窗口: [yellow]{result['window']['start']}~{result['window']['end']}[/yellow]",
+            f"席位历史窗口: [yellow]{result['window']['start']}~{result['window']['end']}[/yellow]"
+            + (f"  综合画像: [yellow]前{capital_top}只[/yellow]" if with_capital else ""),
             expand=False))
         ov = Table(title="标的概览", border_style="green")
-        for c in ("日期", "代码", "名称", "涨跌%", "龙虎榜净额(亿)", "买卖(亿)", "席位数"):
+        cols = ["日期", "代码", "名称", "涨跌%", "龙虎榜净额(亿)", "买卖(亿)", "席位数"]
+        if with_capital:
+            cols.append("综合画像")
+        for c in cols:
             ov.add_column(c)
         for t in result["targets"]:
             pct = f"{t['pct_change']:+.2f}" if t.get("pct_change") is not None else "-"
-            ov.add_row(t["date"], t["code"], t["name"], pct,
-                       f"{t['net']/1e8:+.2f}", f"{t['buy']/1e8:+.2f}/{t['sell']/1e8:+.2f}",
-                       str(t["seat_total"]))
+            row = [t["date"], t["code"], t["name"], pct,
+                   f"{t['net']/1e8:+.2f}", f"{t['buy']/1e8:+.2f}/{t['sell']/1e8:+.2f}",
+                   str(t["seat_total"])]
+            if with_capital:
+                cap = capital_map.get(f"{t['code']}|{t['date']}")
+                if cap and cap.get("status") == "resolved":
+                    row.append(f"{cap['dominant']}｜{cap.get('persistence')}｜{cap.get('score')}")
+                elif cap:
+                    row.append(str(cap.get("dominant") or cap.get("status"))[:30])
+                else:
+                    row.append("-")
+            ov.add_row(*row)
         console.print(ov)
         for t in result["targets"]:
             st = Table(
@@ -1270,29 +1311,51 @@ def cmd_seat_dict(action: str = "list", window: int = 6, min_appearances: int = 
     console.print("[dim]标签来自数据源硬标签或行为聚类软标签，非官方认定；建议每季度重估[/dim]")
 
 
-def cmd_capital_profiler(action: str = "profile", level: str = "stock",
+def _sm_mode(with_seats: bool, with_northbound: bool, with_consensus: bool) -> str:
+    flags = (with_seats, with_northbound, with_consensus)
+    if sum(flags) == 1:
+        return {0: "seat", 1: "northbound", 2: "consensus"}[flags.index(True)]
+    return "full"
+
+
+def cmd_capital_profiler(level: str = "stock",
                          code: str = None, date: str = None,
                          lookback_days: int = 60, fmt: str = "text",
                          hidden_main: bool = False, sector_level: str = "L1",
-                         fetch: bool = False):
-    """资金画像（Phase 1：个股级）"""
+                         fetch: bool = False, with_seats: bool = False,
+                         with_northbound: bool = False, with_consensus: bool = False,
+                         window_months: int = 12, horizons: str = "5,10,20"):
+    """资金画像统一入口：个股（含可选席位/北向/合力）与板块/ETF。"""
     from rich.console import Console
     from agents.capital_profiler import profile, format_text
 
     console = Console()
-    if action != "profile":
-        console.print("[yellow]目前仅支持 action=profile[/yellow]")
-        return
     if not code:
-        console.print("[yellow]请提供 --code（6位股票代码）[/yellow]")
+        console.print("[yellow]请提供 --code[/yellow]")
         return
     report = profile(level=level, code=code, date=date, lookback_days=lookback_days,
                      allow_hidden_main=hidden_main, sector_level=sector_level, fetch=fetch)
+
+    embed_sm = level == "stock" and (with_seats or with_northbound or with_consensus)
+    mode = _sm_mode(with_seats, with_northbound, with_consensus) if embed_sm else None
+
     if fmt == "json":
         import json
-        console.print_json(json.dumps(report, ensure_ascii=False, default=str))
-    else:
-        console.print(format_text(report))
+        if embed_sm:
+            from agents.smart_money_agent import build_profile, parse_horizons
+            sm = build_profile(code, target_type="stock", mode=mode,
+                               window_months=window_months,
+                               horizons=parse_horizons(horizons), fetch=fetch)
+            console.print_json(json.dumps({"capital": report, "smart_money": sm},
+                                          ensure_ascii=False, default=str))
+        else:
+            console.print_json(json.dumps(report, ensure_ascii=False, default=str))
+        return
+
+    console.print(format_text(report))
+    if embed_sm:
+        cmd_smart_money(target=code, target_type="stock", mode=mode,
+                        window_months=window_months, horizons=horizons, fetch=fetch)
 
 
 def cmd_update_all():
@@ -2359,24 +2422,64 @@ if __name__ == "__main__":
                       help="import 外部字典 xlsx 路径（默认 reference/A股龙虎榜席位资金画像字典.xlsx）")
 
     # capital-profiler（资金画像 Phase 1：个股级）
-    p_cp = sub.add_parser("capital-profiler", help="资金画像（Phase1 个股级：主导资金/反馈/持续性）")
-    p_cp.add_argument("action", nargs="?", default="profile", choices=["profile"],
-                      help="profile=画像（默认）")
-    p_cp.add_argument("--level", default="stock",
-                      choices=["stock", "sector_etf", "sector_macro"],
-                      help="对象层级（Phase1 仅 stock）")
-    p_cp.add_argument("--code", default=None, help="股票代码（如 688256）")
-    p_cp.add_argument("--date", default=None, help="分析日期 YYYY-MM-DD（默认最新）")
-    p_cp.add_argument("--lookback", type=int, default=60, help="回看交易日（默认60）")
-    p_cp.add_argument("--fetch", action="store_true",
-                      help="ETF 画像数据缺失时按需联网拉取（fund_share/fund_nav/index_weight）")
-    p_cp.add_argument("--sector-level", dest="sector_level", default="L1",
-                      choices=["L1", "L2", "L3"],
-                      help="申万行业层级（--level sector_etf 且 --code 为申万代码时用，默认 L1）")
-    p_cp.add_argument("--hidden-main", dest="hidden_main", action="store_true",
-                      help="未上榜股票允许给“隐性主力（日频）”弱结论（默认关闭，走无法判断 S3）")
-    p_cp.add_argument("--format", dest="fmt", default="text", choices=["text", "json"],
-                      help="输出格式（默认 text）")
+    p_cp = sub.add_parser("capital-profiler",
+                          help="资金画像统一入口：stock / sector / actor / rank / scan")
+    cp_sub = p_cp.add_subparsers(dest="cp_action")
+
+    def _add_common(p):
+        p.add_argument("--date", default=None, help="分析日期 YYYY-MM-DD（默认最新）")
+        p.add_argument("--lookback", type=int, default=60, help="回看交易日（默认60）")
+        p.add_argument("--format", dest="fmt", default="text", choices=["text", "json"],
+                       help="输出格式（默认 text）")
+
+    # stock：个股综合画像（可选嵌入 smart-money 席位/北向/合力）
+    p_cp_stock = cp_sub.add_parser("stock", help="个股综合画像（主导/反馈/持续性；可选席位/北向/合力）")
+    p_cp_stock.add_argument("--code", required=True, help="6位股票代码，如 600519")
+    _add_common(p_cp_stock)
+    p_cp_stock.add_argument("--hidden-main", dest="hidden_main", action="store_true",
+                            help="未上榜允许给“隐性主力（日频）”弱结论")
+    p_cp_stock.add_argument("--with-seats", action="store_true", help="附席位身份与画像（smart-money）")
+    p_cp_stock.add_argument("--with-northbound", action="store_true", help="附北向跨期行为")
+    p_cp_stock.add_argument("--with-consensus", action="store_true", help="附多源资金合力/分歧")
+    p_cp_stock.add_argument("--window", type=int, default=12, help="席位/北向画像回溯月数（默认12）")
+    p_cp_stock.add_argument("--horizons", default="5,10,20", help="席位事后验证窗口（交易日）")
+
+    # sector：板块/ETF
+    p_cp_sector = cp_sub.add_parser("sector", help="板块/ETF 综合画像（申万 801xxx 或 ETF 6位）")
+    p_cp_sector.add_argument("--code", required=True, help="申万行业代码（801xxx）或 ETF 代码")
+    _add_common(p_cp_sector)
+    p_cp_sector.add_argument("--sector-level", dest="sector_level", default="L1",
+                             choices=["L1", "L2", "L3"], help="申万层级（默认 L1）")
+    p_cp_sector.add_argument("--fetch", action="store_true",
+                             help="ETF 数据缺失时按需联网拉取（fund_share/fund_nav/index_weight）")
+
+    # actor：资金主体（席位）画像 = smart-money --type seat
+    p_cp_actor = cp_sub.add_parser("actor", help="资金主体（席位）画像")
+    p_cp_actor.add_argument("--name", required=True, help="席位名，如 机构专用 / 某营业部")
+    p_cp_actor.add_argument("--window", type=int, default=12, help="回溯月数（默认12）")
+    p_cp_actor.add_argument("--horizons", default="5,10,20", help="事后验证窗口（交易日）")
+    p_cp_actor.add_argument("--markdown", action="store_true", help="输出 Markdown")
+    p_cp_actor.add_argument("--json", dest="as_json", action="store_true", help="输出 JSON")
+
+    # rank：活跃资金主体榜
+    p_cp_rank = cp_sub.add_parser("rank", help="近期活跃资金主体榜（活动名册，非买入清单）")
+    p_cp_rank.add_argument("--window", type=int, default=12, help="回溯月数（默认12）")
+    p_cp_rank.add_argument("--top", type=int, default=20, help="展示条数（默认20）")
+    p_cp_rank.add_argument("--horizons", default="5,10,20", help="事后验证窗口（交易日）")
+
+    # scan：盘前龙虎榜扫描（+ 可选综合画像）
+    p_cp_scan = cp_sub.add_parser("scan", help="盘前扫描最近龙虎榜标的（+ 可选综合画像）")
+    p_cp_scan.add_argument("--days", type=int, default=1, help="最近 N 个龙虎榜披露日（默认1）")
+    p_cp_scan.add_argument("--top", type=int, default=20, help="每股席位数（默认20）")
+    p_cp_scan.add_argument("--history-months", type=int, default=0,
+                           help="席位历史画像回溯月数（0=全部本地）")
+    p_cp_scan.add_argument("--horizons", default="5,10,20", help="事后验证窗口（交易日）")
+    p_cp_scan.add_argument("--with-capital", action="store_true",
+                           help="对每个标的附综合画像结论（主导/反馈/持续性）")
+    p_cp_scan.add_argument("--capital-top", type=int, default=10,
+                           help="--with-capital 时只对净额前 K 只附画像（默认10）")
+    p_cp_scan.add_argument("--json", dest="as_json", action="store_true", help="输出 JSON")
+    p_cp_scan.add_argument("--markdown", action="store_true", help="输出 Markdown")
 
     # init-hk（港股）
     p_init_hk = sub.add_parser("init-hk", help="首次全量下载港股 K 线（默认仅港股通标的）")
@@ -2537,13 +2640,20 @@ if __name__ == "__main__":
     elif args.command == "update-fund":
         cmd_update_fund(codes=args.codes)
     elif args.command == "smart-money":
-        cmd_smart_money(target=args.target, target_type=args.target_type,
-                        mode=args.mode, window_months=args.window,
-                        horizons=args.horizons, fetch=args.fetch,
-                        as_json=args.as_json, as_markdown=args.as_markdown,
-                        rank=args.rank, top_n=args.top,
-                        recent_lhb=args.recent_lhb, days=args.days,
-                        history_months=args.history_months)
+        print("[提示] `smart-money` 已并入 `capital-profiler`："
+              "actor(席位) / rank(活跃榜) / scan(盘前)。本命令保留为别名。")
+        if args.rank:
+            cmd_smart_money(rank=True, window_months=args.window, top_n=args.top,
+                            horizons=args.horizons)
+        elif args.recent_lhb:
+            cmd_smart_money(recent_lhb=True, days=args.days, top_n=args.top,
+                            history_months=args.history_months, horizons=args.horizons,
+                            as_json=args.as_json, as_markdown=args.as_markdown)
+        else:
+            cmd_smart_money(target=args.target, target_type=args.target_type,
+                            mode=args.mode, window_months=args.window,
+                            horizons=args.horizons, fetch=args.fetch,
+                            as_json=args.as_json, as_markdown=args.as_markdown)
     elif args.command == "seat-dict":
         cmd_seat_dict(action=args.action, window=args.window,
                       min_appearances=args.min_appearances, k=args.k,
@@ -2551,10 +2661,33 @@ if __name__ == "__main__":
                       xlsx_path=args.xlsx_path, purity=args.purity,
                       soft_min_conf=args.soft_min_conf)
     elif args.command == "capital-profiler":
-        cmd_capital_profiler(action=args.action, level=args.level, code=args.code,
-                             date=args.date, lookback_days=args.lookback, fmt=args.fmt,
-                             hidden_main=args.hidden_main, sector_level=args.sector_level,
-                             fetch=args.fetch)
+        act = getattr(args, "cp_action", None)
+        if act == "stock":
+            cmd_capital_profiler(level="stock", code=args.code, date=args.date,
+                                 lookback_days=args.lookback, fmt=args.fmt,
+                                 hidden_main=args.hidden_main, with_seats=args.with_seats,
+                                 with_northbound=args.with_northbound,
+                                 with_consensus=args.with_consensus,
+                                 window_months=args.window, horizons=args.horizons)
+        elif act == "sector":
+            cmd_capital_profiler(level="sector_etf", code=args.code, date=args.date,
+                                 lookback_days=args.lookback, fmt=args.fmt,
+                                 sector_level=args.sector_level, fetch=args.fetch)
+        elif act == "actor":
+            cmd_smart_money(target=args.name, target_type="seat", mode="full",
+                            window_months=args.window, horizons=args.horizons,
+                            as_json=args.as_json, as_markdown=args.markdown)
+        elif act == "rank":
+            cmd_smart_money(rank=True, window_months=args.window, top_n=args.top,
+                            horizons=args.horizons)
+        elif act == "scan":
+            cmd_smart_money(recent_lhb=True, days=args.days, top_n=args.top,
+                            history_months=args.history_months, horizons=args.horizons,
+                            as_json=args.as_json, as_markdown=args.markdown,
+                            with_capital=args.with_capital, capital_top=args.capital_top)
+        else:
+            print("用法: capital-profiler {stock|sector|actor|rank|scan} ... "
+                  "（-h 查看帮助）")
     elif args.command == "init-hk":
         cmd_init_hk(start=args.start, end=args.end,
                     force=args.force, connect_only=args.connect_only)

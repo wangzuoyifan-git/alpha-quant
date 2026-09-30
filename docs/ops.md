@@ -189,36 +189,7 @@ python3 main.py backtest --strategy etf_momentum --codes 510300 159919  # ETF回
 # 输出：总收益/年化/最大回撤/夏普/胜率/盈亏比 + 基准收益/超额收益(alpha)/beta
 ```
 
-### 资金主体画像（smart-money）
-
-> 描述性行为追踪：识别"谁在买卖"与"他们一贯怎么做"，非预测信号，不构成投资建议。
-> 依赖数据：`top_inst`（席位明细）、`block_trade`（大宗）、`hk_hold`（北向个股持股）。
-> 前置：`update-moneyflow --types top_inst block_trade`；北向持股按需 `update-hk-hold --codes ...` 或加 `--fetch`。
-
-```bash
-# 个股完整三支柱画像（席位身份 + 北向跨期 + 资金合力/分歧）
-python3 main.py smart-money 600721
-python3 main.py smart-money 600721 --window 6            # 回溯6个月
-python3 main.py smart-money 600721 --fetch               # 北向持股缺失时按需联网下载
-python3 main.py smart-money 600721 --mode consensus      # 只看资金合力/分歧
-python3 main.py smart-money 600721 --mode northbound     # 只看北向跨期行为
-python3 main.py smart-money 600721 --markdown            # 输出 Markdown 报告
-python3 main.py smart-money 600721 --json                # 输出原始 JSON
-
-# 按资金主体（席位）画像：上榜频次/累计净买卖/上榜后N日胜率/持有周期/偏好板块
-python3 main.py smart-money 机构专用 --type seat
-python3 main.py smart-money 深股通专用 --type seat --horizons 5,10,20
-
-# 近期活跃资金主体榜（活动名册，非买入清单）
-python3 main.py smart-money --rank --window 3 --top 20
-
-# 盘前：最近龙虎榜标的 + 席位历史画像（本次席位 / 跨股历史画像 / 本股历史其他上榜）
-python3 main.py smart-money --recent-lhb --days 1              # 最近1个龙虎榜披露日
-python3 main.py smart-money --recent-lhb --days 3 --top 10     # 近3日，每股前10席位
-python3 main.py smart-money --recent-lhb --days 1 --markdown   # 输出 Markdown
-python3 main.py smart-money --recent-lhb --days 1 --json       # 输出原始 JSON
-# 注：--history-months 控制席位历史画像回溯窗口，0=全部本地 top_inst（默认0，数据多时略慢）
-```
+> `smart-money` 已并入 `capital-profiler`（actor/rank/scan）；旧命令 `python main.py smart-money ...` 仍可用（别名，会提示）。
 
 ### 席位字典（游资/量化识别）
 
@@ -238,21 +209,43 @@ python3 main.py seat-dict list --label 量化/程序化席位 --top 30
 # 每周脚本 update_weekly.sh 已自动执行 import + build（字典会衰减，定期重估）
 ```
 
-### 资金画像（capital-profiler，Phase 1 个股级）
+### 资金画像（capital-profiler，统一入口）
+
+> 统一入口，子命令：`stock` / `sector` / `actor` / `rank` / `scan`。
+> 描述性行为追踪 + 综合画像，非预测信号，不构成投资建议。
+> 前置：`update-moneyflow --types top_inst block_trade`；北向/ETF 数据按需 `--fetch`。
 
 ```bash
-# 个股资金画像：主导资金 / 反馈性质 / 持续性 / 结构评分 / 资金明细
-python3 main.py capital-profiler profile --code 600519
-python3 main.py capital-profiler profile --code 688256 --date 2026-09-01 --lookback 60
-python3 main.py capital-profiler profile --code 000002 --format json    # JSON 输出
-python3 main.py capital-profiler profile --code 000002 --hidden-main    # 未上榜也给“隐性主力”弱结论
-# 板块/ETF（Phase 2）
-python3 main.py capital-profiler profile --level sector_etf --code 801080 --sector-level L1  # 申万行业
-python3 main.py capital-profiler profile --level sector_etf --code 510300                    # ETF
-python3 main.py capital-profiler profile --level sector_etf --code 510300 --fetch            # ETF 数据缺失时按需联网拉取
+# ── 个股综合画像（主导资金/反馈/持续性/结构评分/资金明细 + 席位×主力一致性 + 日频主力）
+python3 main.py capital-profiler stock --code 600519
+python3 main.py capital-profiler stock --code 688256 --date 2026-09-01 --lookback 60
+python3 main.py capital-profiler stock --code 000002 --format json
+python3 main.py capital-profiler stock --code 000002 --hidden-main          # 未上榜给“隐性主力”弱结论
+python3 main.py capital-profiler stock --code 600519 --with-seats            # 附席位身份与画像
+python3 main.py capital-profiler stock --code 600519 --with-northbound       # 附北向跨期行为
+python3 main.py capital-profiler stock --code 600519 --with-consensus        # 附多源资金合力/分歧
+
+# ── 板块/ETF（Phase 2）
+python3 main.py capital-profiler sector --code 801080 --sector-level L1   # 申万行业
+python3 main.py capital-profiler sector --code 510300                     # ETF
+python3 main.py capital-profiler sector --code 510300 --fetch             # ETF 数据缺失时按需拉取
+
+# ── 资金主体（席位）画像：上榜频次/累计净买卖/上榜后N日胜率/持有周期/偏好板块
+python3 main.py capital-profiler actor --name 机构专用
+python3 main.py capital-profiler actor --name 深股通专用 --horizons 5,10,20
+
+# ── 近期活跃资金主体榜（活动名册，非买入清单）
+python3 main.py capital-profiler rank --window 3 --top 20
+
+# ── 盘前：最近龙虎榜标的 + 席位历史画像（本次席位/跨股画像/本股历史其他上榜）
+python3 main.py capital-profiler scan --days 1                      # 最近1个披露日
+python3 main.py capital-profiler scan --days 3 --top 10             # 近3日，每股前10席位
+python3 main.py capital-profiler scan --days 1 --with-capital --capital-top 10   # 附综合画像
+python3 main.py capital-profiler scan --days 1 --markdown|--json
+
 # 输出含：主导资金/反馈/持续性 + 席位×主力一致性(合力/对倒/隐性吸筹) + 日频主力背景
 # 数据不足时如实返回“无法判断”（S1停牌/S3信号缺席/S4矛盾/S5样本不足）并给建议
-# 设计见 docs/capital_profiler.md；板块/大题为 Phase 2/3
+# 设计见 docs/capital_profiler.md；大题为 Phase 3
 ```
 
 ### 交易辅助
