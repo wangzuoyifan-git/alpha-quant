@@ -533,10 +533,7 @@ def _write_snapshot(result: dict, snapshot_dir: Path) -> None:
     tmp.replace(p)
     files = sorted(snapshot_dir.glob("seat_dictionary_*.json"))
     for old in files[:-SNAPSHOT_KEEP]:
-        try:
-            old.unlink()
-        except OSError:
-            pass
+        old.unlink(missing_ok=True)
 
 
 def list_snapshots() -> list:
@@ -625,3 +622,163 @@ def dictionary_to_rows(result: dict | None = None) -> list:
             return []
         result = json.loads(DICT_PATH.read_text(encoding="utf-8"))
     return result.get("seats", [])
+
+
+# ═══════════════════════════════════════════════════════════════
+# 席位行为画像（单席位深度分析 + 规律总结）
+# ═══════════════════════════════════════════════════════════════
+
+_REASON_CATS = [
+    ("打板", ("涨停", "连板", "无价格涨跌幅限制", "达到15%", "达到20%", "达到10%")),
+    ("换手", ("换手",)),
+    ("涨幅偏离", ("涨幅偏离", "跌幅偏离", "偏离值")),
+    ("振幅/其他", ()),
+]
+
+
+def _reason_category(reason: str) -> str:
+    for cat, kws in _REASON_CATS:
+        if kws and any(k in reason for k in kws):
+            return cat
+    return "振幅/其他"
+
+
+def _ret_stats(rets: list) -> dict:
+    vals = [r for r in rets if r is not None]
+    if not vals:
+        return {"n": 0, "win": None, "avg": None, "median": None,
+                "payoff": None, "expectancy": None}
+    wins = [r for r in vals if r > 0]
+    losses = [r for r in vals if r <= 0]
+    aw = sum(wins) / len(wins) if wins else 0.0
+    al = abs(sum(losses) / len(losses)) if losses else 0.0
+    return {
+        "n": len(vals),
+        "win": round(len(wins) / len(vals), 3),
+        "avg": round(sum(vals) / len(vals), 4),
+        "median": round(float(pd.Series(vals).median()), 4),
+        "payoff": round(aw / al, 2) if al > 0 else None,
+        "expectancy": round(sum(vals) / len(vals), 4),
+    }
+
+
+def seat_behavior(agency: str,
+                  window_months: int = 0,
+                  horizons=(1, 3, 5, 10, 20),
+                  prices: PriceCache | None = None) -> dict:
+    """
+    单席位深度行为画像：收益幅度/盈亏比、特征、触发原因、协同席位、时间衰减 + 规律总结。
+
+    :param window_months: 回溯月数（0=全部本地 top_inst）
+    """
+    prices = prices or PriceCache()
+    import data.store_moneyflow as store_mf
+    from agents.smart_money_agent import classify_seat, load_seat_episodes
+
+    dates = sorted(store_mf.list_dates("top_inst"))
+    end = dates[-1] if dates else datetime.now().strftime("%Y-%m-%d")
+    if window_months and window_months > 0:
+        from agents.smart_money_agent import _window_start
+        start = _window_start(window_months, end)
+    else:
+        start = dates[0] if dates else "2000-01-01"
+
+    eps = load_seat_episodes(start=start, end=end)
+    sub = eps[eps["agency"] == agency].sort_values("date") if not eps.empty else eps
+    info = classify_seat(agency)
+    if sub is None or sub.empty:
+        return {"agency": agency, **info, "available": False, "notes": ["窗口内无该席位上榜记录"]}
+
+    buy = sub[sub["net"] > 0]
+    # 收益统计（净买入 episode）
+    returns = {}
+    for h in horizons:
+        rets = [prices.forward_return(c, d, h) for c, d in zip(buy["code"], buy["date"], strict=False)]
+        returns[f"d{h}"] = _ret_stats(rets)
+
+    # 特征（复用 compute_seat_features，单席位）
+    feat = compute_seat_features(sub, prices=prices, follow_horizons=horizons)
+    f = feat.iloc[0].to_dict() if not feat.empty else {}
+
+    # 触发原因分布
+    from collections import Counter
+    rc = Counter()
+    for lst in sub["reasons"]:
+        for r in (lst or []):
+            rc[_reason_category(str(r))] += 1
+
+    # 协同席位（同 (日期,标的) 同现的其他席位）
+    partners = Counter()
+    keys = set(zip(sub["date"], sub["code"], strict=False))
+    mask = [(d, c) in keys for d, c in zip(eps["date"], eps["code"], strict=False)]
+    others = eps[mask]
+    others = others[others["agency"] != agency]
+    partners = Counter(others["agency"]).most_common(5)
+
+    # 时间衰减：前后半段对比
+    decay = None
+    if len(sub) >= 6:
+        mid = sub.iloc[len(sub) // 2]["date"]
+        old = sub[sub["date"] < mid]
+        new = sub[sub["date"] >= mid]
+        def _w(group):
+            b = group[group["net"] > 0]
+            v = [prices.forward_return(c, d, 5) for c, d in zip(b["code"], b["date"], strict=False)]
+            v = [x for x in v if x is not None]
+            return {"freq": len(group), "win_d5": round(sum(x > 0 for x in v) / len(v), 3) if v else None}
+        decay = {"mid": str(mid), "old": _w(old), "new": _w(new)}
+
+    summary = _behavior_summary(info, f, returns, rc, decay)
+    return {
+        "agency": agency, **info, "available": True,
+        "window": {"start": start, "end": end},
+        "appearances": {"buy": int((sub["net"] > 0).sum()),
+                        "sell": int((sub["net"] < 0).sum()), "total": len(sub)},
+        "cum_net_value": round(float(sub["net"].sum()), 2),
+        "active_days": int(sub["date"].nunique()),
+        "stocks": int(sub["code"].nunique()),
+        "returns": returns,
+        "features": {
+            "dispersion": round(float(f.get("dispersion") or 0), 4),
+            "same_seat_rate": round(float(f.get("same_seat_rate") or 0), 4),
+            "t1_exit_rate": round(float(f.get("t1_exit_rate") or 0), 4),
+        },
+        "reason_dist": dict(rc.most_common()),
+        "partners": [{"agency": a, "count": n} for a, n in partners],
+        "decay": decay,
+        "summary": summary,
+    }
+
+
+def _behavior_summary(info, f, returns, rc, decay) -> list:
+    out = []
+    d1 = returns.get("d1", {})
+    d5 = returns.get("d5", {})
+    t1 = float(f.get("t1_exit_rate") or 0)
+    ssr = float(f.get("same_seat_rate") or 0)
+    disp = float(f.get("dispersion") or 0)
+    if t1 >= 0.3:
+        out.append(f"快进快出特征明显（T+1兑现率 {t1:.0%}）：多为次日了结，非中长线建仓")
+    elif t1 <= 0.1:
+        out.append(f"T+1兑现率低（{t1:.0%}）：上榜后多不快速离场，偏中线或被动持仓")
+    if ssr >= 0.6:
+        out.append(f"买卖同席率 {ssr:.0%} 偏高：存在明显的做T/对冲（量化）特征")
+    if disp >= 0.6:
+        out.append(f"分散度 {disp:.0%} 高：同时参与大量标的，偏程序化/组合型")
+    elif disp <= 0.25 and f:
+        out.append(f"分散度低（{disp:.0%}）：集中在少数标的，偏主动交易")
+    if d1.get("win") is not None and d5.get("win") is not None:
+        if d1["win"] >= 0.55 and d5["win"] < d1["win"] - 0.08:
+            out.append(f"胜率随持有期衰减（1日 {d1['win']:.0%} → 5日 {d5['win']:.0%}）：次日冲高后走弱，偏一日游")
+        if d1["win"] < 0.45 and d5["win"] > d1["win"] + 0.08:
+            out.append("短周期弱、长周期强：可能偏左侧/趋势跟随")
+    if d1.get("avg") is not None:
+        out.append(f"次日平均收益 {d1['avg']*100:+.2f}%，盈亏比 {d1.get('payoff')}（样本 {d1['n']}）")
+    if rc:
+        top = max(rc, key=rc.get)
+        out.append(f"主要触发场景：{top}（{rc[top]} 次）")
+    if decay and decay["new"].get("win_d5") is not None and decay["old"].get("win_d5") is not None:
+        o, n = decay["old"]["win_d5"], decay["new"]["win_d5"]
+        trend = "提升" if n > o + 0.05 else "下降" if n < o - 0.05 else "基本稳定"
+        out.append(f"近期(后半段)5日胜率 {n:.0%} vs 早期 {o:.0%}：{trend}")
+    return out

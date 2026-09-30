@@ -188,6 +188,10 @@
 - 个股画像可用 `--with-seats / --with-northbound / --with-consensus` 嵌入 smart-money 视角；`scan --with-capital --capital-top K` 对前 K 只标的附综合画像。
 - 理由：重复只在外壳，底层本就复用；文件级合并风险大、收益小。
 
+### D34. 席位深度行为画像（2026-09-30）
+- **决策**：新增 `seat_profiler.seat_behavior(agency)`：上榜后各周期收益幅度/中位/盈亏比、行为特征（分散度/买卖同席率/T+1兑现率）、触发场景分布、协同席位、时间衰减，并规则化生成“规律总结”；CLI `capital-profiler actor --name ... --detail`（`--window 0`=全部历史）。
+- 口径：基于龙虎榜上榜 episode 与上榜后价格回看，描述性统计，非预测。
+
 ---
 
 ## 五、待用户回来后确认的开放项

@@ -439,6 +439,7 @@ graph.add_conditional_edges("check_data", route_after_check, {...})
 - 无法判断：S1 停牌 / S2 数据缺失 / S3 信号全缺席 / S4 方向矛盾 / S5 样本不足 / S6 历史不足，均给出原因+建议+部分发现
 - 未上榜：默认走 S3；`--hidden-main` 开启时，主力连续同向（≥3日）给“隐性主力（日频，弱推断）”
 - **Phase 2 板块/ETF**：`level='sector_etf'`（申万行业 801xxx + `--sector-level`，或 ETF 6位）；成员来自 `industry_member` / `index_weight`（ETF→指数）；类别：ETF申赎/板块龙虎榜/板块机构席位/板块两融/北向板块/板块大宗/板块产业资本；权重 ETF0.30/机构0.30/产业0.25/北向0.15。聚合层 `agents/sector_aggregator.py`，数据 `data/store_fund.py` + `data/downloader_fund.py`
+- 深度行为画像：`seat_behavior(agency)`（收益幅度/盈亏比、触发原因分布、协同席位、时间衰减 + 规律总结），CLI `actor --detail`
 - CLI：统一入口 `capital-profiler {stock|sector|actor|rank|scan}`；`smart-money` 保留为别名
 - 依赖：席位字典（`seat_profiler`）为主数据源之一；`level=sector_etf/sector_macro` 为 Phase 2/3 占位
 

@@ -2189,6 +2189,71 @@ def cmd_schedule():
 # ============================================================
 # CLI 入口
 # ============================================================
+
+
+def cmd_seat_behavior(name: str, window_months: int = 0,
+                      horizons: str = "1,3,5,10,20", fmt: str = "text"):
+    """席位行为画像（单席位深度：收益幅度/盈亏比/原因/协同/衰减 + 规律）"""
+    from rich.console import Console
+    from rich.table import Table
+    from rich.panel import Panel
+    from agents.seat_profiler import seat_behavior
+    from agents.smart_money_agent import parse_horizons
+
+    console = Console()
+    r = seat_behavior(name, window_months=window_months, horizons=parse_horizons(horizons))
+    if fmt == "json":
+        import json
+        console.print_json(json.dumps(r, ensure_ascii=False, default=str))
+        return
+    if not r.get("available"):
+        console.print(f"[yellow]{'; '.join(r.get('notes', [])) or '无数据'}[/yellow]")
+        return
+    console.print(Panel(
+        f"[bold cyan]席位行为画像[/bold cyan]  {name}\n"
+        f"身份: {_seat_basis_mark(r['label_basis'])}{r['label']}  "
+        f"窗口: {r['window']['start']}~{r['window']['end']}  "
+        f"上榜: {r['appearances']['total']}（买{r['appearances']['buy']}/卖{r['appearances']['sell']}）  "
+        f"标的: {r['stocks']}  累计净买卖: {r['cum_net_value']/1e8:+.2f}亿",
+        expand=False))
+
+    t = Table(title="上榜后收益（净买入 episode）", border_style="green")
+    for c in ("周期", "样本", "胜率", "平均收益", "中位", "盈亏比"):
+        t.add_column(c)
+    for h in parse_horizons(horizons):
+        d = r["returns"].get(f"d{h}", {})
+        if not d or not d.get("n"):
+            t.add_row(f"{h}日", "0", "-", "-", "-", "-")
+            continue
+        t.add_row(f"{h}日", str(d["n"]),
+                  f"{d['win']:.0%}" if d["win"] is not None else "-",
+                  f"{d['avg']*100:+.2f}%" if d["avg"] is not None else "-",
+                  f"{d['median']*100:+.2f}%" if d["median"] is not None else "-",
+                  str(d["payoff"]))
+    console.print(t)
+
+    f = r["features"]
+    ft = Table(title="行为特征", show_header=False, border_style="blue")
+    ft.add_column("项", style="bold cyan"); ft.add_column("值")
+    ft.add_row("分散度（股票数/次数）", f"{f['dispersion']:.2f}")
+    ft.add_row("买卖同席率（做T/对冲）", f"{f['same_seat_rate']:.2f}")
+    ft.add_row("T+1兑现率（快进快出）", f"{f['t1_exit_rate']:.2f}")
+    if r.get("reason_dist"):
+        ft.add_row("触发场景分布", "，".join(f"{k}:{v}" for k, v in r["reason_dist"].items()))
+    if r.get("partners"):
+        ft.add_row("协同席位(top)", "；".join(f"{p['agency'][:16]}({p['count']})" for p in r["partners"]))
+    if r.get("decay"):
+        dc = r["decay"]
+        ft.add_row("时间衰减", f"后半段(≥{dc['mid']}) 频次{dc['new']['freq']} 5日胜率{dc['new']['win_d5']}"
+                              f" vs 前半段 频次{dc['old']['freq']} 5日胜率{dc['old']['win_d5']}")
+    console.print(ft)
+
+    console.print("[bold]规律总结：[/bold]")
+    for line in r.get("summary", []):
+        console.print(f"  · {line}")
+    console.print("[dim]基于龙虎榜上榜口径与上榜后价格回看，为历史统计描述，非预测。[/dim]")
+
+
 if __name__ == "__main__":
     import argparse
 
@@ -2462,6 +2527,8 @@ if __name__ == "__main__":
     p_cp_actor.add_argument("--name", required=True, help="席位名，如 机构专用 / 某营业部")
     p_cp_actor.add_argument("--window", type=int, default=12, help="回溯月数（默认12）")
     p_cp_actor.add_argument("--horizons", default="5,10,20", help="事后验证窗口（交易日）")
+    p_cp_actor.add_argument("--detail", action="store_true",
+                            help="深度行为画像（收益幅度/盈亏比/触发原因/协同席位/时间衰减 + 规律总结）")
     p_cp_actor.add_argument("--markdown", action="store_true", help="输出 Markdown")
     p_cp_actor.add_argument("--json", dest="as_json", action="store_true", help="输出 JSON")
 
@@ -2684,9 +2751,14 @@ if __name__ == "__main__":
                                  lookback_days=args.lookback, fmt=args.fmt,
                                  sector_level=args.sector_level, fetch=args.fetch)
         elif act == "actor":
-            cmd_smart_money(target=args.name, target_type="seat", mode="full",
-                            window_months=args.window, horizons=args.horizons,
-                            as_json=args.as_json, as_markdown=args.markdown)
+            if args.detail:
+                cmd_seat_behavior(args.name, window_months=args.window,
+                                  horizons=args.horizons,
+                                  fmt=("json" if args.as_json else "text"))
+            else:
+                cmd_smart_money(target=args.name, target_type="seat", mode="full",
+                                window_months=args.window, horizons=args.horizons,
+                                as_json=args.as_json, as_markdown=args.markdown)
         elif act == "rank":
             cmd_smart_money(rank=True, window_months=args.window, top_n=args.top,
                             horizons=args.horizons)

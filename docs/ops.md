@@ -233,6 +233,9 @@ python3 main.py capital-profiler sector --code 510300 --fetch             # ETF 
 # ── 资金主体（席位）画像：上榜频次/累计净买卖/上榜后N日胜率/持有周期/偏好板块
 python3 main.py capital-profiler actor --name 机构专用
 python3 main.py capital-profiler actor --name 深股通专用 --horizons 5,10,20
+# 深度行为画像（收益幅度/盈亏比、触发原因、协同席位、时间衰减 + 规律总结）
+python3 main.py capital-profiler actor --name "开源证券股份有限公司西安西大街证券营业部" --window 0 --detail
+# --detail；--window 0=全部本地历史（默认12个月）
 
 # ── 近期活跃资金主体榜（活动名册，非买入清单）
 python3 main.py capital-profiler rank --window 3 --top 20

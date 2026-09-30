@@ -148,6 +148,37 @@ class TestBuildDictionary:
         assert seats["未上榜营业部"]["label"] == sma.LABEL_HOT
 
 
+class TestSeatBehavior:
+    def test_behavior(self, monkeypatch):
+        import agents.smart_money_agent as sma
+        import data.store_moneyflow as smf
+        eps = pd.DataFrame({
+            "date": ["2026-01-05", "2026-01-06", "2026-02-10", "2026-02-11"],
+            "code": ["000001", "000002", "000001", "000003"],
+            "agency": ["游资甲营业部"] * 4,
+            "buy": [1e8] * 4, "sell": [0.0] * 4, "net": [1e8] * 4,
+            "reasons": [["涨停"], ["换手"], ["涨停"], ["涨幅偏离"]],
+        })
+        monkeypatch.setattr(sma, "load_seat_episodes", lambda start=None, end=None: eps)
+        monkeypatch.setattr(sma, "classify_seat",
+                            lambda a: {"label": sma.LABEL_HOT, "label_basis": "硬标签(数据源)"})
+        monkeypatch.setattr(smf, "list_dates", lambda dt: ["2026-01-05", "2026-02-11"])
+
+        class P:
+            def forward_return(self, c, d, h):
+                return {5: 0.02}.get(h)
+
+            def trading_days_between(self, c, d1, d2):
+                return 1
+
+        r = sp.seat_behavior("游资甲营业部", window_months=0, horizons=(5,), prices=P())
+        assert r["available"] is True
+        assert r["appearances"]["total"] == 4
+        assert r["returns"]["d5"]["n"] == 4
+        assert r["reason_dist"].get("打板") == 2
+        assert any("触发场景" in x for x in r["summary"])
+
+
 class TestClassifyIntegration:
     def test_classify_uses_dictionary(self, tmp_path, monkeypatch):
         p = tmp_path / "seat_dictionary.json"
