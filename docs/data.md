@@ -468,10 +468,13 @@ events 域下载器为函数式接口（非类）：
 from data.downloader_events import init_events, update_events, build_calendar, download_all_corp_events
 
 init_events(year=None)            # E1 日历生成 + E2 企业事件全量下载
-update_events()                   # E1 补充 + E2 近3月增量
+update_events(codes=None)         # E1 补充 + E2 近3月增量（codes=定向更新指定股票）
 build_calendar(year=None)         # 仅生成 E1 定期事件日历
 download_all_corp_events(codes=None, start="2024-01-01", end=None)  # E2 减持/增持/质押/分红/回购
 ```
+
+> E2 为**全市场逐只**拉取（每只 4 接口 + `sleep(0.15)`），全市场约 1.5 小时；受 Tushare 限频（~200 次/分钟），
+> **不调小 sleep**（下调会显著增加限频失败）。补单只用 `update-events --codes ...` 定向更新。
 
 ---
 
