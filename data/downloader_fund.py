@@ -45,6 +45,14 @@ def _to_ts_code(code: str) -> str:
     return f"{code}.SH"
 
 
+def _norm_index_name(s: str) -> str:
+    """归一化指数/基准名称，便于 ETF benchmark ↔ index_basic 名称匹配。"""
+    s = str(s)
+    for t in ("收益率", "×100%", "*100%", "100%", "%", " ", "（", "）", "(", ")", "×", "*"):
+        s = s.replace(t, "")
+    return s.strip()
+
+
 def _get_pro():
     import tushare as ts
     token = os.getenv("TUSHARE_TOKEN", "")
@@ -94,37 +102,36 @@ class FundDownloader:
         if basic is None or basic.empty:
             return {}
 
-        # 指数名 → 代码
-        names = {}
+        # 指数名（归一化）→ 代码 + 首4字分桶（加速模糊匹配）
+        name_map = {}
+        buckets = {}
         for mkt in ("CSI", "SSE", "SZSE", "CNI"):
             try:
                 ib = self.pro().index_basic(market=mkt)
                 if ib is not None and not ib.empty:
-                    for _, r in ib.iterrows():
-                        names[str(r["name"])] = str(r["ts_code"])
+                    for nm, ts_code in zip(ib["name"], ib["ts_code"], strict=False):
+                        n = _norm_index_name(nm)
+                        name_map[n] = str(ts_code)
+                        buckets.setdefault(n[:4], []).append(n)
                 time.sleep(0.2)
             except Exception as e:
                 logger.debug(f"index_basic {mkt} 失败: {e}")
-        all_names = list(names.keys())
 
         out = store.load_etf_index_map() if not save else {}
         for _, r in basic.iterrows():
-            code = str(r["ts_code"])
+            code = str(r["ts_code"]).split(".")[0]
             if code in out:
                 continue
             bench = str(r.get("benchmark") or "")
             if not bench or bench.lower() == "nan":
                 continue
-            clean = (bench.replace("收益率", "").replace("×100%", "")
-                     .replace("*100%", "").replace("%", "").replace(" ", "").strip("（）()×*"))
-            match = None
-            if clean in names:
-                match = clean
-            else:
-                cand = get_close_matches(clean, all_names, n=1, cutoff=0.6)
+            clean = _norm_index_name(bench)
+            match = clean if clean in name_map else None
+            if match is None:
+                cand = get_close_matches(clean, buckets.get(clean[:4], []), n=1, cutoff=0.8)
                 match = cand[0] if cand else None
             if match:
-                out[code] = {"index_code": names[match], "index_name": match,
+                out[code] = {"index_code": name_map[match], "index_name": match,
                              "benchmark": bench}
         if save:
             store.save_etf_index_map(out)

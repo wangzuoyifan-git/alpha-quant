@@ -177,6 +177,10 @@
 - 新增 `data/store_fund.py`（fund 域：basic / share / nav / index_weight / etf_index_map）与 `data/downloader_fund.py`（Tushare `fund_basic`/`fund_share`/`fund_nav`/`index_weight`/`index_basic`）。
 - 聚合层 `agents/sector_aggregator.py`；画像扩展 `agents/capital_profiler.py` 的 `level='sector_etf'`。
 
+### D32. ETF 画像按需拉取（--fetch，2026-09-30）
+- **决策**：`capital-profiler --level sector_etf --fetch` 时，ETF 数据缺失自动拉取（ETF列表/映射 + fund_share/fund_nav + index_weight）；默认关闭（只用本地），与 `smart-money --fetch` 一致。
+- 实现：`_ensure_etf_data()`（缺失才拉）；`etf_index_map` 键统一为 6 位 ETF 代码。
+
 ---
 
 ## 五、待用户回来后确认的开放项

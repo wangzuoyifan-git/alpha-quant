@@ -1273,7 +1273,8 @@ def cmd_seat_dict(action: str = "list", window: int = 6, min_appearances: int = 
 def cmd_capital_profiler(action: str = "profile", level: str = "stock",
                          code: str = None, date: str = None,
                          lookback_days: int = 60, fmt: str = "text",
-                         hidden_main: bool = False, sector_level: str = "L1"):
+                         hidden_main: bool = False, sector_level: str = "L1",
+                         fetch: bool = False):
     """资金画像（Phase 1：个股级）"""
     from rich.console import Console
     from agents.capital_profiler import profile, format_text
@@ -1286,7 +1287,7 @@ def cmd_capital_profiler(action: str = "profile", level: str = "stock",
         console.print("[yellow]请提供 --code（6位股票代码）[/yellow]")
         return
     report = profile(level=level, code=code, date=date, lookback_days=lookback_days,
-                     allow_hidden_main=hidden_main, sector_level=sector_level)
+                     allow_hidden_main=hidden_main, sector_level=sector_level, fetch=fetch)
     if fmt == "json":
         import json
         console.print_json(json.dumps(report, ensure_ascii=False, default=str))
@@ -2366,6 +2367,8 @@ if __name__ == "__main__":
     p_cp.add_argument("--code", default=None, help="股票代码（如 688256）")
     p_cp.add_argument("--date", default=None, help="分析日期 YYYY-MM-DD（默认最新）")
     p_cp.add_argument("--lookback", type=int, default=60, help="回看交易日（默认60）")
+    p_cp.add_argument("--fetch", action="store_true",
+                      help="ETF 画像数据缺失时按需联网拉取（fund_share/fund_nav/index_weight）")
     p_cp.add_argument("--sector-level", dest="sector_level", default="L1",
                       choices=["L1", "L2", "L3"],
                       help="申万行业层级（--level sector_etf 且 --code 为申万代码时用，默认 L1）")
@@ -2549,7 +2552,8 @@ if __name__ == "__main__":
     elif args.command == "capital-profiler":
         cmd_capital_profiler(action=args.action, level=args.level, code=args.code,
                              date=args.date, lookback_days=args.lookback, fmt=args.fmt,
-                             hidden_main=args.hidden_main, sector_level=args.sector_level)
+                             hidden_main=args.hidden_main, sector_level=args.sector_level,
+                             fetch=args.fetch)
     elif args.command == "init-hk":
         cmd_init_hk(start=args.start, end=args.end,
                     force=args.force, connect_only=args.connect_only)

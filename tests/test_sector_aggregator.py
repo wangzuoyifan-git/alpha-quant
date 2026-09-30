@@ -103,3 +103,13 @@ class TestSectorProfile:
         r = cp.profile("sector_macro", "tech")
         assert r["answer"]["status"] == "undetermined"
         assert "Phase 3" in r["answer"]["undetermined_reason"]
+
+    def test_fetch_triggers_on_demand(self, monkeypatch):
+        called = {"n": 0}
+        monkeypatch.setattr(cp, "_ensure_etf_data", lambda code: called.__setitem__("n", called["n"] + 1))
+        monkeypatch.setattr(sa, "etf_members", lambda c: {})
+        cp.profile("sector_etf", "510300", fetch=True, lookback_days=60)
+        assert called["n"] == 1
+        called["n"] = 0
+        cp.profile("sector_etf", "510300", fetch=False, lookback_days=60)
+        assert called["n"] == 0

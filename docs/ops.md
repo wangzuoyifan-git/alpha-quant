@@ -249,6 +249,7 @@ python3 main.py capital-profiler profile --code 000002 --hidden-main    # 未上
 # 板块/ETF（Phase 2）
 python3 main.py capital-profiler profile --level sector_etf --code 801080 --sector-level L1  # 申万行业
 python3 main.py capital-profiler profile --level sector_etf --code 510300                    # ETF
+python3 main.py capital-profiler profile --level sector_etf --code 510300 --fetch            # ETF 数据缺失时按需联网拉取
 # 输出含：主导资金/反馈/持续性 + 席位×主力一致性(合力/对倒/隐性吸筹) + 日频主力背景
 # 数据不足时如实返回“无法判断”（S1停牌/S3信号缺席/S4矛盾/S5样本不足）并给建议
 # 设计见 docs/capital_profiler.md；板块/大题为 Phase 2/3

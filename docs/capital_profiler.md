@@ -211,7 +211,7 @@ main.py  capital-profiler profile --level stock --code ... --date ... [--format 
 - **反馈**：板块指数/ETF 收益 vs 成员股资金流聚合（`moneyflow/stock.net_mf_amount` 求和）。
 - **无法判断**：沿用 S1~S6（板块版；无成分映射 → S2）。
 - **数据落位**：`data/store_fund.py`（basic/share/nav/index_weight/etf_index_map）+ `data/downloader_fund.py`；聚合层 `agents/sector_aggregator.py`。
-- **CLI**：`python main.py capital-profiler profile --level sector_etf --code 801080 [--sector-level L1]` / `--code 510300`。
+- **CLI**：`python main.py capital-profiler profile --level sector_etf --code 801080 [--sector-level L1]` / `--code 510300`；`--fetch` 表示 ETF 数据缺失时按需联网拉取（份额/净值/指数权重）。
 
 ---
 

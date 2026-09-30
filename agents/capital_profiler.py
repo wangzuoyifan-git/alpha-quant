@@ -439,11 +439,12 @@ def _undetermined(code6, name, date, lookback, scenario, partial=None):
 
 def profile(level: str = "stock", code: str | None = None, date: str | None = None,
             lookback_days: int = LOOKBACK_DEFAULT,
-            allow_hidden_main: bool = False, sector_level: str = "L1") -> dict:
+            allow_hidden_main: bool = False, sector_level: str = "L1",
+            fetch: bool = False) -> dict:
     code6 = _norm_code6(code or "")
     name = _stock_name(code6) if code6 else ""
     if level == "sector_etf":
-        return _sector_profile(code6, date, lookback_days, sector_level)
+        return _sector_profile(code6, date, lookback_days, sector_level, fetch=fetch)
     if level == "sector_macro":
         r = _undetermined(code6, name, date or "", lookback_days, "S2")
         r["warnings"] = ["大类画像为 Phase 3，尚未实现"]
@@ -742,13 +743,37 @@ def _sector_price(code6: str, is_etf: bool, date: str):
     return df
 
 
+def _ensure_etf_data(code6: str) -> None:
+    """按需拉取 ETF 数据：ETF列表/映射 + 份额/净值 + 其跟踪指数权重（缺失时才拉）。"""
+    import data.store_fund as sf
+    from data.downloader_fund import FundDownloader
+
+    dl = FundDownloader()
+    try:
+        if not sf.exists("basic"):
+            dl.init_basic()
+        emap = sf.load_etf_index_map()
+        if not emap or code6 not in emap:
+            emap = dl.build_etf_index_map()
+        if not sf.exists("share", code6) or not sf.exists("nav", code6):
+            dl.fetch_share(code6)
+            dl.fetch_nav(code6)
+        idx = (emap.get(code6) or {}).get("index_code")
+        if idx and not sf.exists("index_weight", idx.split(".")[0]):
+            dl.fetch_index_weight(idx)
+    except Exception as e:
+        logger.debug(f"ETF 按需拉取失败 {code6}: {e}")
+
+
 def _sector_profile(code6: str, date: str | None, lookback_days: int,
-                    sector_level: str = "L1") -> dict:
+                    sector_level: str = "L1", fetch: bool = False) -> dict:
     import agents.sector_aggregator as sa
 
     if not code6:
         return _undetermined("", "", date or "", lookback_days, "S2")
     is_etf = _is_etf_code(code6)
+    if is_etf and fetch:
+        _ensure_etf_data(code6)
     if is_etf:
         members_w = sa.etf_members(code6)
         members = set(members_w.keys())
