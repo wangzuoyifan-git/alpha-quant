@@ -41,3 +41,12 @@ def test_fetch_repurchase_empty(monkeypatch):
             return pd.DataFrame()
     monkeypatch.setattr(de, "_get_pro", lambda: _Empty())
     assert de._fetch_repurchase("000001.SZ", "2026-08-01", "2026-09-30") == []
+
+
+def test_update_events_codes_normalize(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(de, "build_calendar", lambda year=None: [])
+    monkeypatch.setattr(de, "download_all_corp_events",
+                        lambda codes=None, start=None, end=None: captured.update(codes=codes) or {})
+    de.update_events(codes=["000001", "600519"])
+    assert captured["codes"] == ["000001.SZ", "600519.SH"]

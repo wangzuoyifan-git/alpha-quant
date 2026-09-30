@@ -343,7 +343,7 @@ def download_all_corp_events(codes: list = None,
             save_corp_events(code6, events)
         time.sleep(0.15)
 
-        if (i + 1) % 500 == 0:
+        if (i + 1) % 100 == 0 or (i + 1) == total:
             _log(f"  E2进度: {i+1}/{total}  "
                  f"减持{result['reduce']} 质押{result['pledge']} 分红{result['dividend']} "
                  f"回购{result['buyback']} 失败{result['fail']}")
@@ -544,8 +544,11 @@ def init_events(year: int = None) -> None:
     _log("Events 域初始化完成！")
 
 
-def update_events() -> None:
-    """增量更新事件数据"""
+def update_events(codes: list = None) -> None:
+    """增量更新事件数据。
+
+    :param codes: 指定股票代码（带/不带后缀均可）；None 表示全市场。
+    """
     _log("Events 域增量更新...")
 
     # E1：每季度补充下次季度的宏观事件（预发布确认日期）
@@ -556,10 +559,16 @@ def update_events() -> None:
     build_calendar(year)
     build_calendar(year + 1)
 
-    # E2：下载最近3个月的增减持/分红
-    _log("[2/2] 更新 E2 企业事件（近3月）...")
+    # E2：下载最近3个月的增减持/分红/回购
     start_90 = (today - timedelta(days=90)).strftime(_FMT_DASH)
     end_today = today.strftime(_FMT_DASH)
-    download_all_corp_events(start=start_90, end=end_today)
+    if codes:
+        codes = [c if "." in str(c) else
+                 (f"{c}.SH" if str(c).startswith(("6", "9")) else f"{c}.SZ")
+                 for c in codes]
+        _log(f"[2/2] 更新 E2 企业事件（近3月，指定 {len(codes)} 只）...")
+    else:
+        _log("[2/2] 更新 E2 企业事件（近3月，全市场）...")
+    download_all_corp_events(codes=codes, start=start_90, end=end_today)
 
     _log("Events 域更新完成！")

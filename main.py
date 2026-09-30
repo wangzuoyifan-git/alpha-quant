@@ -832,10 +832,10 @@ def cmd_update_macro():
     MacroDownloader().update_db()
 
 
-def cmd_update_events():
-    """增量更新 events 域（E1 日历 + E2 企业事件）"""
+def cmd_update_events(codes: list | None = None):
+    """增量更新 events 域（E1 日历 + E2 企业事件；--codes 可定向更新指定股票）"""
     from data.downloader_events import update_events
-    update_events()
+    update_events(codes=codes)
 
 
 def cmd_init_hk(start: str = "2020-01-02", end: str | None = None,
@@ -2256,7 +2256,10 @@ if __name__ == "__main__":
     sub.add_parser("update-macro", help="增量更新 macro 域（含汇率与境外指标）")
 
     # update-events
-    sub.add_parser("update-events", help="增量更新 events 域（E1 日历 + E2 企业事件）")
+    p_upd_ev = sub.add_parser("update-events",
+                              help="增量更新 events 域（E1 日历 + E2 减持/增持/质押/分红/回购）")
+    p_upd_ev.add_argument("--codes", nargs="*", default=None,
+                          help="只更新指定股票（如 --codes 000001 600519），默认全市场（约1.5h）")
 
     # init-moneyflow
     p_init_mf = sub.add_parser("init-moneyflow", help="初始化 moneyflow 域（资金流与情绪）")
@@ -2494,7 +2497,7 @@ if __name__ == "__main__":
     elif args.command == "update-macro":
         cmd_update_macro()
     elif args.command == "update-events":
-        cmd_update_events()
+        cmd_update_events(codes=args.codes)
     elif args.command == "init-moneyflow":
         cmd_init_moneyflow(
             start=args.start,

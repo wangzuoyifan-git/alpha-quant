@@ -68,7 +68,8 @@ python3 main.py init-fundamental                  # 季频财务数据（2024起
 python3 main.py init-fundamental --start-year 2022
 python3 main.py init-macro                        # 宏观经济数据
 python3 main.py update-macro                      # 增量更新宏观（含汇率/境外指标）
-python3 main.py update-events                     # 增量更新事件域（E1 日历 + E2 减持/增持/质押/分红/回购）
+python3 main.py update-events                     # 增量更新事件域（E1 日历 + E2 减持/增持/质押/分红/回购；全市场约1.5h）
+python3 main.py update-events --codes 000001 600519   # 只更新指定股票（秒级，常用于补某只）
 python3 main.py init-moneyflow                    # 资金流与情绪（stock 2010起，其余 2024起）
 python3 main.py init-moneyflow --types stock      # 只下载个股资金流
 python3 main.py update-moneyflow                  # 增量更新 moneyflow 域
