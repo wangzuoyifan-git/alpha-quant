@@ -1296,7 +1296,7 @@ def cmd_capital_profiler(action: str = "profile", level: str = "stock",
 
 
 def cmd_update_all():
-    """更新所有数据域（A股/港股 K线、meta、fundamental、factor、macro、moneyflow、events、估值）"""
+    """更新所有数据域（A股/港股 K线、meta、fundamental、factor、macro、moneyflow、events、fund、估值）"""
     logger.info("开始全域增量更新...")
 
     def _run(label: str, fn):
@@ -1306,7 +1306,7 @@ def cmd_update_all():
         except Exception as e:
             print(f"  {label} 跳过: {e}")
 
-    _run("[1/13] 更新 A 股 K 线数据", cmd_update)
+    _run("[1/14] 更新 A 股 K 线数据", cmd_update)
 
     from data.downloader_hk import HKDownloader
     from data.downloader_meta import MetaDownloader
@@ -1314,19 +1314,20 @@ def cmd_update_all():
     from data.downloader_factor import FactorDownloader
     from data.downloader_macro import MacroDownloader
 
-    _run("[2/13] 更新港股 K 线数据",
+    _run("[2/14] 更新港股 K 线数据",
          lambda: HKDownloader(connect_only=True).update_db())
-    _run("[3/13] 更新 meta 域", lambda: MetaDownloader().update_db())
-    _run("[4/13] 更新 fundamental 域", lambda: FundamentalDownloader().update_db())
-    _run("[5/13] 更新 factor 域", lambda: FactorDownloader().update_db())
-    _run("[6/13] 更新 macro 域", lambda: MacroDownloader().update_db())
-    _run("[7/13] 更新 moneyflow 域", cmd_update_moneyflow)
-    _run("[8/13] 更新 events 域", cmd_update_events)
-    _run("[9/13] 更新港股估值（PE/PB/PCF）", cmd_update_hk_valuation)
-    _run("[10/13] 更新港股资金流", cmd_update_hk_moneyflow)
-    _run("[11/13] 更新港股分红事件", cmd_update_hk_events)
-    _run("[12/13] 更新港股财务", cmd_update_hk_financials)
-    _run("[13/13] 补充 A 股 PCF", cmd_update_cn_pcf)
+    _run("[3/14] 更新 meta 域", lambda: MetaDownloader().update_db())
+    _run("[4/14] 更新 fundamental 域", lambda: FundamentalDownloader().update_db())
+    _run("[5/14] 更新 factor 域", lambda: FactorDownloader().update_db())
+    _run("[6/14] 更新 macro 域", lambda: MacroDownloader().update_db())
+    _run("[7/14] 更新 moneyflow 域", cmd_update_moneyflow)
+    _run("[8/14] 更新 events 域", cmd_update_events)
+    _run("[9/14] 更新港股估值（PE/PB/PCF）", cmd_update_hk_valuation)
+    _run("[10/14] 更新港股资金流", cmd_update_hk_moneyflow)
+    _run("[11/14] 更新港股分红事件", cmd_update_hk_events)
+    _run("[12/14] 更新港股财务", cmd_update_hk_financials)
+    _run("[13/14] 补充 A 股 PCF", cmd_update_cn_pcf)
+    _run("[14/14] 更新 fund 域（ETF列表+映射）", lambda: cmd_update_fund())
 
     logger.info("全域增量更新完成！")
 
@@ -2425,7 +2426,7 @@ if __name__ == "__main__":
                            help="指定股票代码（默认全市场，约 1 小时）")
 
     # update-all
-    sub.add_parser("update-all", help="更新所有数据域（A股/港股 K线、meta、fundamental、factor、macro、moneyflow、events、估值）")
+    sub.add_parser("update-all", help="更新所有数据域（A股/港股 K线、meta、fundamental、factor、macro、moneyflow、events、fund、估值）")
 
     # inspect
     p_ins = sub.add_parser("inspect", help="数据直查工具（K线/个股资金流/行业资金流/宏观）")

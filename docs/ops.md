@@ -87,7 +87,7 @@ python3 main.py update-fund                       # Phase2：ETF 列表 + ETF→
 python3 main.py update-fund --codes 510300 159915  # 指定 ETF 份额/净值/指数权重
 
 # 全域更新
-python3 main.py update-all                        # 全域：A股/港股K线+估值、meta、fundamental、factor、macro、moneyflow、events、A股PCF（耗时长）
+python3 main.py update-all                        # 全域：A股/港股K线+估值、meta、fundamental、factor、macro、moneyflow、events、A股PCF、fund（耗时长）
 ```
 
 ### 数据直查（inspect）
@@ -431,9 +431,9 @@ scripts/update_daily.sh
 
 ```bash
 scripts/update_weekly.sh
-# 执行：meta 域 update_db → macro 域 update_db（含汇率/境外，日频数据兜底）
-#       → 港股财务 update-hk-financials（约1h） → A股 PCF update-cn-pcf（约1-1.5h）
-# 注：events 域在每日脚本中更新；单步失败不中断，末尾汇总；带 flock 并发锁
+# 执行：[1]meta → [2]macro → [3]港股财务(约1h) → [4]A股PCF(约1-1.5h)
+#       → [5]seat-dict import → [6]seat-dict build → [7]fund 域（ETF列表+映射）
+# 注：events 域在每日脚本中更新；ETF 份额/净值按需 update-fund --codes；单步失败不中断；带 flock
 ```
 
 ### 每季度（季报披露后，约1月/4月/8月/10月）
