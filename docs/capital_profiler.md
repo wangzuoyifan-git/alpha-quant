@@ -174,8 +174,8 @@ main.py  capital-profiler profile --level stock --code ... --date ... [--format 
 
 | 阶段 | 交付 | 依赖 | 状态 |
 |---|---|---|---|
-| **Phase 1** | 个股级画像 + CLI + 无法判断 | top_inst/席位字典/margin/hk_hold/block_trade/events/market | ✅ 本次实现 |
-| Phase 2 | 板块/ETF 画像 | ETF 成分权重 + ETF 申赎数据 | 待数据 |
+| **Phase 1** | 个股级画像 + CLI + 无法判断 | top_inst/席位字典/margin/hk_hold/block_trade/events/market | ✅ 已实现 |
+| **Phase 2** | 板块/ETF 画像 | 申万成分 + `index_weight` 权重 + `fund_share`/`fund_nav` | ✅ 已实现 |
 | Phase 3 | 大类画像 + IC/IR 评估 | 大类映射 + 历史积累 | 待开发 |
 | Phase 4 | 监控 + 阈值自适应 | Phase 3 | 待开发 |
 
@@ -191,7 +191,31 @@ main.py  capital-profiler profile --level stock --code ... --date ... [--format 
 
 ---
 
-## 八、免责声明
+## 八、Phase 2：板块 / ETF 资金画像
+
+- **输入**：`level='sector_etf'`，`code` 支持申万行业代码（801xxx）+ `--sector-level L1/L2/L3`，或 6 位 ETF 代码。
+- **成员映射**：
+  - 申万：`data/meta/industry_member`（股票→L1/L2/L3）。
+  - ETF：`fund/etf_index_map.json`（ETF→跟踪指数）→ Tushare `index_weight`（指数成分权重，月度）；降级 `etf_config.sw_l2_codes`。
+- **板块资金类别**（聚合个股级）：
+  | 类别 | 口径 | 阈值 |
+  |---|---|---|
+  | ETF申赎 `etf_flow` | Δ份额×净值（`fund_share`×`fund_nav.adj_nav`） | 5亿 |
+  | 板块龙虎榜 `sector_lhb` | 板块内个股龙虎榜净额求和 | 10亿 |
+  | 板块机构席位 `sector_institutional` | 板块内机构专用席位净额 | 10亿 |
+  | 板块两融 `sector_margin` | 成员融资余额首末变动率 | 2% |
+  | 北向板块配置 `northbound_sector` | 成员 hk_hold 持股比例变动求和 | 5pct |
+  | 板块大宗 `sector_block` | 板块内机构大宗净额 | 1亿 |
+  | 板块产业资本 `sector_industrial` | 板块内回购/增持金额求和 | 20亿 |
+- **结构评分权重**（reference 10.2）：ETF 0.30 / 机构 0.30 / 产业 0.25 / 北向 0.15（按可用维度重归一）。
+- **反馈**：板块指数/ETF 收益 vs 成员股资金流聚合（`moneyflow/stock.net_mf_amount` 求和）。
+- **无法判断**：沿用 S1~S6（板块版；无成分映射 → S2）。
+- **数据落位**：`data/store_fund.py`（basic/share/nav/index_weight/etf_index_map）+ `data/downloader_fund.py`；聚合层 `agents/sector_aggregator.py`。
+- **CLI**：`python main.py capital-profiler profile --level sector_etf --code 801080 [--sector-level L1]` / `--code 510300`。
+
+---
+
+## 九、免责声明
 
 > 本画像基于公开数据与规则化分析生成，仅供研究参考，不构成任何投资建议。
 > 席位/资金标签为规则匹配或聚类推断，非官方认定。

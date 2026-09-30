@@ -112,9 +112,9 @@ class TestUndetermined:
         assert "矛盾" in r["answer"]["undetermined_reason"]
 
     def test_level_stub(self):
-        r = cp.profile("sector_etf", "512760")
+        r = cp.profile("sector_macro", "tech")
         assert r["answer"]["status"] == "undetermined"
-        assert "尚未实现" in r["answer"]["undetermined_reason"]
+        assert "Phase 3" in r["answer"]["undetermined_reason"]
 
 
 class TestFeedback:

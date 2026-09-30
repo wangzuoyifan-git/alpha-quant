@@ -351,13 +351,19 @@ def _pre_post_main(episodes: pd.DataFrame, prices: pd.DataFrame, flow: pd.Series
 # 主导资金 / 持续性 / 评分
 # ═══════════════════════════════════════════════════════════════
 
-def _dominant(details: dict) -> tuple:
-    """返回 (category, direction) 或 (None, None)。按“超阈强度”排序。"""
-    thr = {"hot_money": THR_LHB, "quant": THR_LHB, "institutional": THR_LHB,
-           "northbound": THR_NORTH, "margin": THR_MARGIN,
-           "industrial_capital": THR_INDUSTRIAL}
+def _dominant(details: dict, cats=None, thr: dict | None = None) -> tuple:
+    """返回 (category, direction) 或 (None, None)。按“超阈强度”排序。
+
+    cats/thr 可定制（板块画像传入板块类别与阈值）；默认个股类别。
+    """
+    if cats is None:
+        cats = _ORDER
+    if thr is None:
+        thr = {"hot_money": THR_LHB, "quant": THR_LHB, "institutional": THR_LHB,
+               "northbound": THR_NORTH, "margin": THR_MARGIN,
+               "industrial_capital": THR_INDUSTRIAL}
     best, best_strength, best_dir = None, 0.0, None
-    for cat in _ORDER:
+    for cat in cats:
         d = details.get(cat) or {}
         if d.get("direction") not in ("buy", "sell"):
             continue
@@ -433,14 +439,16 @@ def _undetermined(code6, name, date, lookback, scenario, partial=None):
 
 def profile(level: str = "stock", code: str | None = None, date: str | None = None,
             lookback_days: int = LOOKBACK_DEFAULT,
-            allow_hidden_main: bool = False) -> dict:
+            allow_hidden_main: bool = False, sector_level: str = "L1") -> dict:
     code6 = _norm_code6(code or "")
     name = _stock_name(code6) if code6 else ""
-    if level != "stock":
+    if level == "sector_etf":
+        return _sector_profile(code6, date, lookback_days, sector_level)
+    if level == "sector_macro":
         r = _undetermined(code6, name, date or "", lookback_days, "S2")
-        r["warnings"] = [f"{level} 画像尚未实现（Phase 2/3），当前仅支持 level=stock"]
-        r["answer"]["undetermined_reason"] = f"{level} 画像尚未实现"
-        r["answer"]["suggestions"] = ["当前仅实现个股级（Phase 1）", "板块/大期待 Phase 2/3"]
+        r["warnings"] = ["大类画像为 Phase 3，尚未实现"]
+        r["answer"]["undetermined_reason"] = "sector_macro 画像尚未实现（Phase 3）"
+        r["answer"]["suggestions"] = ["当前已支持个股（Phase 1）与板块/ETF（Phase 2）"]
         return r
     if not code6:
         return _undetermined("", "", date or "", lookback_days, "S2")
@@ -636,7 +644,11 @@ def format_text(report: dict) -> str:
     """人类可读文本报告。"""
     m = report["meta"]
     a = report["answer"]
-    lines = ["=" * 60, f"  个股资金画像 | {m.get('name')}（{m.get('code')}） | {m.get('date')}", "=" * 60]
+    title = "个股资金画像" if m.get("level") == "stock" else "板块/ETF资金画像"
+    extra = f"｜成分 {m.get('members')} 只" if m.get("members") else ""
+    lines = ["=" * 60,
+             f"  {title} | {m.get('name')}（{m.get('code')}） | {m.get('date')}{extra}",
+             "=" * 60]
     lines.append(f"【核心结论】状态：{'已判定' if a['status'] == 'resolved' else '无法判断'}")
     if a["status"] == "resolved":
         lines.append(f"  主导资金：{a['dominant_capital']}")
@@ -650,7 +662,8 @@ def format_text(report: dict) -> str:
     lines.append("")
     lines.append("【资金明细】")
     for cat, d in (report.get("capital_details") or {}).items():
-        lines.append(f"  {_CAT_NAME.get(cat, cat):<8} {d.get('direction'):<7} {d.get('note') or ''}")
+        cname = _CAT_NAME.get(cat) or _SECTOR_CAT.get(cat) or cat
+        lines.append(f"  {cname:<8} {d.get('direction'):<7} {d.get('note') or ''}")
     mf = report.get("main_flow_daily") or {}
     if mf.get("available"):
         lines.append("")
@@ -675,3 +688,213 @@ def format_text(report: dict) -> str:
     lines.append("")
     lines.append(report.get("disclaimer", DISCLAIMER))
     return "\n".join(lines)
+
+
+# ═══════════════════════════════════════════════════════════════
+# Phase 2：板块 / ETF 画像
+# ═══════════════════════════════════════════════════════════════
+
+_SECTOR_CAT = {
+    "etf_flow": "ETF申赎",
+    "sector_lhb": "板块龙虎榜",
+    "sector_institutional": "板块机构席位",
+    "sector_margin": "板块两融",
+    "northbound_sector": "北向板块配置",
+    "sector_block": "板块大宗",
+    "sector_industrial": "板块产业资本",
+}
+_THR_SECTOR = {
+    "etf_flow": 5e8, "sector_lhb": 1e9, "sector_institutional": 1e9,
+    "sector_margin": 0.02, "northbound_sector": 5.0, "sector_block": 1e8,
+    "sector_industrial": 2e9,
+}
+# 板块结构评分权重（reference 10.2）
+_SECTOR_WEIGHTS = {"etf_flow": 0.30, "sector_institutional": 0.30,
+                   "sector_industrial": 0.25, "northbound_sector": 0.15}
+_SECTOR_PERSIST = {"etf_flow": "长（1月+）", "sector_lhb": "短（1-3日）",
+                   "sector_institutional": "中（1-2周）", "sector_margin": "中（1-2周）",
+                   "northbound_sector": "中~长（2周-1月）", "sector_block": "短（1-3日）",
+                   "sector_industrial": "长（1月+）"}
+
+
+def _is_etf_code(code6: str) -> bool:
+    return len(code6) == 6 and code6[:2] in ("15", "16", "51", "52", "56", "58")
+
+
+def _is_sw_code(code6: str) -> bool:
+    return len(code6) == 6 and code6.startswith("801")
+
+
+def _sector_mk(cat, val, note="", conf=0.75):
+    return {"net_buy": val, "direction": _direction(val, _THR_SECTOR.get(cat, 0)),
+            "proxy_metric": _SECTOR_CAT.get(cat, cat), "confidence": conf, "note": note}
+
+
+def _sector_price(code6: str, is_etf: bool, date: str):
+    if is_etf:
+        return store.load(code6, asset_type="etf", market="cn", end=date)
+    import data.store_meta as sm
+    df = sm.load("sw_index", code=code6)
+    if df is None or df.empty:
+        return None
+    if date:
+        df = df[df.index <= pd.Timestamp(date)]
+    return df
+
+
+def _sector_profile(code6: str, date: str | None, lookback_days: int,
+                    sector_level: str = "L1") -> dict:
+    import agents.sector_aggregator as sa
+
+    if not code6:
+        return _undetermined("", "", date or "", lookback_days, "S2")
+    is_etf = _is_etf_code(code6)
+    if is_etf:
+        members_w = sa.etf_members(code6)
+        members = set(members_w.keys())
+        sname = sa.sector_name(code6)
+        stype = "etf"
+    else:
+        members_l = sa.sector_members(code6, level=sector_level)
+        members = set(members_l)
+        sname = sa.sector_name(code6)
+        stype = "sw"
+
+    prices = _sector_price(code6, is_etf, date)
+    if prices is None or prices.empty:
+        r = _undetermined(code6, sname, date or "", lookback_days, "S1")
+        r["meta"]["level"] = "sector_etf"
+        return r
+    prices = prices.sort_index()
+    eff = prices.tail(lookback_days)
+    if len(eff) < MIN_TRADING_DAYS:
+        r = _undetermined(code6, sname, date or "", lookback_days, "S5")
+        r["meta"]["level"] = "sector_etf"
+        return r
+    if not members:
+        r = _undetermined(code6, sname, date or "", lookback_days, "S2")
+        r["meta"]["level"] = "sector_etf"
+        r["answer"]["undetermined_reason"] = "板块无成分股映射（缺 ETF→指数权重 或 申万成员）"
+        r["answer"]["suggestions"] = ["运行 fund 数据下载或检查申万成分数据"]
+        return r
+    start = eff.index.min().strftime("%Y-%m-%d")
+    end = eff.index.max().strftime("%Y-%m-%d")
+
+    details = {}
+    lhb = sa.aggregate_lhb(members, start, end)
+    details["sector_lhb"] = _sector_mk("sector_lhb", lhb["lhb_total"] or None,
+                                       f"板块龙虎榜净额（{lhb['n']}条）")
+    details["sector_institutional"] = _sector_mk("sector_institutional",
+                                                 lhb["institutional"] or None,
+                                                 "板块内机构专用席位净额")
+    marg = sa.aggregate_margin(sorted(members), start, end)
+    details["sector_margin"] = _sector_mk("sector_margin", marg["change_rate"],
+                                          f"融资余额变动（{marg['members']}只）")
+    blk = sa.aggregate_block(members, start, end)
+    details["sector_block"] = _sector_mk("sector_block", blk["inst_net"],
+                                         f"机构大宗净额（{blk['n']}笔）")
+    ind = sa.aggregate_industrial(sorted(members), start, end)
+    details["sector_industrial"] = _sector_mk("sector_industrial", ind["amount"] or None,
+                                              f"回购/增持金额（{ind['n']}条）")
+    nb = sa.aggregate_northbound(sorted(members), end)
+    details["northbound_sector"] = _sector_mk("northbound_sector", nb["ratio_change"],
+                                              f"北向持股比例变动（{nb['members']}只，季度）")
+    if is_etf:
+        ef = sa.etf_flow(code6, start, end)
+        details["etf_flow"] = _sector_mk("etf_flow", ef["net_amount"],
+                                         f"ETF申赎近似（Δ份额×净值，{ef['days']}日）")
+    else:
+        details["etf_flow"] = {"net_buy": None, "direction": "absent",
+                               "proxy_metric": "ETF申赎", "confidence": 0.0,
+                               "note": "申万行业无对应 ETF 申赎"}
+
+    feedback = _sector_feedback(code6, is_etf, eff, sorted(members))
+    dom_cat, dom_dir = _dominant(details, cats=list(_SECTOR_CAT), thr=_THR_SECTOR)
+
+    available = sum(1 for c in _SECTOR_CAT if (details.get(c, {}).get("net_buy") is not None))
+    active = [c for c in _SECTOR_CAT if details.get(c, {}).get("direction") in ("buy", "sell")]
+    buys = [c for c in active if details[c]["direction"] == "buy"]
+    sells = [c for c in active if details[c]["direction"] == "sell"]
+    partial = {c: (details.get(c) or {}).get("note") or _SECTOR_CAT[c] for c in _SECTOR_CAT}
+
+    if not active:
+        r = _undetermined(code6, sname, date or "", lookback_days, "S3", partial)
+        r["meta"]["level"] = "sector_etf"
+        r["capital_details"] = details
+        return r
+    if buys and sells:
+        r = _undetermined(code6, sname, date or "", lookback_days, "S4", partial)
+        r["meta"]["level"] = "sector_etf"
+        r["capital_details"] = details
+        r["data_quality"]["completeness"] = round(available / len(_SECTOR_CAT), 2)
+        return r
+    if dom_cat is None:
+        r = _undetermined(code6, sname, date or "", lookback_days, "S3", partial)
+        r["meta"]["level"] = "sector_etf"
+        r["capital_details"] = details
+        return r
+
+    score, grade = _sector_score(details)
+    dom_name = f"{_SECTOR_CAT[dom_cat]}（{'净买入' if dom_dir == 'buy' else '净卖出'}）"
+    return {
+        "meta": {"level": "sector_etf", "code": code6, "name": sname, "date": end,
+                 "lookback_days": lookback_days, "sector_type": stype,
+                 "members": len(members)},
+        "answer": {"status": "resolved", "dominant_capital": dom_name,
+                   "feedback": _FEEDBACK_CN.get(feedback, "未知"),
+                   "persistence": _SECTOR_PERSIST.get(dom_cat, "未知"),
+                   "undetermined_reason": None, "suggestions": None,
+                   "partial_findings": None},
+        "structure_score": score, "structure_grade": grade,
+        "capital_details": details,
+        "key_signals": [], "warnings": [],
+        "data_quality": {"completeness": round(available / len(_SECTOR_CAT), 2),
+                         "accuracy": 0.97, "timeliness": "normal"},
+        "disclaimer": DISCLAIMER,
+    }
+
+
+def _sector_score(details: dict):
+    comps = []
+    for cat, w in _SECTOR_WEIGHTS.items():
+        v = (details.get(cat) or {}).get("net_buy")
+        if v is None:
+            continue
+        thr = _THR_SECTOR.get(cat, 0) or 1.0
+        comps.append((w, min(1.0, abs(v) / thr) * 100))
+    if not comps:
+        return None, None
+    wsum = sum(w for w, _ in comps)
+    score = sum(w * x for w, x in comps) / wsum
+    grade = "健康" if score >= 80 else "一般" if score >= 60 else "脆弱" if score >= 40 else "危险"
+    return round(score, 1), grade
+
+
+def _sector_feedback(code6: str, is_etf: bool, prices: pd.DataFrame, members: list) -> str:
+    """板块收益 vs 成员股资金流聚合 的相关性；数据不足返回 unknown。"""
+    try:
+        flows = []
+        for c in members:
+            mf = store_mf.load("stock", code=c, start=prices.index.min().strftime("%Y-%m-%d"),
+                               end=prices.index.max().strftime("%Y-%m-%d"))
+            if mf is None or mf.empty or "net_mf_amount" not in mf.columns:
+                continue
+            flows.append(pd.to_numeric(mf["net_mf_amount"], errors="coerce").rename(c))
+        if not flows:
+            return "unknown"
+        flow = pd.concat(flows, axis=1).sum(axis=1)
+        ret = pd.to_numeric(prices["close"], errors="coerce").pct_change()
+        df = pd.concat([ret.rename("ret"), flow.rename("flow")], axis=1).dropna()
+        if len(df) < 10 or df["ret"].std() == 0 or df["flow"].std() == 0:
+            return "unknown"
+        corr = float(df["ret"].corr(df["flow"]))
+        if corr > 0.6:
+            return "strong_positive"
+        if corr < -0.4:
+            return "strong_negative"
+        if -0.4 <= corr <= 0.2:
+            return "neutral"
+        return "conditional"
+    except Exception as e:
+        logger.debug(f"sector feedback 失败 {code6}: {e}")
+        return "unknown"

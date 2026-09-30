@@ -158,5 +158,26 @@
 
 ---
 
+## 六、Phase 2（板块/ETF 资金画像）设计决策
+
+### D28. ETF 成分权重来源
+- 备选：
+  - A `index_weight` 指数成分权重（月度，**2000 分，当前 token 已可用**）
+  - B `fund_portfolio` 基金季报持仓（最真实，**5000 分，当前无权限**）
+- **决策：走 A**（用户确认）。ETF 多为完全复制跟踪指数，权重高度一致；日后按需升 5000 再切 B。
+- 缺口：ETF→跟踪指数代码映射（`fund_basic.benchmark` 为文本）→ 用 `index_basic` 指数名模糊匹配 + 关键 ETF 人工维护；失败则降级 `etf_config.sw_l2_codes`。
+
+### D29. 板块输入范围
+- **决策：先做 申万行业（L1/L2/L3）+ ETF**（用户确认）。东财概念板块（BK）作为后续可选（缺成分映射）。
+
+### D30. ETF 申赎口径
+- **决策：`Δ份额 × 净值`**（用户确认）。份额 `fund_share.fd_share`；净值优先 `fund_nav.adj_nav`，缺则 `fund_daily.close`；标注为“日频近似申赎金额”。
+
+### D31. Phase 2 数据落位
+- 新增 `data/store_fund.py`（fund 域：basic / share / nav / index_weight / etf_index_map）与 `data/downloader_fund.py`（Tushare `fund_basic`/`fund_share`/`fund_nav`/`index_weight`/`index_basic`）。
+- 聚合层 `agents/sector_aggregator.py`；画像扩展 `agents/capital_profiler.py` 的 `level='sector_etf'`。
+
+---
+
 ## 五、待用户回来后确认的开放项
 - （暂无）当前无阻塞项。

@@ -933,6 +933,18 @@ def cmd_update_moneyflow(types: list | None = None) -> None:
         dl._update_northbound()
 
 
+def cmd_update_fund(codes: list | None = None):
+    """更新 fund 域：ETF 列表 + ETF→指数映射 + 指定 ETF 的份额/净值/指数权重（Phase 2）"""
+    from data.downloader_fund import FundDownloader
+    dl = FundDownloader()
+    dl.init_basic()
+    dl.build_etf_index_map()
+    if not codes:
+        print("fund 基础数据已更新。指定 ETF 份额/净值请用: update-fund --codes 510300 159915")
+        return
+    dl.update_etf_fund(codes)
+
+
 def cmd_update_hk_hold(codes: list | None = None, from_portfolio: bool = False,
                        from_lhb: int | None = None):
     """下载北向个股持股（Tushare hk_hold，按代码，普通积分账户为季度披露）。
@@ -1261,7 +1273,7 @@ def cmd_seat_dict(action: str = "list", window: int = 6, min_appearances: int = 
 def cmd_capital_profiler(action: str = "profile", level: str = "stock",
                          code: str = None, date: str = None,
                          lookback_days: int = 60, fmt: str = "text",
-                         hidden_main: bool = False):
+                         hidden_main: bool = False, sector_level: str = "L1"):
     """资金画像（Phase 1：个股级）"""
     from rich.console import Console
     from agents.capital_profiler import profile, format_text
@@ -1274,7 +1286,7 @@ def cmd_capital_profiler(action: str = "profile", level: str = "stock",
         console.print("[yellow]请提供 --code（6位股票代码）[/yellow]")
         return
     report = profile(level=level, code=code, date=date, lookback_days=lookback_days,
-                     allow_hidden_main=hidden_main)
+                     allow_hidden_main=hidden_main, sector_level=sector_level)
     if fmt == "json":
         import json
         console.print_json(json.dumps(report, ensure_ascii=False, default=str))
@@ -2292,6 +2304,11 @@ if __name__ == "__main__":
     p_upd_hkh.add_argument("--from-lhb", type=int, default=None, metavar="N",
                            help="标的取自最近 N 个龙虎榜上榜交易日涉及的股票")
 
+    # update-fund（Phase 2：ETF 份额/净值/指数权重）
+    p_upd_fund = sub.add_parser("update-fund", help="更新 fund 域（ETF 列表/映射，及指定 ETF 份额/净值/指数权重）")
+    p_upd_fund.add_argument("--codes", nargs="*", default=None,
+                            help="指定 ETF 代码（如 510300 159915）；不传则只更新 ETF 列表与映射")
+
     # smart-money（资金主体行为画像）
     p_sm = sub.add_parser("smart-money", help="资金主体行为画像（谁在买卖 + 跨期行为模式）")
     p_sm.add_argument("target", nargs="?", default=None,
@@ -2349,6 +2366,9 @@ if __name__ == "__main__":
     p_cp.add_argument("--code", default=None, help="股票代码（如 688256）")
     p_cp.add_argument("--date", default=None, help="分析日期 YYYY-MM-DD（默认最新）")
     p_cp.add_argument("--lookback", type=int, default=60, help="回看交易日（默认60）")
+    p_cp.add_argument("--sector-level", dest="sector_level", default="L1",
+                      choices=["L1", "L2", "L3"],
+                      help="申万行业层级（--level sector_etf 且 --code 为申万代码时用，默认 L1）")
     p_cp.add_argument("--hidden-main", dest="hidden_main", action="store_true",
                       help="未上榜股票允许给“隐性主力（日频）”弱结论（默认关闭，走无法判断 S3）")
     p_cp.add_argument("--format", dest="fmt", default="text", choices=["text", "json"],
@@ -2510,6 +2530,8 @@ if __name__ == "__main__":
         cmd_update_hk_hold(codes=args.codes,
                            from_portfolio=args.from_portfolio,
                            from_lhb=args.from_lhb)
+    elif args.command == "update-fund":
+        cmd_update_fund(codes=args.codes)
     elif args.command == "smart-money":
         cmd_smart_money(target=args.target, target_type=args.target_type,
                         mode=args.mode, window_months=args.window,
@@ -2527,7 +2549,7 @@ if __name__ == "__main__":
     elif args.command == "capital-profiler":
         cmd_capital_profiler(action=args.action, level=args.level, code=args.code,
                              date=args.date, lookback_days=args.lookback, fmt=args.fmt,
-                             hidden_main=args.hidden_main)
+                             hidden_main=args.hidden_main, sector_level=args.sector_level)
     elif args.command == "init-hk":
         cmd_init_hk(start=args.start, end=args.end,
                     force=args.force, connect_only=args.connect_only)

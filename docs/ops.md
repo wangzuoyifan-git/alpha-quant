@@ -83,6 +83,8 @@ python3 main.py update-hk-moneyflow               # 更新港股个股资金流�
 python3 main.py update-hk-financials              # 更新港股财务（三大报表+成长/杜邦）
 python3 main.py update-hk-events                  # 更新港股分红事件（events E2）
 python3 main.py update-cn-pcf                     # 补充 A 股 pcf_ttm（百度市现率）
+python3 main.py update-fund                       # Phase2：ETF 列表 + ETF→指数映射
+python3 main.py update-fund --codes 510300 159915  # 指定 ETF 份额/净值/指数权重
 
 # 全域更新
 python3 main.py update-all                        # 全域：A股/港股K线+估值、meta、fundamental、factor、macro、moneyflow、events、A股PCF（耗时长）
@@ -244,6 +246,9 @@ python3 main.py capital-profiler profile --code 600519
 python3 main.py capital-profiler profile --code 688256 --date 2026-09-01 --lookback 60
 python3 main.py capital-profiler profile --code 000002 --format json    # JSON 输出
 python3 main.py capital-profiler profile --code 000002 --hidden-main    # 未上榜也给“隐性主力”弱结论
+# 板块/ETF（Phase 2）
+python3 main.py capital-profiler profile --level sector_etf --code 801080 --sector-level L1  # 申万行业
+python3 main.py capital-profiler profile --level sector_etf --code 510300                    # ETF
 # 输出含：主导资金/反馈/持续性 + 席位×主力一致性(合力/对倒/隐性吸筹) + 日频主力背景
 # 数据不足时如实返回“无法判断”（S1停牌/S3信号缺席/S4矛盾/S5样本不足）并给建议
 # 设计见 docs/capital_profiler.md；板块/大题为 Phase 2/3

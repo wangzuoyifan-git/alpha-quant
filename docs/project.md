@@ -1,7 +1,8 @@
 # Alpha量化 — 项目总览
 
 > 所有 Session 的共同基础参考。专项内容见各模块文档。
-> 最后更新：2026-09-29（资金画像 Phase1 增强：席位×主力一致性 + 席位级事件流合力/分歧子信号；产业资本接入 Tushare `repurchase`（E2 `buyback`）；`--hidden-main` 默认关闭）
+> 最后更新：2026-09-30（资金画像 Phase 2：板块/ETF（申万+ETF）—— `agents/sector_aggregator.py` 聚合 + `data/store_fund.py`/`downloader_fund.py`（index_weight/fund_share/fund_nav）+ `capital-profiler --level sector_etf`）
+> 2026-09-29（资金画像 Phase1 增强：席位×主力一致性 + 席位级事件流合力/分歧子信号；产业资本接入 Tushare `repurchase`（E2 `buyback`）；`--hidden-main` 默认关闭）
 > 2026-09-29（资金画像 Phase1 增强：席位×主力一致性；产业资本接入 Tushare `repurchase`（E2 `buyback`））
 > 2026-09-29（席位字典软标签收紧 + 来源标注：纯度门槛 0.6、软标签最低置信 0.7、身份列带 `[硬]/[软]/[规则]/[推断]` 前缀）
 > 2026-09-29（资金画像 Phase 1：`agents/capital_profiler.py` 个股级（主导资金/反馈/持续性/结构评分/无法判断）+ `capital-profiler` CLI + 设计文档 `docs/capital_profiler.md`）
@@ -79,7 +80,7 @@
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                    应用层 / CLI                          │
-│              main.py（argparse 分发，37个子命令）         │
+│              main.py（argparse 分发，38个子命令）         │
 │              web/（Flask 看板）                          │
 └──────────────────────┬──────────────────────────────────┘
                        │
@@ -176,6 +177,7 @@ Agent 层内部实现**三层决策架构**，每层职责如下：
 | macro | `data/macro/` | 完成 | 国内 6 项 + 境外 8 项（含美债 `us_bond_yield` 派生、`copper_lme`、`fed_rate`）全部落地；`update_db()`/`update-macro` 覆盖全部下载项 |
 | moneyflow | `data/moneyflow/` | 完成 | 资金流与情绪域：stock/industry/market/northbound/margin/top_list + 资金主体类 top_inst/block_trade/hk_hold；行业资金流用东财BK体系（覆盖申万L1全部/L2约95%） |
 | events | `data/events/` | 已建设 | E1 定期事件日历、E2 企业事件（减持/增持/质押/分红/回购）、E3 突发事件归档 |
+| fund | `data/fund/` | 已建设 | Phase2：ETF 列表/份额/净值/指数权重/ETF→指数映射（Tushare fund_basic/fund_share/fund_nav/index_weight） |
 
 > 详细接口和数据结构见 `docs/data.md`
 
@@ -217,6 +219,7 @@ alpha量化/
 │   ├── store_macro.py
 │   ├── store_moneyflow.py
 │   ├── store_events.py
+│   ├── store_fund.py            # fund 域存取（Phase2）
 │   ├── fetcher.py               # 网络数据获取
 │   ├── downloader.py            # K线批量下载（BaoStock，降级备用）
 │   ├── downloader_tushare.py    # K线批量下载（Tushare，主链路）
@@ -227,6 +230,7 @@ alpha量化/
 │   ├── downloader_macro.py
 │   ├── downloader_moneyflow.py
 │   ├── downloader_events.py
+│   ├── downloader_fund.py       # ETF 份额/净值/指数权重下载（Phase2）
 │   ├── market/                  # A股/指数/ETF 日线 Parquet（Tushare hfq）
 │   ├── market_baostock/         # BaoStock 历史基线（静态快照，交叉验证用）
 │   ├── fundamental/             # 季频财务数据
@@ -235,6 +239,7 @@ alpha量化/
 │   ├── macro/                   # 宏观数据
 │   ├── moneyflow/               # 资金流与情绪数据
 │   ├── events/                  # 事件数据（E1/E2/E3）
+│   ├── fund/                    # ETF/基金数据（份额/净值/指数权重，Phase2）
 │   ├── processed/               # 扫描信号 JSON
 │   └── orders/                  # 交易指令单 JSON
 │
@@ -265,7 +270,8 @@ alpha量化/
 │   ├── etf_agent.py             # ETF 独立三维评分（技术动量+估值代理+政策配置）
 │   ├── smart_money_agent.py     # 资金主体识别与跨期画像（龙虎榜席位/北向/合力分歧）
 │   ├── seat_profiler.py         # 席位字典（游资/量化）：硬标签+聚类软标签+回测
-│   ├── capital_profiler.py      # 资金画像（Phase1 个股级：主导资金/反馈/持续性）
+│   ├── capital_profiler.py      # 资金画像（Phase1 个股 / Phase2 板块ETF）
+│   ├── sector_aggregator.py     # 板块/ETF 资金聚合（Phase2）
 │   └── trade_agent.py
 │
 ├── notifier/push.py

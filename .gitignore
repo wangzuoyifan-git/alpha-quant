@@ -31,6 +31,7 @@ data/factor/
 data/macro/
 data/moneyflow/
 data/events/
+data/fund/
 # 资金主体画像档案（运行时生成；别名/规则配置见 data/smart_money/seat_aliases.json）
 data/smart_money/seats.json
 data/smart_money/*.tmp

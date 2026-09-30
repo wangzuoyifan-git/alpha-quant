@@ -89,6 +89,13 @@ data/events/
 data/etf_config.json     ← ETF 元数据与政策配置（手工维护，可进 git）
                             名称/跟踪指数/sw_l2_codes映射/政策展望/标签，供 etf_agent 三维评分
 
+data/fund/               ← 基金/ETF 数据（Phase 2）
+  basic.parquet            ETF 列表（Tushare fund_basic market=E）
+  share/                   基金份额（fund_share，按代码，日频）
+  nav/                     基金净值（fund_nav，按代码，日频）
+  index_weight/            指数成分权重（index_weight，按月，按指数）
+  etf_index_map.json       ETF→跟踪指数映射（派生 + 人工可覆盖）
+
 data/smart_money/        ← 资金主体/席位字典（生成物多已 gitignore）
   seat_aliases.json        席位别名字典（手工维护，可进 git）
   seat_labels.json         席位硬标签（由 xlsx 导入，gitignore，可重建）
@@ -345,6 +352,23 @@ store_events.load_market_shocks(date: str = None) -> list[dict]   # 可按 date 
 | trigger | str | proxy_indicator / llm_news / manual |
 | market_impact | dict | 指数涨跌幅、受影响板块 |
 | source_url | str | 新闻来源（Phase 2+） |
+
+---
+
+### 2.8 fund 域（data/store_fund.py，Phase 2）
+
+> 基金/ETF 数据，供板块/ETF 资金画像（`agents/capital_profiler.py` level='sector_etf'）。
+
+```python
+import data.store_fund as store_fund
+store_fund.save(data_type, df, code=None)     # data_type: basic/share/nav/index_weight
+store_fund.load(data_type, code=None, start=None, end=None)
+store_fund.load_etf_index_map() / save_etf_index_map(mapping)
+```
+
+- `basic`：ETF 列表（单文件）；`share`/`nav`：按 ETF 代码；`index_weight`：按指数代码（月度）。
+- 数据源：Tushare `fund_basic` / `fund_share` / `fund_nav` / `index_weight`（均 2000 分档，当前 token 可用）；`fund_portfolio`（5000 分）未用。
+- 下载器：`data/downloader_fund.py`（`init_basic` / `build_etf_index_map` / `fetch_share` / `fetch_nav` / `fetch_index_weight` / `update_etf_fund`）。
 
 ---
 
