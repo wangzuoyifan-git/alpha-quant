@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -220,6 +221,98 @@ class TestHkMoneyflowParsing:
     def test_parse_fflow_bad(self):
         assert HKDownloader._parse_fflow([]) is None
         assert HKDownloader._parse_fflow(["short,line"]) is None
+
+
+class TestHkMoneyflowResilience:
+    """资金流抓取的重试/熔断（回归：RemoteDisconnected 洪泛被静默吞掉）"""
+
+    def _fake_response(self, klines):
+        class _Resp:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"data": {"klines": klines}}
+        return _Resp()
+
+    def test_retries_and_recovers(self, monkeypatch):
+        import requests
+
+        calls = {"n": 0}
+        fail_first = len(dhk._EM_FFLOW_HOSTS)
+
+        def fake_get(url, **kwargs):
+            calls["n"] += 1
+            if calls["n"] <= fail_first:
+                raise requests.exceptions.ConnectionError(
+                    "Remote end closed connection without response")
+            return self._fake_response(
+                ["2026-09-22,1,2,3,4,5,6,7,8,9,10,11,12,13,14"])
+
+        monkeypatch.setattr(requests, "get", fake_get)
+        monkeypatch.setattr(dhk, "_RETRY_SLEEP", 0)
+
+        out = HKDownloader._fetch_hk_fflow("00700")
+        assert out is not None and len(out) == 1
+        assert calls["n"] == fail_first + 1
+
+    def test_raises_after_all_retries(self, monkeypatch):
+        import requests
+
+        def fake_get(url, **kwargs):
+            raise requests.exceptions.ConnectionError(
+                "Remote end closed connection without response")
+
+        monkeypatch.setattr(requests, "get", fake_get)
+        monkeypatch.setattr(dhk, "_RETRY_SLEEP", 0)
+
+        with pytest.raises(requests.exceptions.ConnectionError):
+            HKDownloader._fetch_hk_fflow("00700")
+
+    def test_empty_klines_not_retried(self, monkeypatch):
+        import requests
+
+        calls = {"n": 0}
+
+        def fake_get(url, **kwargs):
+            calls["n"] += 1
+            return self._fake_response([])
+
+        monkeypatch.setattr(requests, "get", fake_get)
+        assert HKDownloader._fetch_hk_fflow("00700") is None
+        assert calls["n"] == 1
+
+    def test_moneyflow_circuit_breaker(self, monkeypatch):
+        monkeypatch.setattr(dhk, "_SLEEP", 0.0)
+        monkeypatch.setattr(dhk, "_FFLOW_MIN_INTERVAL", 0.0)
+        monkeypatch.setattr(dhk, "_FFLOW_JITTER", 0.0)
+        monkeypatch.setattr(dhk, "_FFLOW_MAX_STREAK", 3)
+
+        def boom(code):
+            raise ConnectionError("Remote end closed connection without response")
+
+        monkeypatch.setattr(HKDownloader, "_fetch_hk_fflow", staticmethod(boom))
+
+        res = HKDownloader(connect_only=True).update_moneyflow(
+            codes=[f"{i:05d}" for i in range(10)])
+        assert res["aborted"] is True
+        assert res["fail"] == 3
+        assert res["total"] == 10
+
+    def test_sleep_to_interval_waits_remaining(self, monkeypatch):
+        slept = []
+        monkeypatch.setattr(dhk.time, "time", lambda: 100.0)
+        monkeypatch.setattr(dhk.time, "sleep", lambda s: slept.append(s))
+        monkeypatch.setattr(dhk.random, "uniform", lambda a, b: 0.0)
+        dhk._sleep_to_interval(99.5, 1.5, jitter=0.0)
+        assert slept == [pytest.approx(1.0)]
+
+    def test_sleep_to_interval_no_wait_when_elapsed(self, monkeypatch):
+        slept = []
+        monkeypatch.setattr(dhk.time, "time", lambda: 100.0)
+        monkeypatch.setattr(dhk.time, "sleep", lambda s: slept.append(s))
+        dhk._sleep_to_interval(98.0, 1.5, jitter=0.0)
+        assert slept == []
 
 
 class TestHkFinancialsParsing:

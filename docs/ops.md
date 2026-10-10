@@ -68,18 +68,18 @@ python3 main.py init-fundamental                  # 季频财务数据（2024起
 python3 main.py init-fundamental --start-year 2022
 python3 main.py init-macro                        # 宏观经济数据
 python3 main.py update-macro                      # 增量更新宏观（含汇率/境外指标）
-python3 main.py update-events                     # 增量更新事件域（E1 日历 + E2 减持/增持/质押/分红/回购；全市场约1.5h）
+python3 main.py update-events                     # 增量更新事件域（E1 日历 + E2 减持/增持/质押/分红/回购；全市场按日期批量，约1-2min）
 python3 main.py update-events --codes 000001 600519   # 只更新指定股票（秒级，常用于补某只）
 python3 main.py init-moneyflow                    # 资金流与情绪（stock 2010起，其余 2024起）
 python3 main.py init-moneyflow --types stock      # 只下载个股资金流
-python3 main.py update-moneyflow                  # 增量更新 moneyflow 域
+python3 main.py update-moneyflow                  # 增量更新 moneyflow 域（stock/margin 按交易日批量，约1min）
 python3 main.py update-hk-hold --codes 000001 600519   # 北向个股持股（hk_hold，季度披露，按代码）
 python3 main.py update-hk-hold --from-portfolio       # 标的取自当前持仓
 python3 main.py update-hk-hold --from-lhb 30          # 标的取自最近30个龙虎榜上榜交易日
 python3 main.py init-hk                           # 首次下载港股 K 线（默认仅港股通标的）
 python3 main.py update-hk                         # 增量更新港股 K 线
 python3 main.py update-hk-valuation               # 更新港股 PE/PB/PCF（港股通，合并进 K 线）
-python3 main.py update-hk-moneyflow               # 更新港股个股资金流（东财，滚动约100个交易日）
+python3 main.py update-hk-moneyflow               # 更新港股个股资金流（东财，滚动约100个交易日，按1.5s/只限速防封禁）
 python3 main.py update-hk-financials              # 更新港股财务（三大报表+成长/杜邦）
 python3 main.py update-hk-events                  # 更新港股分红事件（events E2）
 python3 main.py update-cn-pcf                     # 补充 A 股 pcf_ttm（百度市现率）
@@ -414,16 +414,17 @@ python3 tools/test_init_flow.py                                 # init 流程端
 
 ```bash
 scripts/update_daily.sh
-# 执行：[1]market K线 → [2]meta(周一init/其余update) → [3]moneyflow
-#         (个股/龙虎榜汇总+席位明细 top_inst/大宗 block_trade/两融/行业/大盘/北向)
-#       → [4]events(约1.5h；E2 含回购)
+# 执行：[1]market K线(约2h) → [2]meta(周一init/其余update) → [3]moneyflow(约1min)
+#         (个股资金流/龙虎榜汇总+席位明细 top_inst/大宗 block_trade/两融/行业/大盘/北向)
+#       → [4]events(约1-2min；E2 按日期批量，含回购)
 #       → [5]macro(含汇率/境外) → [6]update-hk(港股通) → [7]update-hk-valuation(约30m)
-#       → [8]update-hk-moneyflow(约15m) → [9]update-hk-events(约15m)
+#       → [8]update-hk-moneyflow(约20m，按1.5s/只限速) → [9]update-hk-events(约15m)
 #       → [10]factor(台阶二前空跑) → scan(stock，默认注释)
 # 注：北向个股持股 hk_hold 为季度披露且按代码逐只，不在每日脚本，见季度脚本
-# 注：单步失败不中断，末尾汇总，有失败时退出码 1；输出同时写入 logs/update_daily.log
+# 注：单步失败不中断，末尾汇总；有失败或被跳过的步骤时退出码 1；输出同时写入 logs/update_daily.log
 #     脚本带 flock 并发锁（上一轮未结束时新执行直接退出）
-#     港股 4 个步骤（K线/估值/资金流/分红）在 16:15 前统一跳过（避免盘中残缺 bar）
+#     港股 4 个步骤（K线/估值/资金流/分红）仅在盘中 09:30–16:15 跳过（避免盘中残缺 bar）；
+#     收盘后、或跨夜到凌晨（已收盘）均正常执行，不再整天漏更
 #     17:30 运行可拿到港股当日最终值；macro 的港股/境外当日 bar 次日刷新会自动覆盖修正
 ```
 

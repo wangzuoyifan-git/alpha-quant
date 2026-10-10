@@ -1,7 +1,8 @@
 # Alpha量化 — 项目总览
 
 > 所有 Session 的共同基础参考。专项内容见各模块文档。
-> 最后更新：2026-09-30（资金画像 Phase 2：板块/ETF（申万+ETF）—— `agents/sector_aggregator.py` 聚合 + `data/store_fund.py`/`downloader_fund.py`（index_weight/fund_share/fund_nav）+ `capital-profiler --level sector_etf`）
+> 最后更新：2026-10-10（update_daily 提速与可靠性：moneyflow `stock`/`margin` 每日增量改按 `trade_date` 批量（~1.1万次→每交易日2次）；events E2 全市场改按日期批量（~2.2万次→百余次，约1.5h→1~2min）；港股资金流加 1.5s/只限速+连续失败熔断；批量步骤失败率过高以非零退出码上报（`_check_bulk_result`）；`update_daily.sh` 港股跳过窗口改为仅盘中 09:30–16:15、跳过计入汇总并退出码1）
+> 2026-09-30（资金画像 Phase 2：板块/ETF（申万+ETF）—— `agents/sector_aggregator.py` 聚合 + `data/store_fund.py`/`downloader_fund.py`（index_weight/fund_share/fund_nav）+ `capital-profiler --level sector_etf`）
 > 2026-09-29（资金画像 Phase1 增强：席位×主力一致性 + 席位级事件流合力/分歧子信号；产业资本接入 Tushare `repurchase`（E2 `buyback`）；`--hidden-main` 默认关闭）
 > 2026-09-29（资金画像 Phase1 增强：席位×主力一致性；产业资本接入 Tushare `repurchase`（E2 `buyback`））
 > 2026-09-29（席位字典软标签收紧 + 来源标注：纯度门槛 0.6、软标签最低置信 0.7、身份列带 `[硬]/[软]/[规则]/[推断]` 前缀）

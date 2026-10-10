@@ -1,7 +1,7 @@
 # Alpha量化 — 测试与验证
 
 > 测试分层定义、当前测试文件、关键测试用例模板、运行规范。
-> 最后更新：2026-06-21（阶段A~D：新增 test_analysis/scanner_filters 测试，补 GAP-04/07/08/09 覆盖；全量 522 passed/2 skipped，运行须加 --timeout=30）
+> 最后更新：2026-10-10（moneyflow 批量化 + events 批量测试：`test_downloader_moneyflow.py` 12 passed、`test_downloader_events.py` 13 passed；全量 667 passed/2 skipped，另有既有 `test_smart_money::test_assess_routes` 失败与改动无关）
 >
 > **项目基础信息见 `docs/project.md`**
 > **需求与测试追溯矩阵（含完整 GAP 编号覆盖缺口）见 `docs/traceability.md`**
@@ -59,7 +59,8 @@
 | **`tests/test_smart_money.py`** | **资金主体识别与跨期画像（席位身份/画像/北向 streak/合力分歧/盘前龙虎榜扫描/archive/tools，2026-09 新增）** | **✅ 33 passed** |
 | **`tests/test_seat_profiler.py`** | **席位字典（xlsx 硬标签导入/四特征/聚类纯度门槛/字典构建/快照/深度行为画像/classify 接入，2026-09 新增）** | **✅ 8 passed** |
 | **`tests/test_capital_profiler.py`** | **资金画像 Phase1（已判定/S1停牌/S3缺席/S4矛盾/feedback/回购/席位×主力/事件流/level 占位/文本）** | **✅ 15 passed** |
-| **`tests/test_downloader_events.py`** | **events 下载器（Tushare repurchase 回购解析/区间过滤，2026-09 新增）** | **✅ 3 passed** |
+| **`tests/test_downloader_events.py`** | **events 下载器（repurchase 回购解析/区间过滤 + E2 按日期批量：事件构造/分段/聚合/派发，2026-09 新增，2026-10 扩充）** | **✅ 13 passed** |
+| **`tests/test_downloader_moneyflow.py`** | **moneyflow `stock`/`margin` 按 `trade_date` 批量更新（分组落盘：stock 带 code / margin 不带；缺失日拉取、已最新跳过、陈旧文件排除、空库转 init，2026-10 新增）** | **✅ 12 passed** |
 | **`tests/test_sector_aggregator.py`** | **Phase2 板块/ETF 聚合与画像（成员映射/龙虎榜聚合/ETF申赎/板块画像/--fetch，2026-09 新增）** | **✅ 8 passed** |
 
 ### 2.1 分层决策测试覆盖（2026-06-11 新增）

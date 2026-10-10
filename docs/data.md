@@ -1,7 +1,8 @@
 # Alpha量化 — 数据层文档
 
 > 数据层接口、各域结构、数据源说明、待办缺口。
-> 最后更新：2026-09-29（events E2 新增回购 `buyback`（Tushare `repurchase`）；moneyflow 域资金主体数据 `top_inst`/`block_trade`/`hk_hold`）
+> 最后更新：2026-10-10（moneyflow `stock`/`margin` 每日增量改按 `trade_date` 批量一次取全市场，请求数 ~1.1 万→每交易日 2 次；events E2 全市场改按日期批量（减持按月/回购按周/质押逐日探测 `end_date`/分红按交易日），~2.2 万次→百余次、约 1.5h→1~2min，逐只 `--codes` 保留；港股资金流加最小间隔限速+连续失败熔断+失败穿透 `_check_bulk_result`；`update_daily.sh` 港股跳过窗口改为仅盘中 09:30–16:15、跳过计入汇总并以退出码 1 结束）
+> 2026-09-29（events E2 新增回购 `buyback`（Tushare `repurchase`）；moneyflow 域资金主体数据 `top_inst`/`block_trade`/`hk_hold`）
 > 2026-09-28（moneyflow 域新增资金主体数据 `top_inst` 龙虎榜席位明细 / `block_trade` 大宗交易 / `hk_hold` 北向个股持股；下载器 `init_top_inst`/`init_block_trade`/`update_hk_hold`）
 > 2026-09-23（港股数据批次1：资金流 `update-hk-moneyflow`、财务 5 表 `update-hk-financials`、分红事件 `update-hk-events`、PCF 估值；store_moneyflow/store_fundamental 增加 market 维度；A股 pcf_ttm 补充 `update-cn-pcf`）
 >
@@ -440,7 +441,7 @@ python main.py update-cn-pcf [--codes ...]         # A股 pcf_ttm（百度市现
 **港股估值（PE/PB/PCF）**：来源百度股市通 `gushitong.baidu.com/opendata`（需带 UA/Referer，akshare 封装未带头会失败；亿牛网接口已停更至 2022-07，东财 `stock_hk_valuation_comparison_em` 只有快照）。逐只抓取 `市盈率(TTM)`/`市净率`/`市现率` 后按日期合并进 K 线文件；近三年为日频（约 1096 点），港股通约 1011 只、全量约 30 分钟。
 
 **港股其他数据（批次1，2026-09-23）**：
-- 资金流：东财 `fflow/daykline`（`secid=116.xxxxx`，91/http 域名回退），主力/超大/大/中/小单净额+占比，滚动约 100 个交易日、逐日累积 → `data/moneyflow/hk/stock/`
+- 资金流：东财 `fflow/daykline`（`secid=116.xxxxx`，91/http 域名回退），主力/超大/大/中/小单净额+占比，滚动约 100 个交易日、逐日累积 → `data/moneyflow/hk/stock/`。东财 push2 为**令牌桶限流**，突发过快会对源 IP 连接重置（`RemoteDisconnected`）并封禁较长时间：抓取按**最小间隔 1.5s/只**限速（`_FFLOW_MIN_INTERVAL`）+ 单只重试 2 轮（`_FFLOW_RETRIES`，轮换域名），**连续失败 8 只熔断**提前中止（`_FFLOW_MAX_STREAK`），避免限流期空刷全市场。批量步骤失败率过高时 `_check_bulk_result` 使进程退出码非零，`update_daily.sh` 记为失败步骤。
 - 财务：AKShare 东财 `stock_financial_hk_report_em`（利润表/资产负债表/现金流量表，长表 pivot）→ profit/balance/cashflow；`stock_financial_hk_analysis_indicator_em` 拆成 growth/dupont → `data/fundamental/hk/`
 - 分红事件：`stock_hk_dividend_payout_em` → events E2（`event_type=dividend`，`source=akshare`；港股 5 位代码与 A 股 6 位不冲突）
 - 暂不可行：港股两融/卖空（需港交所沽空报表，无免费 API）、减持/质押（港交所权益披露无 API）、市销率 PS 历史（百度不提供，可用总市值÷营收TTM 计算，批次2）
@@ -486,6 +487,11 @@ dl.update_hk_hold(["000001", "600519"])     # 北向个股持股（按代码，�
 # update_db() 已包含 top_inst / block_trade；hk_hold 按需单独拉取（未纳入默认流程）
 ```
 
+> `update_db()` 的 `stock`/`margin` 每日增量按**交易日批量**：`moneyflow(trade_date=)` / `margin_detail(trade_date=)`
+> 一次返回全市场（~5573 / ~2001 行，无 5000 行截断），请求数从逐只 ~5500 次降到每交易日 1 次；落盘仍按
+> `{code}.parquet` 分文件（`_update_stock_by_date` / `_update_margin_by_date` / `_save_grouped`）。仅覆盖"活跃"
+> 股票缺口（`_recent_floor` 排除长期停牌/退市），首次/空库自动转 `init_stock`。逐只旧方法 `_update_stock`/`_update_margin` 保留备用。
+
 events 域下载器为函数式接口（非类）：
 
 ```python
@@ -497,8 +503,11 @@ build_calendar(year=None)         # 仅生成 E1 定期事件日历
 download_all_corp_events(codes=None, start="2024-01-01", end=None)  # E2 减持/增持/质押/分红/回购
 ```
 
-> E2 为**全市场逐只**拉取（每只 4 接口 + `sleep(0.15)`），全市场约 1.5 小时；受 Tushare 限频（~200 次/分钟），
-> **不调小 sleep**（下调会显著增加限频失败）。补单只用 `update-events --codes ...` 定向更新。
+> E2 全市场默认走**按日期批量**（`codes=None`）：减持按月、回购按周（单次上限 2000 行）、质押逐日探测
+> `pledge_stat(end_date=)`、分红按交易日 `dividend(ann_date=)`，合计约百余次调用，全市场约 1~2 分钟（原逐只
+> ~2.2 万次调用 / ~1.5 小时）。落盘仍按股票 `{code}.json` 增量合并。
+> 指定 `codes` 时逐只补齐（4 接口均计入失败统计），受 Tushare 限频（~200 次/分钟）约束；
+> 所有事件接口调用经统一节流（`_EVENT_RATE_PER_MIN=180`/接口）+ 退避重试。补单用 `update-events --codes ...`。
 
 ---
 

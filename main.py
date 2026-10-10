@@ -843,38 +843,66 @@ def cmd_init_hk(start: str = "2020-01-02", end: str | None = None,
     """首次全量下载港股 K 线（默认仅港股通标的）"""
     from data.downloader_hk import HKDownloader
     dl = HKDownloader(connect_only=connect_only)
-    dl.init_db(start=start, end=end, force=force)
+    result = dl.init_db(start=start, end=end, force=force)
+    _check_bulk_result("港股 K 线", result)
+
+
+def _check_bulk_result(label: str, result: dict, max_fail_ratio: float = 0.1) -> None:
+    """批量下载结果校验：失败占比过高时非零退出，供 scripts 的 run_step 识别为失败。
+
+    逐只下载的批量任务会把单只异常吞掉并累计到 result['fail']，此前这类
+    "部分失败" 会静默通过（进程退出码仍为 0），导致脚本误报 "全部完成"。
+    """
+    total = (result or {}).get("total", 0)
+    fail = (result or {}).get("fail", 0)
+    if (result or {}).get("aborted"):
+        logger.error(f"{label} 因连续失败过多提前中止，判定为失败步骤")
+        raise SystemExit(1)
+    if not isinstance(total, (int, float)) or not isinstance(fail, (int, float)):
+        return
+    total, fail = int(total), int(fail)
+    if total <= 0 or fail <= 0:
+        return
+    ratio = fail / total
+    if ratio > max_fail_ratio:
+        logger.error(f"{label} 失败过多：{fail}/{total}（{ratio:.1%}），判定为失败步骤")
+        raise SystemExit(1)
 
 
 def cmd_update_hk(end: str | None = None, connect_only: bool = True):
     """增量更新港股 K 线到最新交易日"""
     from data.downloader_hk import HKDownloader
     dl = HKDownloader(connect_only=connect_only)
-    dl.update_db(end=end)
+    result = dl.update_db(end=end)
+    _check_bulk_result("港股 K 线", result)
 
 
 def cmd_update_hk_valuation(connect_only: bool = True, period: str = "近三年"):
     """更新港股 PE/PB 估值（百度股市通）并合并进 K 线"""
     from data.downloader_hk import HKDownloader
-    HKDownloader(connect_only=connect_only).update_valuation(period=period)
+    result = HKDownloader(connect_only=connect_only).update_valuation(period=period)
+    _check_bulk_result("港股估值", result)
 
 
 def cmd_update_hk_moneyflow(connect_only: bool = True):
     """更新港股个股资金流（东财，滚动约 100 个交易日）"""
     from data.downloader_hk import HKDownloader
-    HKDownloader(connect_only=connect_only).update_moneyflow()
+    result = HKDownloader(connect_only=connect_only).update_moneyflow()
+    _check_bulk_result("港股资金流", result)
 
 
 def cmd_update_hk_financials(connect_only: bool = True):
     """更新港股财务（东财三大报表 + 成长/杜邦指标）"""
     from data.downloader_hk import HKDownloader
-    HKDownloader(connect_only=connect_only).update_financials()
+    result = HKDownloader(connect_only=connect_only).update_financials()
+    _check_bulk_result("港股财务", result)
 
 
 def cmd_update_hk_events(connect_only: bool = True):
     """更新港股分红派息事件（写入 events E2）"""
     from data.downloader_hk import HKDownloader
-    HKDownloader(connect_only=connect_only).update_dividend_events()
+    result = HKDownloader(connect_only=connect_only).update_dividend_events()
+    _check_bulk_result("港股分红事件", result)
 
 
 def cmd_update_cn_pcf(codes: list | None = None):
@@ -1370,7 +1398,7 @@ def cmd_update_all():
         print(f"\n{label}...")
         try:
             fn()
-        except Exception as e:
+        except (Exception, SystemExit) as e:
             print(f"  {label} 跳过: {e}")
 
     _run("[1/14] 更新 A 股 K 线数据", cmd_update)

@@ -2,10 +2,10 @@
 moneyflow 域下载器
 
 负责下载资金流与情绪类数据：
-  - stock       个股历史资金流向（Tushare moneyflow，2010起，日频）
+  - stock       个股历史资金流向（Tushare moneyflow，2010起，日频；增量按交易日批量）
   - industry    行业资金流（Tushare moneyflow_ind_dc，东财，按日期分片）
   - market      大盘资金流（Tushare moneyflow_mkt_dc，东财，单文件）
-  - margin      融资融券明细（Tushare margin_detail，按股票代码，日频）
+  - margin      融资融券明细（Tushare margin_detail，日频；增量按交易日批量）
   - top_list    龙虎榜汇总（Tushare top_list，按日期）
   - top_inst    龙虎榜席位明细（Tushare top_inst，按日期；资金主体识别用）
   - block_trade 大宗交易（Tushare block_trade，按日期；大宗买方用）
@@ -16,6 +16,9 @@ moneyflow 域下载器
   - 每分钟最多 200 次（普通积分）
   - 单次最多返回 5000 行
   - 批量拉取时每次请求后 sleep 0.3~0.5s
+  - stock/margin 每日增量用 `moneyflow(trade_date=)` / `margin_detail(trade_date=)`
+    一次返回全市场（~5500/~2000 行），请求数从逐只 ~5500 降到每个交易日 1 次，
+    落盘仍按股票分文件（见 _update_stock_by_date / _update_margin_by_date）。
 
 用法:
   dl = MoneyflowDownloader()
@@ -153,6 +156,50 @@ def _get_all_stock_codes(pro) -> list:
     return df["ts_code"].tolist()
 
 
+# 批量（按 trade_date）增量更新时，用于判断"活跃"窗口的最大缺口（天）。
+# 超过该缺口的股票视为长期停牌/退市/新库未初始化，不纳入批量窗口，
+# 以免个别陈旧文件把起始日拉回很久以前、导致逐日空跑。
+_BATCH_ACTIVE_GAP_DAYS = 30
+
+
+def _latest_trade_date(pro) -> str | None:
+    """最近一个已收盘的交易日（YYYY-MM-DD）；取不到返回 None。"""
+    today = datetime.now().strftime(_FMT_DASH)
+    start = (datetime.now() - timedelta(days=20)).strftime(_FMT_DASH)
+    dates = _get_trade_dates(pro, start, today)
+    if not dates:
+        return None
+    return _to_dash_date(max(dates))
+
+
+def _preload_last_dates(dir_path) -> dict:
+    """预加载某分文件目录下各 code 的最新日期（只读 index，避免整表读入）。
+
+    dir_path: Path，如 data/moneyflow/stock。返回 {code: 'YYYY-MM-DD'}。
+    """
+    out: dict = {}
+    for p in dir_path.glob("*.parquet"):
+        try:
+            idx = pd.read_parquet(p, columns=[]).index
+            if len(idx):
+                out[p.stem] = idx.max().strftime(_FMT_DASH)
+        except Exception:
+            pass
+    return out
+
+
+def _recent_floor(last_dates: dict, target: str,
+                  max_gap_days: int = _BATCH_ACTIVE_GAP_DAYS) -> str | None:
+    """取"活跃"股票（最新日期在 target 前 max_gap_days 天内）中最早的日期。
+
+    返回该日期作为批量窗口下界（不含）；无活跃股票返回 None。
+    """
+    thr = (datetime.strptime(target, _FMT_DASH)
+           - timedelta(days=max_gap_days)).strftime(_FMT_DASH)
+    recent = [d for d in last_dates.values() if d >= thr]
+    return min(recent) if recent else None
+
+
 class MoneyflowDownloader:
 
     def __init__(self):
@@ -226,7 +273,7 @@ class MoneyflowDownloader:
         _log(f"Moneyflow 域增量更新  目标日期: {today}")
 
         _log("[1/8] 更新个股资金流...")
-        self._update_stock()
+        self._update_stock_by_date()
 
         _log("[2/8] 更新龙虎榜汇总...")
         self._update_top_list()
@@ -238,7 +285,7 @@ class MoneyflowDownloader:
         self._update_block_trade()
 
         _log("[5/8] 更新融资融券...")
-        self._update_margin()
+        self._update_margin_by_date()
 
         _log("[6/8] 更新行业资金流...")
         self._update_industry()
@@ -364,6 +411,75 @@ class MoneyflowDownloader:
 
         elapsed = time.time() - t0
         _log(f"  stock 更新完成: 新增={ok} 跳过={skip} 失败={fail}  {elapsed:.0f}s")
+
+    def _update_stock_by_date(self) -> None:
+        """按交易日批量更新个股资金流：`moneyflow(trade_date=)` 一次返回全市场。
+
+        逐只调用 ~5500 次/天 → 每个缺失交易日 1 次；保存仍按股票分文件写入。
+        仅覆盖"活跃"股票的缺口（见 _recent_floor），长期停牌/退市股不纳入。
+        """
+        pro = self._ensure_pro()
+        target = _latest_trade_date(pro)
+        if target is None:
+            _log("  stock: 无法获取最近交易日，跳过")
+            return
+
+        existing_last = _preload_last_dates(store.BASE_DIR / "stock")
+        if not existing_last:
+            _log("  stock: 本地无数据，转全量初始化 init_stock()")
+            self.init_stock()
+            return
+
+        floor = _recent_floor(existing_last, target)
+        if floor is None or floor >= target:
+            _log(f"  stock: 已是最新（目标交易日 {target}）")
+            return
+
+        start = (datetime.strptime(floor, _FMT_DASH)
+                 + timedelta(days=1)).strftime(_FMT_DASH)
+        dates = _retry(lambda: _get_trade_dates(pro, start, target))
+        if not dates:
+            _log(f"  stock: 已是最新（目标交易日 {target}）")
+            return
+
+        _log(f"  stock: 按交易日批量更新 {len(dates)} 个交易日（{start} ~ {target}）")
+        ok = skip = fail = 0
+        n_files = 0
+        t0 = time.time()
+        for i, td in enumerate(dates):
+            try:
+                df = _retry(lambda d=td: pro.moneyflow(trade_date=d))
+                if df is None or df.empty:
+                    skip += 1
+                else:
+                    n_files += self._save_grouped(df, "stock")
+                    ok += 1
+            except Exception as e:
+                logger.debug(f"stock {td} 批量失败: {e}")
+                fail += 1
+            time.sleep(0.35)
+            if (i + 1) % 20 == 0 or (i + 1) == len(dates):
+                _log(f"  stock 进度: {i+1}/{len(dates)} 交易日  文件写入:{n_files}  "
+                     f"失败日:{fail}  {time.time()-t0:.0f}s")
+        _log(f"  stock 更新完成: 交易日 成功={ok} 空日={skip} 失败={fail}  "
+             f"文件写入={n_files}  {time.time()-t0:.0f}s")
+
+    def _save_grouped(self, df: pd.DataFrame, data_type: str) -> int:
+        """把按 trade_date 拉取的"全市场"DataFrame 按 ts_code 拆分落盘。
+
+        - stock：额外写入 code 列（与逐只路径一致）；
+        - margin：不写 code 列（与逐只路径一致）。
+        返回写入的文件数。
+        """
+        n = 0
+        for ts_code, g in df.groupby("ts_code", sort=False):
+            code6 = str(ts_code).split(".")[0]
+            g = g.copy()
+            if data_type == "stock":
+                g["code"] = code6
+            store.save(data_type, g, code=code6)
+            n += 1
+        return n
 
     def _fetch_stock(self, ts_code: str, start: str, end: str) -> Optional[pd.DataFrame]:
         """拉取单只股票资金流向，自动分段（Tushare 单次最多 5000 行）。"""
@@ -672,6 +788,57 @@ class MoneyflowDownloader:
 
         elapsed = time.time() - t0
         _log(f"  margin 更新完成: 新增={ok} 跳过={skip} 失败={fail}  {elapsed:.0f}s")
+
+    def _update_margin_by_date(self) -> None:
+        """按交易日批量更新融资融券：`margin_detail(trade_date=)` 一次返回全市场。
+
+        逐只调用 ~5500 次/天 → 每个缺失交易日 1 次；保存仍按股票分文件写入。
+        """
+        pro = self._ensure_pro()
+        target = _latest_trade_date(pro)
+        if target is None:
+            _log("  margin: 无法获取最近交易日，跳过")
+            return
+
+        existing_last = _preload_last_dates(store.BASE_DIR / "margin")
+        if not existing_last:
+            _log("  margin: 本地无数据，转全量初始化 init_margin()")
+            self.init_margin()
+            return
+
+        floor = _recent_floor(existing_last, target)
+        if floor is None or floor >= target:
+            _log(f"  margin: 已是最新（目标交易日 {target}）")
+            return
+
+        start = (datetime.strptime(floor, _FMT_DASH)
+                 + timedelta(days=1)).strftime(_FMT_DASH)
+        dates = _retry(lambda: _get_trade_dates(pro, start, target))
+        if not dates:
+            _log(f"  margin: 已是最新（目标交易日 {target}）")
+            return
+
+        _log(f"  margin: 按交易日批量更新 {len(dates)} 个交易日（{start} ~ {target}）")
+        ok = skip = fail = 0
+        n_files = 0
+        t0 = time.time()
+        for i, td in enumerate(dates):
+            try:
+                df = _retry(lambda d=td: pro.margin_detail(trade_date=d))
+                if df is None or df.empty:
+                    skip += 1
+                else:
+                    n_files += self._save_grouped(df, "margin")
+                    ok += 1
+            except Exception as e:
+                logger.debug(f"margin {td} 批量失败: {e}")
+                fail += 1
+            time.sleep(0.35)
+            if (i + 1) % 20 == 0 or (i + 1) == len(dates):
+                _log(f"  margin 进度: {i+1}/{len(dates)} 交易日  文件写入:{n_files}  "
+                     f"失败日:{fail}  {time.time()-t0:.0f}s")
+        _log(f"  margin 更新完成: 交易日 成功={ok} 空日={skip} 失败={fail}  "
+             f"文件写入={n_files}  {time.time()-t0:.0f}s")
 
     def _fetch_margin(self, ts_code: str, start: str, end: str) -> Optional[pd.DataFrame]:
         """拉取单只股票融资融券历史，自动分段"""

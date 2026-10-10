@@ -5,7 +5,9 @@ E1 定期事件日历：按规则自动生成全年事件日历
 E2 企业事件：通过 Tushare 接口下载减持/质押/分红数据
 """
 import logging
+import threading
 import time
+from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -15,6 +17,40 @@ logger = logging.getLogger(__name__)
 
 _FMT = "%Y%m%d"
 _FMT_DASH = "%Y-%m-%d"
+
+# 每接口限流（Tushare 约 200 次/分钟；留余量）
+_EVENT_RATE_PER_MIN = 180
+_EVENT_MIN_INTERVAL = 60.0 / _EVENT_RATE_PER_MIN
+_rate_last: dict = {}
+_rate_lock = threading.Lock()
+
+
+def _throttle(key: str):
+    """接口级最小间隔节流，保证单接口不超过 _EVENT_RATE_PER_MIN 次/分钟。"""
+    with _rate_lock:
+        now = time.monotonic()
+        wait = _rate_last.get(key, 0.0) - now
+        if wait > 0:
+            time.sleep(wait)
+            now = time.monotonic()
+        _rate_last[key] = now + _EVENT_MIN_INTERVAL
+
+
+def _api_call(fn, key: str, retries: int = 3, **kwargs):
+    """带限流与指数退避重试的接口调用。"""
+    for attempt in range(retries):
+        _throttle(key)
+        try:
+            return fn(**kwargs)
+        except Exception as e:
+            if attempt == retries - 1:
+                raise
+            wait = 2.0 ** (attempt + 1)
+            if "每分钟" in str(e) or "频率" in str(e):
+                wait = 20.0
+            logger.debug(f"{key} 第{attempt+1}次失败，{wait:.0f}s 后重试: {e}")
+            time.sleep(wait)
+
 
 
 def _log(msg: str):
@@ -275,81 +311,328 @@ def _last_day(year: int, month: int) -> str:
 # E2 — 企业事件下载（Tushare）
 # ═══════════════════════════════════════════════════════════════
 
+def _digits(d: str) -> str:
+    return d.replace("-", "")
+
+
+def _parse(d: str) -> datetime:
+    return datetime.strptime(d, _FMT_DASH)
+
+
+def _week_segments(start: str, end: str):
+    """把 [start,end] 切成每段 ≤7 天（回购接口单次上限 2000 行）。"""
+    cur, last = _parse(start), _parse(end)
+    while cur <= last:
+        seg = min(cur + timedelta(days=6), last)
+        yield cur.strftime(_FMT_DASH), seg.strftime(_FMT_DASH)
+        cur = seg + timedelta(days=1)
+
+
+def _month_segments(start: str, end: str):
+    """把 [start,end] 切成自然月。"""
+    cur, last = _parse(start), _parse(end)
+    while cur <= last:
+        if cur.month == 12:
+            month_end = datetime(cur.year, 12, 31)
+        else:
+            month_end = datetime(cur.year, cur.month + 1, 1) - timedelta(days=1)
+        seg = min(month_end, last)
+        yield cur.strftime(_FMT_DASH), seg.strftime(_FMT_DASH)
+        cur = seg + timedelta(days=1)
+
+
+def _iter_days(start: str, end: str):
+    cur, last = _parse(start), _parse(end)
+    while cur <= last:
+        yield cur.strftime(_FMT_DASH)
+        cur += timedelta(days=1)
+
+
+def _trade_days(pro, start: str, end: str) -> list:
+    df = _api_call(pro.trade_cal, "trade_cal", exchange="SSE",
+                   start_date=_digits(start), end_date=_digits(end),
+                   is_open="1", fields="cal_date")
+    if df is None or df.empty:
+        return []
+    return sorted(df["cal_date"].tolist())
+
+
+# ---- 行 -> 事件 构造（单只/多只通用，ts_code 取自数据行） ----
+
+def _reduce_events_from_df(df) -> list:
+    events = []
+    if df is None or df.empty:
+        return events
+    for _, row in df.iterrows():
+        ts_code = str(row.get("ts_code") or "")
+        ann_date = _fmt_date(row.get("ann_date"))
+        if not ts_code or not ann_date:
+            continue
+        holder = str(row.get("holder_name", "unknown"))[:20]
+        in_de = row.get("in_de", "")
+        events.append({
+            "event_id": f"reduce_{ts_code}_{ann_date.replace('-', '')}_{holder}",
+            "code": ts_code.split(".")[0],
+            "event_type": "increase" if in_de == "I" else "reduce",
+            "date": ann_date,
+            "end_date": None,
+            "detail": {
+                "holder_name": row.get("holder_name", ""),
+                "holder_type": row.get("holder_type", ""),
+                "change_vol": _fmt_float(row.get("change_vol")),
+                "change_ratio": _fmt_float(row.get("change_ratio")),
+                "after_ratio": _fmt_float(row.get("after_ratio")),
+                "avg_price": _fmt_float(row.get("avg_price")),
+            },
+            "source": "tushare",
+            "phase": 1,
+        })
+    return events
+
+
+def _repurchase_events_from_df(df, start: str, end: str) -> list:
+    events = []
+    if df is None or df.empty:
+        return events
+    for _, row in df.iterrows():
+        ts_code = str(row.get("ts_code") or "")
+        ann = _fmt_date(row.get("ann_date"))
+        if not ts_code or not ann or ann < start or ann > end:
+            continue
+        proc = str(row.get("proc", "") or "")
+        events.append({
+            "event_id": f"buyback_{ts_code}_{ann.replace('-', '')}_{proc}",
+            "code": ts_code.split(".")[0],
+            "event_type": "buyback",
+            "date": ann,
+            "end_date": _fmt_date(row.get("end_date")),
+            "detail": {
+                "proc": proc,
+                "vol": _fmt_float(row.get("vol")),
+                "amount": _fmt_float(row.get("amount")),
+                "high_limit": _fmt_float(row.get("high_limit")),
+                "low_limit": _fmt_float(row.get("low_limit")),
+            },
+            "source": "tushare",
+            "phase": 1,
+        })
+    return events
+
+
+def _pledge_events_from_df(df) -> list:
+    events = []
+    if df is None or df.empty:
+        return events
+    for _, row in df.iterrows():
+        ts_code = str(row.get("ts_code") or "")
+        end_d = _fmt_date(row.get("end_date"))
+        if not ts_code or not end_d:
+            continue
+        events.append({
+            "event_id": f"pledge_{ts_code}_{end_d.replace('-', '')}",
+            "code": ts_code.split(".")[0],
+            "event_type": "pledge",
+            "date": end_d,
+            "end_date": None,
+            "detail": {
+                "pledge_count": int(row["pledge_count"]) if pd.notna(row.get("pledge_count")) else None,
+                "unrest_pledge": _fmt_float(row.get("unrest_pledge")),
+                "rest_pledge": _fmt_float(row.get("rest_pledge")),
+                "total_share": _fmt_float(row.get("total_share")),
+                "pledge_ratio": _fmt_float(row.get("pledge_ratio")),
+            },
+            "source": "tushare",
+            "phase": 1,
+        })
+    return events
+
+
+def _dividend_events_from_df(df) -> list:
+    events = []
+    if df is None or df.empty:
+        return events
+    for _, row in df.iterrows():
+        ts_code = str(row.get("ts_code") or "")
+        ann_date = _fmt_date(row.get("ann_date"))
+        if not ts_code or not ann_date:
+            continue
+        ex_date = _fmt_date(row.get("ex_date"))
+        events.append({
+            "event_id": f"dividend_{ts_code}_{ann_date.replace('-', '')}",
+            "code": ts_code.split(".")[0],
+            "event_type": "dividend",
+            "date": ann_date,
+            "end_date": ex_date,
+            "detail": {
+                "cash_div": _fmt_float(row.get("cash_div")),
+                "cash_div_tax": _fmt_float(row.get("cash_div_tax")),
+                "stk_div": _fmt_float(row.get("stk_div")),
+                "stk_bo_rate": _fmt_float(row.get("stk_bo_rate")),
+                "record_date": _fmt_date(row.get("record_date")),
+                "ex_date": ex_date,
+                "pay_date": _fmt_date(row.get("pay_date")),
+                "div_proc": row.get("div_proc", ""),
+            },
+            "source": "tushare",
+            "phase": 1,
+        })
+    return events
+
+
+def _limit_per_code(events: list, max_records: int) -> list:
+    """每只股票只保留最新 max_records 条（与逐只路径口径一致）。"""
+    if max_records <= 0:
+        return events
+    by = defaultdict(list)
+    for e in events:
+        by[e["code"]].append(e)
+    out = []
+    for es in by.values():
+        es.sort(key=lambda e: e["date"], reverse=True)
+        out.extend(es[:max_records])
+    return out
+
+
+def _merge_events(by_code: dict, events: list) -> None:
+    for e in events:
+        by_code[e["code"]].append(e)
+
+
+def _collect_corp_events_batch(pro, start: str, end: str,
+                               pledge_limit: int, dividend_limit: int,
+                               repurchase_limit: int):
+    """按日期批量拉取全市场企业事件，返回 ({code: [events]}, 统计)。
+
+    替代逐只 4 接口 × ~5500 只的调用（~2.2 万次），改为：
+      减持 按月 / 回购 按周(单次上限 2000 行) / 质押 逐日探测 end_date /
+      分红 按交易日；合计约百余次调用。
+    """
+    by_code: dict = defaultdict(list)
+    stats = {"reduce": 0, "pledge": 0, "dividend": 0, "buyback": 0, "fail": 0}
+
+    _log("  E2 批量: 减持（按月）...")
+    for s, e in _month_segments(start, end):
+        try:
+            df = _api_call(pro.stk_holdertrade, "stk_holdertrade",
+                           start_date=_digits(s), end_date=_digits(e))
+            evs = _reduce_events_from_df(df)
+            _merge_events(by_code, evs)
+            stats["reduce"] += len(evs)
+        except Exception as ex:
+            logger.warning(f"减持批量 {s}~{e} 失败: {ex}")
+            stats["fail"] += 1
+
+    _log("  E2 批量: 回购（按周）...")
+    rep_events = []
+    for s, e in _week_segments(start, end):
+        try:
+            df = _api_call(pro.repurchase, "repurchase",
+                           start_date=_digits(s), end_date=_digits(e))
+            rep_events += _repurchase_events_from_df(df, start, end)
+        except Exception as ex:
+            logger.warning(f"回购批量 {s}~{e} 失败: {ex}")
+            stats["fail"] += 1
+    rep_events = _limit_per_code(rep_events, repurchase_limit)
+    _merge_events(by_code, rep_events)
+    stats["buyback"] = len(rep_events)
+
+    _log("  E2 批量: 质押（逐日探测 end_date）...")
+    pledge_events = []
+    for day in _iter_days(start, end):
+        try:
+            df = _api_call(pro.pledge_stat, "pledge_stat", end_date=_digits(day))
+            pledge_events += _pledge_events_from_df(df)
+        except Exception as ex:
+            logger.warning(f"质押批量 {day} 失败: {ex}")
+            stats["fail"] += 1
+    pledge_events = _limit_per_code(pledge_events, pledge_limit)
+    _merge_events(by_code, pledge_events)
+    stats["pledge"] = len(pledge_events)
+
+    _log("  E2 批量: 分红（按交易日）...")
+    dividend_events = []
+    for day in _trade_days(pro, start, end):
+        try:
+            df = _api_call(pro.dividend, "dividend", ann_date=day)
+            dividend_events += _dividend_events_from_df(df)
+        except Exception as ex:
+            logger.warning(f"分红批量 {day} 失败: {ex}")
+            stats["fail"] += 1
+    dividend_events = _limit_per_code(dividend_events, dividend_limit)
+    _merge_events(by_code, dividend_events)
+    stats["dividend"] = len(dividend_events)
+
+    return by_code, stats
+
+
+def _download_corp_events_per_stock(pro, codes: list, start: str, end: str,
+                                    pledge_limit: int, dividend_limit: int,
+                                    repurchase_limit: int) -> dict:
+    """指定股票逐只下载（带限流；4 个接口全部计入失败统计）。"""
+    from data.store_events import save_corp_events
+
+    result = {"reduce": 0, "pledge": 0, "dividend": 0, "buyback": 0, "fail": 0}
+    total = len(codes)
+    for i, ts_code in enumerate(codes):
+        code6 = ts_code.split(".")[0]
+        events = []
+        for name, fn in (
+            ("reduce", lambda c=ts_code: _fetch_reduce(c, start, end)),
+            ("buyback", lambda c=ts_code: _fetch_repurchase(c, start, end, repurchase_limit)),
+            ("pledge", lambda c=ts_code: _fetch_pledge(c, pledge_limit)),
+            ("dividend", lambda c=ts_code: _fetch_dividend(c, dividend_limit)),
+        ):
+            try:
+                ev = fn()
+                if ev:
+                    events += ev
+                    result[name] += len(ev)
+            except Exception as e:
+                logger.debug(f"{ts_code} {name} 失败: {e}")
+                result["fail"] += 1
+        if events:
+            save_corp_events(code6, events)
+        if (i + 1) % 100 == 0 or (i + 1) == total:
+            _log(f"  E2进度: {i+1}/{total}  减持{result['reduce']} 质押{result['pledge']} "
+                 f"分红{result['dividend']} 回购{result['buyback']} 失败{result['fail']}")
+    return result
+
+
 def download_all_corp_events(codes: list = None,
                               start: str = "2024-01-01",
                               end: str = None) -> dict:
-    """下载全部企业事件：减持/质押/分红"""
-    end = end or datetime.now().strftime(_FMT_DASH)
-    from data.downloader_moneyflow import _get_all_stock_codes
-    from data.store_events import save_corp_events
+    """下载企业事件：减持/质押/分红/回购。
 
-    if codes is None:
-        try:
-            pro = _get_pro()
-            codes = _get_all_stock_codes(pro)
-        except Exception as e:
-            _log(f"获取股票列表失败: {e}")
-            # 从 market 数据获取已覆盖的股票作为 fallback
-            import data.store as mstore
-            codes = [f"{c}.SZ" if c.startswith("0") or c.startswith("3")
-                     else f"{c}.SH" for c in mstore.list_codes("stock", "cn")]
-    total = len(codes)
-    _log(f"E2 企业事件下载: {total} 只, {start} ~ {end}")
+    codes=None 时按日期批量（一次覆盖全市场，约百余次调用）；
+    指定 codes 时逐只补齐（带每接口限流）。
+    """
+    end = end or datetime.now().strftime(_FMT_DASH)
 
     # 增量更新（短时间范围）时质押只取最近26条，全量初始化取52条
     is_incremental = start >= (datetime.now() - timedelta(days=730)).strftime(_FMT_DASH)
     pledge_limit = 26 if is_incremental else 52
     dividend_limit = 10 if is_incremental else 20
-
     repurchase_limit = 10 if is_incremental else 20
-    result = {"reduce": 0, "pledge": 0, "dividend": 0, "buyback": 0, "fail": 0}
-    for i, ts_code in enumerate(codes):
-        code6 = ts_code.split(".")[0]
-        events = []
-        try:
-            ev = _fetch_reduce(ts_code, start, end)
-            if ev:
-                events += ev
-                result["reduce"] += len(ev)
-        except Exception as e:
-            logger.debug(f"{ts_code} 减持失败: {e}")
-            result["fail"] += 1
 
-        try:
-            ev = _fetch_repurchase(ts_code, start, end, max_records=repurchase_limit)
-            if ev:
-                events += ev
-                result["buyback"] += len(ev)
-        except Exception as e:
-            logger.debug(f"{ts_code} 回购失败: {e}")
+    pro = _get_pro()
 
-        try:
-            ev = _fetch_pledge(ts_code, max_records=pledge_limit)
-            if ev:
-                events += ev
-                result["pledge"] += len(ev)
-        except Exception as e:
-            logger.debug(f"{ts_code} 质押失败: {e}")
+    if codes is not None:
+        _log(f"E2 企业事件下载（指定 {len(codes)} 只）: {start} ~ {end}")
+        result = _download_corp_events_per_stock(
+            pro, codes, start, end, pledge_limit, dividend_limit, repurchase_limit)
+        _log(f"E2完成: 减持{result['reduce']} 质押{result['pledge']} "
+             f"分红{result['dividend']} 回购{result['buyback']} 失败{result['fail']}")
+        return result
 
-        try:
-            ev = _fetch_dividend(ts_code, max_records=dividend_limit)
-            if ev:
-                events += ev
-                result["dividend"] += len(ev)
-        except Exception as e:
-            logger.debug(f"{ts_code} 分红失败: {e}")
-
-        if events:
-            save_corp_events(code6, events)
-        time.sleep(0.15)
-
-        if (i + 1) % 100 == 0 or (i + 1) == total:
-            _log(f"  E2进度: {i+1}/{total}  "
-                 f"减持{result['reduce']} 质押{result['pledge']} 分红{result['dividend']} "
-                 f"回购{result['buyback']} 失败{result['fail']}")
-
-    _log(f"E2完成: 减持{result['reduce']} 质押{result['pledge']} 分红{result['dividend']} "
-         f"回购{result['buyback']} 失败{result['fail']}")
+    _log(f"E2 企业事件下载（全市场·按日期批量）: {start} ~ {end}")
+    by_code, result = _collect_corp_events_batch(
+        pro, start, end, pledge_limit, dividend_limit, repurchase_limit)
+    from data.store_events import save_corp_events
+    for code6, evs in by_code.items():
+        save_corp_events(code6, evs)
+    _log(f"E2完成: 减持{result['reduce']} 质押{result['pledge']} "
+         f"分红{result['dividend']} 回购{result['buyback']} 失败{result['fail']} "
+         f"覆盖{len(by_code)}只")
     return result
 
 
@@ -389,103 +672,27 @@ def _get_pro():
 def _fetch_reduce(ts_code: str, start: str, end: str) -> list:
     """大股东增减持计划 (Tushare stk_holdertrade)"""
     pro = _get_pro()
-    df = pro.stk_holdertrade(
-        ts_code=ts_code,
-        start_date=start.replace("-", ""),
-        end_date=end.replace("-", ""),
-    )
-    if df is None or df.empty:
-        return []
-    events = []
-    for _, row in df.iterrows():
-        in_de = row.get("in_de", "")
-        holder = str(row.get("holder_name", "unknown"))[:20]
-        ann_date = _fmt_date(row.get("ann_date"))
-        if not ann_date:
-            continue
-        events.append({
-            "event_id": f"reduce_{ts_code}_{ann_date.replace('-', '')}_{holder}",
-            "code": ts_code.split(".")[0],
-            "event_type": "increase" if in_de == "I" else "reduce",
-            "date": ann_date,
-            "end_date": None,
-            "detail": {
-                "holder_name": row.get("holder_name", ""),
-                "holder_type": row.get("holder_type", ""),
-                "change_vol": _fmt_float(row.get("change_vol")),
-                "change_ratio": _fmt_float(row.get("change_ratio")),
-                "after_ratio": _fmt_float(row.get("after_ratio")),
-                "avg_price": _fmt_float(row.get("avg_price")),
-            },
-            "source": "tushare",
-            "phase": 1,
-        })
-    return events
+    df = _api_call(pro.stk_holdertrade, "stk_holdertrade",
+                   ts_code=ts_code, start_date=_digits(start), end_date=_digits(end))
+    return _reduce_events_from_df(df)
 
 
 def _fetch_pledge(ts_code: str, max_records: int = 52) -> list:
     """股权质押统计 (Tushare pledge_stat)，最多保留最新 max_records 条"""
     pro = _get_pro()
-    df = pro.pledge_stat(ts_code=ts_code)
+    df = _api_call(pro.pledge_stat, "pledge_stat", ts_code=ts_code)
     if df is None or df.empty:
         return []
     df = df.sort_values("end_date", ascending=False).head(max_records)
-    events = []
-    for _, row in df.iterrows():
-        end_d = _fmt_date(row.get("end_date"))
-        if not end_d:
-            continue
-        events.append({
-            "event_id": f"pledge_{ts_code}_{end_d.replace('-', '')}",
-            "code": ts_code.split(".")[0],
-            "event_type": "pledge",
-            "date": end_d,
-            "end_date": None,
-            "detail": {
-                "pledge_count": int(row["pledge_count"]) if pd.notna(row.get("pledge_count")) else None,
-                "unrest_pledge": _fmt_float(row.get("unrest_pledge")),
-                "rest_pledge": _fmt_float(row.get("rest_pledge")),
-                "total_share": _fmt_float(row.get("total_share")),
-                "pledge_ratio": _fmt_float(row.get("pledge_ratio")),
-            },
-            "source": "tushare",
-            "phase": 1,
-        })
-    return events
+    return _pledge_events_from_df(df)
 
 
 def _fetch_repurchase(ts_code: str, start: str, end: str, max_records: int = 20) -> list:
     """股票回购 (Tushare repurchase)，只保留公告日在 [start,end] 的最新 max_records 条。"""
     pro = _get_pro()
-    df = pro.repurchase(
-        ts_code=ts_code,
-        start_date=start.replace("-", ""),
-        end_date=end.replace("-", ""),
-    )
-    if df is None or df.empty:
-        return []
-    events = []
-    for _, row in df.iterrows():
-        ann = _fmt_date(row.get("ann_date"))
-        if not ann or ann < start or ann > end:
-            continue
-        proc = str(row.get("proc", "") or "")
-        events.append({
-            "event_id": f"buyback_{ts_code}_{ann.replace('-', '')}_{proc}",
-            "code": ts_code.split(".")[0],
-            "event_type": "buyback",
-            "date": ann,
-            "end_date": _fmt_date(row.get("end_date")),
-            "detail": {
-                "proc": proc,
-                "vol": _fmt_float(row.get("vol")),
-                "amount": _fmt_float(row.get("amount")),
-                "high_limit": _fmt_float(row.get("high_limit")),
-                "low_limit": _fmt_float(row.get("low_limit")),
-            },
-            "source": "tushare",
-            "phase": 1,
-        })
+    df = _api_call(pro.repurchase, "repurchase",
+                   ts_code=ts_code, start_date=_digits(start), end_date=_digits(end))
+    events = _repurchase_events_from_df(df, start, end)
     events.sort(key=lambda e: e["date"], reverse=True)
     return events[:max_records]
 
@@ -493,38 +700,11 @@ def _fetch_repurchase(ts_code: str, start: str, end: str, max_records: int = 20)
 def _fetch_dividend(ts_code: str, max_records: int = 20) -> list:
     """分红送转 (Tushare dividend)，最多保留最新 max_records 条"""
     pro = _get_pro()
-    df = pro.dividend(ts_code=ts_code)
+    df = _api_call(pro.dividend, "dividend", ts_code=ts_code)
     if df is None or df.empty:
         return []
     df = df.sort_values("ann_date", ascending=False).head(max_records)
-    events = []
-    for _, row in df.iterrows():
-        ann_date = _fmt_date(row.get("ann_date"))
-        ex_date = _fmt_date(row.get("ex_date"))
-        if not ann_date:
-            continue
-        record_date = _fmt_date(row.get("record_date"))
-        pay_date = _fmt_date(row.get("pay_date"))
-        events.append({
-            "event_id": f"dividend_{ts_code}_{ann_date.replace('-', '')}",
-            "code": ts_code.split(".")[0],
-            "event_type": "dividend",
-            "date": ann_date,
-            "end_date": ex_date,
-            "detail": {
-                "cash_div": _fmt_float(row.get("cash_div")),
-                "cash_div_tax": _fmt_float(row.get("cash_div_tax")),
-                "stk_div": _fmt_float(row.get("stk_div")),
-                "stk_bo_rate": _fmt_float(row.get("stk_bo_rate")),
-                "record_date": record_date,
-                "ex_date": ex_date,
-                "pay_date": pay_date,
-                "div_proc": row.get("div_proc", ""),
-            },
-            "source": "tushare",
-            "phase": 1,
-        })
-    return events
+    return _dividend_events_from_df(df)
 
 
 def init_events(year: int = None) -> None:

@@ -18,7 +18,7 @@
 | 7a97e45 | C | A2 P0 辅助分析聚合(`agent_tools/analysis.py`) + 推送/Web 看板展示 |
 | 0b1cc64 | D | GAP-07/08/09 交易闭环测试补齐 |
 
-**测试基线**：522 passed / 2 skipped（运行须加 `--timeout=30`）。
+**测试基线**：667 passed / 2 skipped（运行须加 `--timeout=30`；另有既有 `test_smart_money::test_assess_routes` 失败，与 2026-10 数据层优化无关）。
 
 ### 关键修复细节（新 Session 需知）
 - **deep_value 行业排除**：原依赖 `df.attrs["industry_code"]`，但 scanner 从未注入该列，过滤永久失效。已改为 `data/store_meta.py:get_stock_l1_industry(code)` 反查申万一级行业（带模块级缓存 `_STOCK_L1_CACHE`）。

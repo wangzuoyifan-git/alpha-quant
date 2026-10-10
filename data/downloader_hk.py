@@ -19,6 +19,7 @@
 """
 import json
 import logging
+import random
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -66,6 +67,10 @@ _VALUATION_COLS = ("pe_ttm", "pb_mrq", "pcf_ttm")
 _EM_FFLOW_HOSTS = ("https://91.push2his.eastmoney.com",
                    "http://push2his.eastmoney.com")
 _EM_FFLOW_PATH = "/api/qt/stock/fflow/daykline/get"
+_FFLOW_RETRIES = 2          # 单只重试轮数（每轮遍历全部域名），抵御偶发 RemoteDisconnected
+_FFLOW_MAX_STREAK = 8       # 连续失败熔断阈值：超过则判定数据源不可用（限流/封禁），提前中止本轮
+_FFLOW_MIN_INTERVAL = 1.5   # 相邻请求最小间隔（秒）：东财 push2 为令牌桶限流，过快会耗尽突发额度触发封禁
+_FFLOW_JITTER = 0.4         # 间隔抖动上限（秒），避免固定节奏被识别
 
 # 港股财务分析指标 → growth / dupont 分表列
 _HK_GROWTH_COLS = ("OPERATE_INCOME_YOY", "GROSS_PROFIT_YOY", "HOLDER_PROFIT_YOY",
@@ -117,6 +122,19 @@ def _bars(done, total, ok, fail, t0, prefix="港股"):
         sys.stdout.flush()
     elif done % 50 == 0 or done == total:
         _log(line)
+
+
+def _sleep_to_interval(t_req: float, interval: float, jitter: float = 0.0):
+    """从 t_req（最近一次请求发起时刻）起，保证至少间隔 interval 秒（含随机抖动）。
+
+    东财 push2 为令牌桶限流：突发额度用完即对源 IP 连接重置，恢复需较长时间。
+    固定且偏快的节奏（原 _SLEEP=0.3s）会迅速耗尽额度，故按最小间隔匀速抓取。
+    """
+    wait = interval - (time.time() - t_req)
+    if wait > 0:
+        time.sleep(wait)
+    if jitter > 0:
+        time.sleep(random.uniform(0, jitter))
 
 
 class HKDownloader:
@@ -383,9 +401,12 @@ class HKDownloader:
         _log("=" * 55)
 
         ok = skip = fail = 0
+        aborted = False
+        streak = 0
         t0 = time.time()
         _bars(0, total, ok, fail, t0, prefix="港股资金流")
         for code in codes:
+            req_t = time.time()
             try:
                 df = self._fetch_hk_fflow(code)
                 if df is None or df.empty:
@@ -393,14 +414,23 @@ class HKDownloader:
                 else:
                     store_mf.save("stock", df, code=code, market="hk")
                     ok += 1
+                streak = 0
             except Exception as e:
                 logger.warning(f"{code} 资金流更新失败: {e}")
                 fail += 1
+                streak += 1
+                if _FFLOW_MAX_STREAK and streak >= _FFLOW_MAX_STREAK:
+                    logger.error(
+                        f"港股资金流连续失败 {streak} 只，东财接口疑似限流/封禁，提前中止本轮"
+                        f"（成功={ok} 失败={fail}，剩余 {total - ok - skip - fail} 只未处理）")
+                    aborted = True
+                    break
             _bars(ok + skip + fail, total, ok, fail, t0, prefix="港股资金流")
-            time.sleep(_SLEEP)
+            _sleep_to_interval(req_t, _FFLOW_MIN_INTERVAL, _FFLOW_JITTER)
         print()
-        _log(f"资金流更新完成: 成功={ok} 跳过={skip} 失败={fail}")
-        return {"ok": ok, "skip": skip, "fail": fail, "total": total}
+        _log(f"资金流更新完成: 成功={ok} 跳过={skip} 失败={fail}"
+             + ("（已熔断中止）" if aborted else ""))
+        return {"ok": ok, "skip": skip, "fail": fail, "total": total, "aborted": aborted}
 
     @staticmethod
     def _parse_fflow(klines: list) -> pd.DataFrame | None:
@@ -434,16 +464,20 @@ class HKDownloader:
             "Referer": "https://data.eastmoney.com/",
         }
         last_err = None
-        for host in _EM_FFLOW_HOSTS:
-            try:
-                r = requests.get(host + _EM_FFLOW_PATH, params=params,
-                                 headers=headers, timeout=20)
-                r.raise_for_status()
-                klines = (r.json().get("data") or {}).get("klines") or []
-                if klines:
+        for attempt in range(_FFLOW_RETRIES):
+            for host in _EM_FFLOW_HOSTS:
+                try:
+                    r = requests.get(host + _EM_FFLOW_PATH, params=params,
+                                     headers=headers, timeout=20)
+                    r.raise_for_status()
+                    klines = (r.json().get("data") or {}).get("klines") or []
+                    if not klines:
+                        return None  # 有效响应但无数据 → 不重试
                     return HKDownloader._parse_fflow(klines)
-            except Exception as e:
-                last_err = e
+                except Exception as e:
+                    last_err = e
+            if attempt < _FFLOW_RETRIES - 1:
+                time.sleep(_RETRY_SLEEP * (attempt + 1))
         if last_err is not None:
             raise last_err
         return None
