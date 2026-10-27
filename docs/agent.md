@@ -1,7 +1,8 @@
 # Alpha量化 — Agent 层文档
 
 > Agent 层架构设计、Tool Layer 规范、LLM 接入方案、阶段规划。
-> 最后更新：2026-06-21（L2行业评分升级申万L2/131个细分行业；新增 ETF Agent 独立三维评分体系 4.6；L3联动强势主题ETF补入选股池；Tool 契约对齐 list_strategies/generate_orders；A2 辅助分析模块 agent_tools/analysis.py）
+> 最后更新：2026-10-27（新增 `agent_tools/chan_tools.py` 缠论结构 Tools；A2 辅助分析新增 `chan` 块；`Signal.extra["chan"]` 由 `chan_theory` 写入并被 Web/推送复用）
+> 2026-06-21（L2行业评分升级申万L2/131个细分行业；新增 ETF Agent 独立三维评分体系 4.6；L3联动强势主题ETF补入选股池；Tool 契约对齐 list_strategies/generate_orders；A2 辅助分析模块 agent_tools/analysis.py）
 >
 > **项目基础信息见 `docs/project.md`**
 > **架构兼容性约束完整定义（AC1~AC9+AC14~17）见 `docs/requirements.md` 第七/八章**
@@ -285,6 +286,30 @@ def get_recent_lhb_smart_money(days: int = 1, history_months: int = 0,
                                top_n: int = 10, horizons="5,10,20") -> dict
     # 盘前扫描最近 N 个龙虎榜披露日标的：本次席位 + 席位跨股历史画像 + 本股历史其他上榜
 ```
+
+### 3.6 chan_tools.py
+
+缠论结构 Tools（薄封装 `chan/`）。定位为**结构描述**：输出笔/中枢/买卖点/背驰/周线方向，
+策略 `chan_theory` 负责交易语义，Agent 只消费结构快照，不在此层做买卖决策。
+
+```python
+def get_chan_snapshot(code: str, level: str = "daily", date: str = None,
+                      asset_type: str = "stock", market: str = "cn",
+                      with_weekly: bool = True) -> dict
+    # 单级别快照：最新笔/中枢/买卖点/背驰/趋势；日线默认附带周线方向
+
+def get_chan_buy_points(code: str, date: str = None,
+                        kinds: list[str] = None, limit: int = 10,
+                        asset_type: str = "stock", market: str = "cn") -> dict
+    # 最近 1/2/3 类买卖点，可按 kinds 过滤
+
+def get_chan_multi_level(code: str, date: str = None,
+                         asset_type: str = "stock", market: str = "cn") -> dict
+    # 日线 + 周线结构摘要 + higher_level_trend
+```
+
+消费方：`agent_tools/analysis.py`（A2 辅助分析新增 `chan` 块）、Web 看板 `aux_summary`、
+`tools/plot_kline.py --chan`。`Signal.extra["chan"]` 由 `chan_theory` 直接写入，避免重复计算。
 
 ---
 

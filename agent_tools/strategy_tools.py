@@ -50,7 +50,8 @@ def run_scan(date: str = None, strategies: list = None,
             "signals": [
                 {"code": s.code, "name": s.name, "signal": s.signal,
                  "price": s.price, "score": s.score, "reason": s.reason,
-                 "position_type": s.position_type, "time_horizon": s.time_horizon}
+                 "position_type": s.position_type, "time_horizon": s.time_horizon,
+                 "chan": (s.extra or {}).get("chan")}
                 for s in signals
             ],
             "count": len(signals),

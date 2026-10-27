@@ -236,6 +236,22 @@ def update_trail_stop(
     elif logic == "trail_ma20":
         ma20 = float(df["close"].astype(float).rolling(20).mean().iloc[-1])
         el["stop_loss"] = max(old_stop, ma20)
+    elif logic == "trail_chan":
+        # 缠论移动止损：最新中枢下沿 ZD 与最近向上笔起点取较高者
+        try:
+            from chan.engine import ChanEngine
+
+            result = ChanEngine().analyze(df, level="daily")
+            candidate = old_stop
+            if result.pivots:
+                candidate = max(candidate, result.pivots[-1].zd)
+            for bi in reversed(result.bis):
+                if bi.direction == "up":
+                    candidate = max(candidate, bi.low)
+                    break
+            el["stop_loss"] = candidate
+        except Exception:
+            pass
 
     # 同步更新 scale_levels 里的 hard_stop 价位
     new_stop = el["stop_loss"]
@@ -279,6 +295,10 @@ def calc_entry_bid(
     # 涨停判断（pct_chg 达到涨停幅度的 98% 视为涨停）
     if pct_chg >= limit_up_pct * 100 * 0.98:
         return round(price * (1 + limit_up_pct), 2), f"涨停排队价（+{limit_up_pct*100:.0f}%）"
+
+    # 缠论三买：回踩确认后小幅溢价，避免追高
+    if exit_logic == "trail_chan":
+        return round(price * 1.003, 2), "缠论回踩确认+0.3%"
 
     # 突破信号 + 强评分：愿意付溢价优先成交
     if exit_logic in ("swing_low", "trail_supertrend") and score >= 75:

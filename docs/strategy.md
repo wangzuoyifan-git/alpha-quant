@@ -233,7 +233,7 @@ class BaseStrategy(ABC):
 ### 2.1 策略能力画像（6 维 schema）
 
 > **策略标签草案**：applicable_regimes 是筛选事实来源，strategy_keys 由 `select_strategies()` 按画像匹配产出。
-> 具体标签值待更多策略开发后随实践校准，不应拘泥于当前 6 个内置策略。
+> 具体标签值待更多策略开发后随实践校准，不应拘泥于当前内置策略数量。
 
 | key | style | applicable_regimes | risk_profile | time_horizon | 版本 | 正交维度 |
 |---|---|---|---|---|---|---|
@@ -241,6 +241,7 @@ class BaseStrategy(ABC):
 | `macd_rsi` | reversal | [risk_off, volatile] | defensive | short | v2.0 | 均值回归（RSI背离+超卖） |
 | `vol_price_breakout` | breakout | [risk_on] | aggressive | short | v2.0 | 突破（蓄力确认+ATR标准化） |
 | `etf_momentum` | momentum | [risk_on, balanced] | balanced | short | v2.0 | ETF 轮动（绝对+相对动量，仅ETF） |
+| `chan_theory` | breakout | [balanced, risk_on] | balanced | short | v1.0 | 缠论结构突破（三买/三卖 + 周线确认） |
 | `fundamental_value` | quality | [crisis,risk_off,balanced,risk_on,volatile] | defensive | medium | v3.0 | 质量（Quality，PE历史分位） |
 | `deep_value` | value | [crisis,risk_off,balanced,risk_on,volatile] | defensive | long | v2.0 | 价值（Value，行业排除+股息） |
 | `growth_pick` | growth | [crisis,risk_off,balanced,risk_on,volatile] | balanced | medium | v2.0 | 成长（Growth，PEG控估值） |
@@ -292,6 +293,7 @@ class BaseStrategy(ABC):
 | 均值回归 | `macd_rsi`（v2：RSI 阈值放宽至40 + RSI背离判断） | ✅ 已优化 |
 | 突破 | `vol_price_breakout`（v2：蓄力确认 + ATR标准化 + SELL语义明确） | ✅ 已修复 |
 | ETF 轮动 | `etf_momentum`（v2：绝对动量过滤） | ✅ 已优化 |
+| 结构突破 | `chan_theory`（三买/三卖 + 周线确认 + 中枢出场） | ✅ P1+P2 |
 | ~~资金流~~ | ~~`money_flow`~~ → 已降级，能力并入趋势跟踪过滤层 | ✅ 已降级 |
 
 **L3-B 基本面策略**（半系统化，配置仓候选，WATCH，`position_type=config`，经 L2 行业池过滤后供人工确认）
@@ -309,6 +311,60 @@ class BaseStrategy(ABC):
 **L3-C 事件驱动策略**（待开发）
 - C1 高股息/回购（medium，配置仓）/ C2 业绩超预期（short~medium，交易仓）
 - 注：事件驱动是独立于上述正交维度的第三类 Alpha 来源（事件冲击），依赖 E2/E3 数据完善
+
+### 2.2.1 缠论结构策略（P1+P2）
+
+> 2026-10 新增。`chan/` 为纯计算层，`chan_theory` 为唯一注册的 L3-A 策略；
+> 一买/二买先不注册，避免与 `macd_rsi` 均值回归重叠。
+
+**模块分工**
+
+```
+chan/                  # 纯算法库（无 IO / 无策略依赖）
+├── adapter.py         # df -> 标准 OHLCV；日线聚合周线
+├── kline.py           # K线包含处理
+├── fractal.py         # 顶/底分型
+├── bi.py              # 笔（成笔最小间隔可配）
+├── pivot.py           # 中枢（ZG/ZD/GG/DD + 延伸）
+├── divergence.py      # MACD 面积背驰
+├── buy_sell.py        # 1/2/3 类买卖点
+├── multi_level.py     # 日线 + 周线确认（剔除未完成周）
+└── engine.py          # ChanEngine.analyze(df, level) -> ChanResult
+```
+
+**策略规则**
+
+- 默认只做 `3buy` / `3sell`，`buy_points` / `sell_points` 可参数化；
+- 日线三买要求周线趋势不为 `down`（周线不足 20 根时标注 `unknown` 并放行）；
+- 三买后要求收盘价不低于回踩低点，三卖反之；
+- 评分 = 基础分 + 买卖点强度 + 周线同向 + 量能确认；
+- 出场：硬止损用中枢下沿 `ZD`，止盈用中枢上沿 `ZG + 中枢高度`，`exit_logic="trail_chan"`；
+- `Signal.extra["chan"]` 携带最新笔/中枢/买卖点/背驰摘要，供 Agent/Web 消费。
+
+**CLI**
+
+```bash
+python main.py chan --code 600519                  # 日线结构 + 周线确认
+python main.py chan --code 600519 --level weekly   # 周线结构
+python main.py chan --code 600519 --json           # 结构化输出
+python main.py scan --strategy chan_theory --codes 600519
+python main.py backtest --strategy chan_theory --codes 600519 --start 2024-01-01
+```
+
+**P3 上下文接入（已完成）**
+
+- `agent_tools/chan_tools.py`：`get_chan_snapshot` / `get_chan_buy_points` / `get_chan_multi_level`
+- `agent_tools/analysis.py`：A2 辅助分析新增 `chan` 块，推送/Web 看板展示趋势、中枢与最近买卖点
+- `engine/analysis.py`：`analyze_signal()` 同步输出缠论摘要
+- `tools/plot_kline.py --chan`：日线叠加笔（红/绿）、中枢上下沿（橙）、买卖点（三角）
+- `Signal.extra["chan"]` 已计算时会被 `enrich_signal_objects` 复用，避免重复跑结构
+
+**已知约束**
+
+- 当前只有日线数据，周线由日线聚合；真正的 30m/60m 次级别联立待分钟线接入。
+- 笔/线段规则存在歧义，当前采用「分型 + 最小间隔 4」的简化规则，参数在 `config/settings.py::CHAN`。
+- 回测按日重算完整结构，全市场回测较慢；建议先用 `--codes` 小样本验证。
+- 所有结构只使用传入 `df` 的历史数据，策略只消费 `orig_idx <= 当前索引` 的买卖点。
 
 ### 2.3 与分层决策集成（约束流）
 
@@ -491,7 +547,7 @@ print(result.summary())
 - [x] `ExitLevels` / `ScaleLevel` 数据结构（`strategies/base.py`）
 - [x] `BaseStrategy.compute_exit_levels()`：默认 ATR 实现，子策略可重写
 - [x] `strategies/position_manager.py`：ATR/Supertrend/布林带/摆动位、仓位计算、R倍数、出场触发（OCA）、移动止损
-- [x] 7 个策略各自特化出场逻辑：ma_cross→trail_supertrend / macd_rsi→bollinger_lower / vol_price_breakout→swing_low / etf_momentum→momentum_relative / B1/B2/B3→fundamental（无价格止损）
+- [x] 8 个策略各自特化出场逻辑：ma_cross→trail_supertrend / macd_rsi→bollinger_lower / vol_price_breakout→swing_low / etf_momentum→momentum_relative / chan_theory→trail_chan / B1/B2/B3→fundamental（无价格止损）
 - [x] `portfolio` 命令：展示分级操作表，进场/出场逻辑解耦，三层降级选出场逻辑
 - [x] `exit-levels` / `position-size` 两个 CLI 命令
 - [x] `trader/assistant.py`：优先读 `Signal.extra["exit_levels"]`，固定百分比降级兜底

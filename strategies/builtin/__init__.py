@@ -3,6 +3,7 @@ from .ma_cross import MACrossStrategy
 from .macd_rsi import MACDRSIStrategy
 from .vol_price_breakout import VolPriceBreakoutStrategy
 from .etf_momentum import ETFMomentumStrategy
+from .chan_theory import ChanTheoryStrategy
 from .fundamental_value import FundamentalValueStrategy
 from .deep_value import DeepValueStrategy
 from .growth_pick import GrowthPickStrategy
@@ -14,6 +15,7 @@ BUILTIN_STRATEGIES = {
     "macd_rsi":           MACDRSIStrategy,         # 均值回归
     "vol_price_breakout": VolPriceBreakoutStrategy, # 突破
     "etf_momentum":       ETFMomentumStrategy,      # ETF 轮动
+    "chan_theory":        ChanTheoryStrategy,        # 缠论三买/三卖（结构突破）
     # L3-B 配置仓（3个 Fama-French 正交维度）
     "fundamental_value":  FundamentalValueStrategy, # 质量（Quality）
     "deep_value":         DeepValueStrategy,        # 价值（Value）
@@ -24,6 +26,6 @@ BUILTIN_STRATEGIES = {
 __all__ = [
     "BUILTIN_STRATEGIES",
     "MACrossStrategy", "MACDRSIStrategy", "VolPriceBreakoutStrategy",
-    "ETFMomentumStrategy", "FundamentalValueStrategy", "DeepValueStrategy",
-    "GrowthPickStrategy", "MoneyFlowStrategy",
+    "ETFMomentumStrategy", "ChanTheoryStrategy", "FundamentalValueStrategy",
+    "DeepValueStrategy", "GrowthPickStrategy", "MoneyFlowStrategy",
 ]

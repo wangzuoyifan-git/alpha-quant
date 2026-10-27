@@ -9,6 +9,8 @@ alpha量化/
 ├── .env.example            # 环境变量模板
 ├── config/
 │   └── settings.py         # 全局配置
+├── chan/                   # 缠论结构分析（包含/分型/笔/中枢/买卖点/周线确认）
+├── agent_tools/            # Agent Tool Layer（含 chan_tools）
 ├── data/
 │   ├── fetcher.py          # 多源数据获取（AKShare/BaoStock/Tushare）
 │   ├── cache/              # 本地缓存
@@ -17,9 +19,14 @@ alpha量化/
 ├── strategies/
 │   ├── base.py             # 策略基类 & Signal 数据结构
 │   ├── builtin/
-│   │   ├── ma_cross.py     # 均线金叉策略
-│   │   ├── macd_rsi.py     # MACD+RSI 共振策略
-│   │   └── vol_price_breakout.py  # 量价突破策略
+│   │   ├── ma_cross.py          # 均线金叉 / 趋势跟踪
+│   │   ├── macd_rsi.py          # MACD+RSI 均值回归
+│   │   ├── vol_price_breakout.py # 量价突破
+│   │   ├── etf_momentum.py      # ETF 动量轮动
+│   │   ├── chan_theory.py       # 缠论三买/三卖
+│   │   ├── fundamental_value.py # 质量价值（B1）
+│   │   ├── deep_value.py        # 深度价值（B2）
+│   │   └── growth_pick.py       # 成长筛选（B3）
 │   └── custom/             # 放置自定义策略（继承 BaseStrategy）
 ├── engine/
 │   └── scanner.py          # 全市场并发扫描引擎
@@ -67,7 +74,14 @@ python main.py backtest
 # 指定策略和时间段回测
 python main.py backtest --strategy ma_cross --start 2022-01-01 --end 2024-01-01
 
-# 可选策略: ma_cross | macd_rsi | vol_price_breakout
+# 缠论结构分析（日线 + 周线确认）
+python main.py chan --code 000001
+python main.py chan --code 000001 --level weekly --json
+python main.py scan --strategy chan_theory --codes 000001
+python main.py backtest --strategy chan_theory --codes 000004 --start 2024-01-01
+
+# 可选策略: ma_cross | macd_rsi | vol_price_breakout | etf_momentum |
+#           chan_theory | fundamental_value | deep_value | growth_pick
 
 # 查看待确认指令单
 python main.py orders
@@ -115,9 +129,14 @@ engine.register_strategy("my", MyStrategy())
 
 | 策略 Key | 名称 | 核心逻辑 |
 |---|---|---|
-| `ma_cross` | 均线金叉 | MA5 上穿 MA20 + 量能放大 |
-| `macd_rsi` | MACD+RSI共振 | MACD 金叉 + RSI 超卖回升 |
-| `vol_price_breakout` | 量价突破 | 突破近 N 日高点 + 放量确认 |
+| `ma_cross` | 趋势跟踪 | MA5 上穿 MA20 + ADX 趋势确认 + 资金流过滤 |
+| `macd_rsi` | 均值回归 | MACD + RSI 超卖/背离确认 |
+| `vol_price_breakout` | 量价突破 | 突破近 N 日高点 + 缩量蓄力 + 放量确认 |
+| `etf_momentum` | ETF 轮动 | 相对动量 + 绝对动量过滤（仅 ETF） |
+| `chan_theory` | 缠论三买三卖 | 日线中枢三买/三卖 + 周线方向确认 + 中枢出场 |
+| `fundamental_value` | 质量价值 | ROE/毛利率/PE 历史分位（配置仓 WATCH） |
+| `deep_value` | 深度价值 | 低 PB/PE + 股息 + 连续盈利（配置仓 WATCH） |
+| `growth_pick` | 成长筛选 | 净利润/净资产增长 + PEG 控估值（配置仓 WATCH） |
 
 ## 注意事项
 

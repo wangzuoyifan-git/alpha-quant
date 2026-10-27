@@ -348,6 +348,92 @@ def cmd_scan(date: str | None = None, asset_types: list | None = None,
             console.print(f"[bold]已生成 {len(orders)} 份指令单，运行 `python main.py orders` 查看[/bold]")
 
 
+def cmd_chan(code: str, level: str = "daily", asof: str | None = None,
+             weekly: bool = True, as_json: bool = False):
+    """缠论结构分析：笔 / 中枢 / 买卖点 / 周线确认。"""
+    import json
+
+    import data.store as store
+    from chan.engine import ChanEngine
+    from chan.multi_level import analyze_multi_level
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.table import Table
+
+    console = Console()
+    df = store.load(code, asset_type="stock", market="cn", end=asof)
+    if df is None or df.empty:
+        console.print(f"[red]无本地行情数据: {code}[/red]")
+        return
+
+    engine = ChanEngine()
+    higher_trend = None
+    if weekly:
+        ml = analyze_multi_level(df, engine, code)
+        result = ml["weekly"] if level == "weekly" else ml["daily"]
+        higher_trend = ml["higher_level_trend"]
+        if result is None:
+            console.print("[yellow]周线数据不足，无法分析 weekly 级别[/yellow]")
+            return
+    else:
+        result = engine.analyze(df, level=level, code=code)
+
+    if as_json:
+        out = result.to_dict()
+        if higher_trend is not None:
+            out["higher_level_trend"] = higher_trend
+        print(json.dumps(out, ensure_ascii=False, indent=2, default=str))
+        return
+
+    state = result.last_state()
+    console.print(Panel(
+        f"[bold cyan]缠论结构分析[/bold cyan]  {result.code}  "
+        f"级别: [yellow]{result.level}[/yellow]  "
+        f"截止: [yellow]{result.asof}[/yellow]\n"
+        f"趋势: [yellow]{result.trend_type}[/yellow]  "
+        f"笔: {len(result.bis)}  中枢: {len(result.pivots)}  "
+        f"买卖点: {len(result.points)}  背驰: {len(result.divergences)}"
+        + (f"  周线: [yellow]{higher_trend}[/yellow]" if higher_trend else ""),
+        expand=False,
+    ))
+
+    if result.pivots:
+        p = result.pivots[-1]
+        console.print(
+            f"最新中枢: ZD={p.zd:.2f}  ZG={p.zg:.2f}  GG={p.gg:.2f}  DD={p.dd:.2f}  "
+            f"区间 {p.start_dt} ~ {p.end_dt}  {'已确认' if p.confirmed else '未完成'}"
+        )
+    if result.bis:
+        b = result.bis[-1]
+        console.print(
+            f"最新笔: {b.direction}  {b.start_dt} → {b.end_dt}  "
+            f"[{b.low:.2f}, {b.high:.2f}]  {'未完成' if b.is_open else '已确认'}"
+        )
+    if state.get("pivot"):
+        console.print(f"现价相对中枢: {state['pivot']['position']}  close={state['close']:.2f}")
+
+    if result.points:
+        table = Table(title="最近买卖点", show_lines=False)
+        table.add_column("类型", style="cyan")
+        table.add_column("日期")
+        table.add_column("价格", justify="right")
+        table.add_column("强度", justify="right")
+        table.add_column("说明", overflow="fold")
+        for pt in result.points[-10:]:
+            table.add_row(
+                pt.kind,
+                str(pt.dt)[:10],
+                f"{pt.price:.2f}",
+                f"{pt.strength:.2f}",
+                pt.reason,
+            )
+        console.print(table)
+
+    if result.divergences:
+        d = result.divergences[-1]
+        console.print(f"最新背驰: {d.kind}  strength={d.strength:.2f}  {d.reason}")
+
+
 def cmd_backtest(strategy_key: str = "macd_rsi",
                  start: str = "2022-01-01",
                  end: str = "2024-12-31",
@@ -560,6 +646,18 @@ def _build_aux_summary(extra: dict) -> str:
             parts.append(f"PE{fund['pe_ttm']:.1f}")
         if fund.get("pb_mrq") is not None:
             parts.append(f"PB{fund['pb_mrq']:.2f}")
+    chan = aux.get("chan", {})
+    if chan.get("available"):
+        parts.append(f"缠论{chan.get('trend_type', 'N/A')}")
+        pivot = (chan.get("last_state") or {}).get("pivot")
+        if pivot:
+            parts.append(f"中枢[{pivot['zd']:.2f},{pivot['zg']:.2f}]")
+        points = chan.get("points") or []
+        if points:
+            last = points[-1]
+            parts.append(f"{last.get('kind')}@{last.get('date')}")
+        if chan.get("higher_level_trend"):
+            parts.append(f"周线{chan['higher_level_trend']}")
     return " | ".join(parts)
 
 
@@ -2376,6 +2474,15 @@ if __name__ == "__main__":
     p_scan.add_argument("--industry-level", default="L1", choices=["L1", "L2", "L3"],
                         help="行业层级（默认L1）")
 
+    # chan（缠论结构分析）
+    p_chan = sub.add_parser("chan", help="缠论结构分析（笔/中枢/买卖点/周线确认）")
+    p_chan.add_argument("--code", required=True, help="股票代码（如 600519）")
+    p_chan.add_argument("--level", default="daily", choices=["daily", "weekly"],
+                        help="分析级别（默认 daily）")
+    p_chan.add_argument("--asof", help="截止日期 YYYY-MM-DD（默认本地最新）")
+    p_chan.add_argument("--no-weekly", action="store_true", help="不做周线确认")
+    p_chan.add_argument("--json", action="store_true", help="输出 JSON")
+
     # workflow（分层决策：L1→L2→L3）
     p_wf = sub.add_parser("workflow", help="运行分层决策 workflow（L1宏观→L2行业→L3个股，可视化）")
     p_wf.add_argument("--date", help="决策日期 YYYY-MM-DD（默认今日）")
@@ -2696,6 +2803,9 @@ if __name__ == "__main__":
                  strategy=args.strategy, codes=args.codes,
                  industries=args.industries,
                  industry_level=args.industry_level)
+    elif args.command == "chan":
+        cmd_chan(code=args.code, level=args.level, asof=args.asof,
+                 weekly=not args.no_weekly, as_json=args.json)
     elif args.command == "workflow":
         cmd_workflow(date=args.date, industries=args.industries,
                      asset_types=args.types, industry_level=args.industry_level)

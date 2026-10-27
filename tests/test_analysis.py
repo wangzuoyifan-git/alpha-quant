@@ -120,6 +120,34 @@ class TestFundamentalSummary:
         assert r["available"] is False
 
 
+class TestChanSummary:
+
+    def test_chan_available(self, monkeypatch):
+        import data.store as store
+        monkeypatch.setattr(store, "load", lambda *a, **k: _kline(n=80))
+        r = A._chan_summary("600519")
+        assert r["available"] is True
+        assert r["level"] == "daily"
+
+    def test_chan_unavailable_when_data_too_short(self, monkeypatch):
+        import data.store as store
+        monkeypatch.setattr(store, "load", lambda *a, **k: _kline(n=20))
+        r = A._chan_summary("600519")
+        assert r["available"] is False
+
+    def test_build_accepts_precomputed_snapshot(self, monkeypatch):
+        import data.store as store
+        import data.store_moneyflow as mf
+        import data.store_fundamental as sf
+        monkeypatch.setattr(store, "load", lambda *a, **k: _kline())
+        monkeypatch.setattr(mf, "load", lambda *a, **k: None)
+        monkeypatch.setattr(sf, "load", lambda *a, **k: None)
+        snap = {"level": "daily", "trend_type": "up", "points": []}
+        r = A.build_auxiliary_analysis("600519", chan_snapshot=snap)
+        assert r["chan"]["available"] is True
+        assert r["chan"]["trend_type"] == "up"
+
+
 class TestBuildAndEnrich:
 
     def test_build_structure(self, monkeypatch):
@@ -130,7 +158,7 @@ class TestBuildAndEnrich:
         monkeypatch.setattr(mf, "load", lambda *a, **k: None)
         monkeypatch.setattr(sf, "load", lambda *a, **k: None)
         r = A.build_auxiliary_analysis("600519")
-        assert set(r.keys()) == {"technical", "moneyflow", "fundamental", "northbound"}
+        assert set(r.keys()) == {"technical", "moneyflow", "fundamental", "northbound", "chan"}
         assert all("available" in v for v in r.values())
 
     def test_etf_skips_stock_only_blocks(self, monkeypatch):
@@ -155,6 +183,23 @@ class TestBuildAndEnrich:
         A.enrich_signal_objects([sig])
         assert "analysis" in sig.extra
         assert sig.extra["analysis"]["technical"]["available"] is True
+        assert "chan" in sig.extra["analysis"]
+
+    def test_enrich_uses_precomputed_chan(self, monkeypatch):
+        from strategies.base import Signal
+        import data.store as store
+        import data.store_moneyflow as mf
+        import data.store_fundamental as sf
+        monkeypatch.setattr(store, "load", lambda *a, **k: _kline())
+        monkeypatch.setattr(mf, "load", lambda *a, **k: None)
+        monkeypatch.setattr(sf, "load", lambda *a, **k: None)
+        monkeypatch.setattr(A, "_chan_summary", lambda *a, **k: {"available": False})
+        sig = Signal(code="600519", name="茅台", signal="BUY", price=10.0,
+                     reason="t", score=80.0,
+                     extra={"chan": {"level": "daily", "trend_type": "up"}})
+        A.enrich_signal_objects([sig])
+        assert sig.extra["analysis"]["chan"]["available"] is True
+        assert sig.extra["analysis"]["chan"]["trend_type"] == "up"
 
 
 class TestSummaryFormatters:
@@ -178,6 +223,21 @@ class TestSummaryFormatters:
         import main
         assert main._build_aux_summary({}) == ""
 
+    def test_web_summary_chan(self):
+        import main
+        extra = {"analysis": {"chan": {
+            "available": True,
+            "trend_type": "up",
+            "last_state": {"pivot": {"zd": 10.0, "zg": 12.0}},
+            "points": [{"kind": "3buy", "date": "2026-01-01"}],
+            "higher_level_trend": "up",
+        }}}
+        s = main._build_aux_summary(extra)
+        assert "缠论up" in s
+        assert "中枢[10.00,12.00]" in s
+        assert "3buy@2026-01-01" in s
+        assert "周线up" in s
+
     def test_push_aux_line(self):
         from notifier.push import Notifier
         from strategies.base import Signal
@@ -186,6 +246,22 @@ class TestSummaryFormatters:
         line = Notifier._format_aux_line(s)
         assert "涨跌+2.3%" in line
         assert "ROE18.5%" in line
+
+    def test_push_aux_line_chan(self):
+        from notifier.push import Notifier
+        from strategies.base import Signal
+        extra = {"analysis": {"chan": {
+            "available": True,
+            "trend_type": "up",
+            "points": [{"kind": "3buy", "date": "2026-01-01"}],
+            "higher_level_trend": "up",
+        }}}
+        s = Signal(code="600519", name="茅台", signal="BUY", price=100,
+                   reason="t", score=85, extra=extra)
+        line = Notifier._format_aux_line(s)
+        assert "缠论up" in line
+        assert "3buy@2026-01-01" in line
+        assert "周线up" in line
 
     def test_push_aux_line_no_analysis(self):
         from notifier.push import Notifier

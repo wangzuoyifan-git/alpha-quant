@@ -9,6 +9,7 @@ P0 字段（对应 docs/requirements.md A2）：
 - 技术面摘要：当日涨跌幅、量比、换手率、近20日价格区间        （D1）
 - 资金流摘要：近5日主力净流入额/占比、近5日北向净买入        （D3a + D3c）
 - 基本面摘要：ROE、净利润同比、毛利率、资产负债率、PE/PB     （D2 + D1）
+- 缠论摘要：日线趋势/笔/中枢/买卖点 + 周线方向                （chan/）
 """
 import logging
 from typing import Optional
@@ -28,7 +29,7 @@ def _safe_float(v) -> Optional[float]:
         return None
 
 
-def _technical_summary(code: str, date: str = None) -> dict:
+def _technical_summary(code: str, date: str | None = None) -> dict:
     """
     技术面摘要（D1，来自 market 域 K 线）。
     量比 = 当日成交量 / 近5日均量（A2 IT-AA-04）。
@@ -71,7 +72,7 @@ def _technical_summary(code: str, date: str = None) -> dict:
     return out
 
 
-def _moneyflow_summary(code: str, date: str = None, market_amount: float = None) -> dict:
+def _moneyflow_summary(code: str, date: str | None = None, market_amount: float | None = None) -> dict:
     """
     资金流摘要（D3a 个股资金流 + D3c 北向）。
     近5日主力净流入 = 近5条 moneyflow 记录之和（A2 IT-AA-05）。
@@ -103,7 +104,7 @@ def _moneyflow_summary(code: str, date: str = None, market_amount: float = None)
     return out
 
 
-def _northbound_summary(date: str = None) -> dict:
+def _northbound_summary(date: str | None = None) -> dict:
     """北向近5日净买入（D3c，市场级背景）。沪股通+深股通当日资金流入合计。"""
     import data.store_moneyflow as mf
     out = {"available": False}
@@ -124,6 +125,35 @@ def _northbound_summary(date: str = None) -> dict:
         return out
     out.update({"available": True, "north_net_buy_5d": round(total, 2)})
     return out
+
+
+def _chan_summary(code: str, date: str | None = None,
+                  asset_type: str = "stock") -> dict:
+    """
+    缠论结构摘要（日线 + 周线方向）。
+
+    返回最新笔/中枢/买卖点/背驰/趋势，供推送与 Web 看板展示。
+    数据不足时返回 available=False（A3）。
+    """
+    import data.store as store
+    out = {"available": False}
+    try:
+        df = store.load(code, asset_type=asset_type, market="cn", end=date)
+        if df is None or len(df) < 30:
+            out["note"] = "行情数据不足（<30根K线）"
+            return out
+
+        from chan.engine import ChanEngine
+        from chan.multi_level import analyze_multi_level
+
+        ml = analyze_multi_level(df, ChanEngine(), code)
+        daily = ml["daily"]
+        out.update({"available": True, **daily.summary_dict(ml["higher_level_trend"])})
+        return out
+    except Exception as e:
+        logger.debug(f"缠论摘要 {code} 失败: {e}")
+        out["note"] = str(e)
+        return out
 
 
 def _fundamental_summary(code: str) -> dict:
@@ -180,16 +210,18 @@ def _fundamental_summary(code: str) -> dict:
     return out
 
 
-def build_auxiliary_analysis(code: str, date: str = None,
-                             asset_type: str = "stock") -> dict:
+def build_auxiliary_analysis(code: str, date: str | None = None,
+                             asset_type: str = "stock",
+                             chan_snapshot: dict | None = None) -> dict:
     """
-    为单只标的聚合 A2 P0 辅助分析。
+    为单只标的聚合 A2 P0 辅助分析 + 缠论结构。
 
     :param code: 6 位股票代码
     :param date: 截止日期（None 为最新）
     :param asset_type: stock / etf / index（仅 stock 聚合基本面/资金流）
+    :param chan_snapshot: 已计算好的 Signal.extra["chan"]，传入时避免重复计算
     :return: {"technical": {...}, "moneyflow": {...}, "fundamental": {...},
-              "northbound": {...}}，每个子块含 available 标记（A3）
+              "northbound": {...}, "chan": {...}}，每个子块含 available 标记（A3）
     """
     result = {}
     try:
@@ -197,6 +229,15 @@ def build_auxiliary_analysis(code: str, date: str = None,
     except Exception as e:
         logger.debug(f"技术面摘要 {code} 失败: {e}")
         result["technical"] = {"available": False}
+
+    if chan_snapshot is not None:
+        result["chan"] = {"available": True, **chan_snapshot}
+    else:
+        try:
+            result["chan"] = _chan_summary(code, date, asset_type)
+        except Exception as e:
+            logger.debug(f"缠论摘要 {code} 失败: {e}")
+            result["chan"] = {"available": False}
 
     if asset_type == "stock":
         try:
@@ -222,7 +263,7 @@ def build_auxiliary_analysis(code: str, date: str = None,
     return result
 
 
-def enrich_signals(signals: list, date: str = None) -> list:
+def enrich_signals(signals: list, date: str | None = None) -> list:
     """
     为信号列表批量附加辅助分析（写入每个 signal dict 的 "analysis" 键）。
     原地修改并返回 signals。
@@ -232,11 +273,14 @@ def enrich_signals(signals: list, date: str = None) -> list:
         if not code:
             continue
         asset_type = s.get("asset_type", "stock")
-        s["analysis"] = build_auxiliary_analysis(code, date=date, asset_type=asset_type)
+        chan_snapshot = s.get("chan") or (s.get("extra") or {}).get("chan")
+        s["analysis"] = build_auxiliary_analysis(
+            code, date=date, asset_type=asset_type, chan_snapshot=chan_snapshot
+        )
     return signals
 
 
-def enrich_signal_objects(signals: list, date: str = None) -> list:
+def enrich_signal_objects(signals: list, date: str | None = None) -> list:
     """
     为 Signal 对象列表批量附加辅助分析（写入 signal.extra["analysis"]）。
     extra 会随 save_signals 持久化并被 Web 看板消费。原地修改并返回。
@@ -248,7 +292,10 @@ def enrich_signal_objects(signals: list, date: str = None) -> list:
         # ETF/指数信号不聚合个股基本面/资金流
         asset_type = (s.extra or {}).get("asset_type", "stock")
         try:
-            analysis = build_auxiliary_analysis(code, date=date, asset_type=asset_type)
+            chan_snapshot = (s.extra or {}).get("chan")
+            analysis = build_auxiliary_analysis(
+                code, date=date, asset_type=asset_type, chan_snapshot=chan_snapshot
+            )
             if s.extra is None:
                 s.extra = {}
             s.extra["analysis"] = analysis

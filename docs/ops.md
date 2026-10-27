@@ -174,9 +174,16 @@ scan 输出（BUY/WATCH 信号含操作建议列）：
 
 配置仓 WATCH 信号：建议股数显示"配置仓"，止损价显示"基本面"。
 
+# 缠论结构分析（日线 + 周线确认）
+python3 main.py chan --code 000001                 # 笔/中枢/买卖点/周线方向
+python3 main.py chan --code 000001 --level weekly  # 周线结构
+python3 main.py chan --code 000001 --json          # 结构化输出
+python3 main.py scan --strategy chan_theory --codes 000001
+python3 main.py backtest --strategy chan_theory --codes 000004 --start 2024-01-01
+
 # 参数说明
 # --strategy: 策略 key（ma_cross/macd_rsi/vol_price_breakout/etf_momentum/
-#              fundamental_value/deep_value/growth_pick），不传=全部
+#              chan_theory/fundamental_value/deep_value/growth_pick），不传=全部
 # --codes: 6位股票代码或名称，空格分隔；名称模糊匹配，多候选时列出供选择
 # --industries: 申万行业代码或名称，与 --codes 互斥；模糊匹配多候选时列出
 # --industry-level: L1/L2/L3（默认 L1）
@@ -401,8 +408,15 @@ python3 main.py schedule                          # 启动定时任务（收盘�
 
 ```bash
 python3 tools/plot_kline.py 600519 000001 --start 2024-01-01   # K线图
+python3 tools/plot_kline.py 600519 --chan                       # 日线叠加缠论笔/中枢/买卖点
 python3 tools/test_init_flow.py                                 # init 流程端到端验证
+python3 tools/wsl_space.py                                      # WSL 磁盘空间 + VHDX 大小看板（只读）
+python3 tools/wsl_space.py --json                               # 同上，JSON 输出（可接监控）
 ```
+
+> `wsl_space.py` 只读：展示 `/`、各 `/mnt/*` 盘用量 + `ext4.vhdx` 真实路径/大小/所在宿主盘可用空间
+> （WSL 内 `df` 的可用量是虚拟盘上限，会高估；真实可增长受宿主盘剩余约束）+ 项目 `data/` 各域占用。
+> 不写入、不压缩。可设 `WSL_VHDX_PATH` 显式指定 vhdx。
 
 ---
 

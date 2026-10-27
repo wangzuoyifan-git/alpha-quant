@@ -6,6 +6,7 @@ engine/analysis.py — A2/A3 辅助分析模块
  P0: 资金流摘要（近5日主力净流入额/占比）
  P0: 基本面摘要（ROE/净利润同比/毛利率/资产负债率/PE/PB）
  P1: 行业背景（申万行业/近5日涨跌/行业资金流排名）
+ P1: 缠论结构（日线笔/中枢/买卖点 + 周线方向）
  A3: 数据缺失时标注"数据不可用"
 """
 import logging
@@ -43,9 +44,10 @@ def analyze_signal(signal: Dict, date: str = None) -> Dict:
         "fund_flow": _get_fund_flow_summary(code),
         "fundamental": _get_fundamental_summary(code),
         "industry": _get_industry_context(code),
+        "chan": _get_chan_summary(code, date),
         "data_unavailable": [],
     }
-    for section in ("tech_summary", "fund_flow", "fundamental", "industry"):
+    for section in ("tech_summary", "fund_flow", "fundamental", "industry", "chan"):
         if not analysis[section] or analysis[section].get("available") is False:
             analysis["data_unavailable"].append(section)
     return analysis
@@ -198,6 +200,23 @@ def _get_industry_context(code: str) -> Dict:
         return {"available": False, "note": str(e)}
 
 
+def _get_chan_summary(code: str, date: str = None) -> Dict:
+    """缠论结构摘要（日线 + 周线方向）。"""
+    try:
+        df = store.load(code, asset_type="stock", market="cn", end=date)
+        if df is None or len(df) < 30:
+            return {"available": False, "note": "行情数据不足（<30根K线）"}
+
+        from chan.engine import ChanEngine
+        from chan.multi_level import analyze_multi_level
+
+        ml = analyze_multi_level(df, ChanEngine(), code)
+        return {"available": True, **ml["daily"].summary_dict(ml["higher_level_trend"])}
+    except Exception as e:
+        logger.debug(f"缠论摘要 {code}: {e}")
+        return {"available": False, "note": str(e)}
+
+
 def _safe_float(val) -> Optional[float]:
     """安全转换 float，NaN/None 返回 None"""
     if val is None or not pd.notna(val):
@@ -245,6 +264,22 @@ def format_analysis_markdown(analysis: Dict) -> str:
         lines.append(f"**行业** {ind['industry']}")
     else:
         lines.append("**行业** 数据不可用")
+
+    chan = analysis.get("chan", {})
+    if chan.get("available"):
+        parts = [f"趋势{chan.get('trend_type', 'N/A')}"]
+        pivot = (chan.get("last_state") or {}).get("pivot")
+        if pivot:
+            parts.append(f"中枢[{pivot['zd']:.2f},{pivot['zg']:.2f}]")
+        points = chan.get("points") or []
+        if points:
+            last = points[-1]
+            parts.append(f"{last.get('kind')}@{last.get('date')}")
+        if chan.get("higher_level_trend"):
+            parts.append(f"周线{chan['higher_level_trend']}")
+        lines.append(f"**缠论** {' | '.join(parts)}")
+    else:
+        lines.append("**缠论** 数据不可用")
 
     return "\n".join(lines)
 

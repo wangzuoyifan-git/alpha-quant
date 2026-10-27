@@ -3,6 +3,7 @@ K线图验证工具
 用法:
   python tools/plot_kline.py 600519 000001 300750
   python tools/plot_kline.py 600519 --start 2024-01-01 --end 2025-12-31
+  python tools/plot_kline.py 600519 --chan          # 日线叠加缠论笔/中枢/买卖点
 
 每只股票生成三张图：日线 / 月线 / 年线（周K），保存到 data/charts/
 """
@@ -64,7 +65,58 @@ def resample_weekly(df: pd.DataFrame) -> pd.DataFrame:
     }).dropna()
 
 
-def plot_one(code: str, start: str, end: str):
+def build_chan_overlays(code: str, start: str, end: str, plot_index: pd.DatetimeIndex):
+    """构造缠论叠加元素：笔/中枢用 alines，买卖点用 scatter addplot。"""
+    from chan.engine import ChanEngine
+
+    raw = store.load(code, start=start, end=end)
+    if raw is None or len(raw) < 30:
+        print("  缠论叠加跳过: 行情数据不足")
+        return None, []
+
+    result = ChanEngine().analyze(raw, code=code)
+    alines = []
+    colors = []
+    for bi in result.bis:
+        if bi.start_dt is None or bi.end_dt is None:
+            continue
+        alines.append([(bi.start_dt, bi.start.price), (bi.end_dt, bi.end.price)])
+        colors.append("red" if bi.direction == "up" else "green")
+
+    for pivot in result.pivots:
+        if pivot.start_dt is None or pivot.end_dt is None:
+            continue
+        alines.append([(pivot.start_dt, pivot.zg), (pivot.end_dt, pivot.zg)])
+        alines.append([(pivot.start_dt, pivot.zd), (pivot.end_dt, pivot.zd)])
+        colors.extend(["orange", "orange"])
+
+    buy = pd.Series(float("nan"), index=plot_index)
+    sell = pd.Series(float("nan"), index=plot_index)
+    for point in result.points:
+        if point.dt is None or point.dt not in plot_index:
+            continue
+        if point.kind.endswith("buy"):
+            buy.loc[point.dt] = point.price
+        else:
+            sell.loc[point.dt] = point.price
+
+    addplots = []
+    if buy.notna().any():
+        addplots.append(mpf.make_addplot(
+            buy, type="scatter", marker="^", markersize=90, color="red",
+        ))
+    if sell.notna().any():
+        addplots.append(mpf.make_addplot(
+            sell, type="scatter", marker="v", markersize=90, color="green",
+        ))
+
+    aline_cfg = None
+    if alines:
+        aline_cfg = dict(alines=alines, colors=colors, linewidths=1.1, alpha=0.8)
+    return aline_cfg, addplots
+
+
+def plot_one(code: str, start: str, end: str, chan: bool = False):
     print(f"\n绘制 {code} ...", flush=True)
     try:
         df = load(code, start, end)
@@ -94,8 +146,14 @@ def plot_one(code: str, start: str, end: str):
 
     # ---- 日线 ----
     out = CHART_DIR / f"{code}_daily.png"
+    aline_cfg, addplots = (None, [])
+    if chan:
+        aline_cfg, addplots = build_chan_overlays(code, start, end, df.index)
     mpf.plot(df, **kwargs,
-             title=f"{code}  日线  {df.index[0].date()}~{df.index[-1].date()}",
+             addplot=addplots or None,
+             alines=aline_cfg,
+             title=f"{code}  日线  {df.index[0].date()}~{df.index[-1].date()}"
+                   + ("（缠论）" if chan else ""),
              savefig=dict(fname=str(out), dpi=150))
     print(f"  日线 -> {out}")
 
@@ -121,6 +179,8 @@ def main():
     parser.add_argument("codes", nargs="+", help="股票代码，如 600519 000001")
     parser.add_argument("--start", default="2024-01-01", help="开始日期（默认2024-01-01）")
     parser.add_argument("--end",   default=None,         help="结束日期（默认最新）")
+    parser.add_argument("--chan", action="store_true",
+                        help="日线叠加缠论笔/中枢/买卖点")
     args = parser.parse_args()
 
     end = args.end or pd.Timestamp.today().strftime("%Y-%m-%d")
@@ -128,7 +188,7 @@ def main():
     print(f"图片保存至: {CHART_DIR}")
 
     for code in args.codes:
-        plot_one(code.strip(), args.start, end)
+        plot_one(code.strip(), args.start, end, chan=args.chan)
 
     print(f"\n完成，共生成 {len(args.codes)*3} 张图片")
 

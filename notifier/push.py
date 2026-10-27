@@ -116,6 +116,15 @@ class Notifier:
                 parts.append(f"ROE{fund['roe_ttm']:.1f}%")
             if fund.get("pe_ttm") is not None:
                 parts.append(f"PE{fund['pe_ttm']:.1f}")
+        chan = aux.get("chan", {})
+        if chan.get("available"):
+            parts.append(f"缠论{chan.get('trend_type', 'N/A')}")
+            points = chan.get("points") or []
+            if points:
+                last = points[-1]
+                parts.append(f"{last.get('kind')}@{last.get('date')}")
+            if chan.get("higher_level_trend"):
+                parts.append(f"周线{chan['higher_level_trend']}")
         return " | ".join(parts)
 
     def _format_signals(self, signals: List[Signal]) -> str:

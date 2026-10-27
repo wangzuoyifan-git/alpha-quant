@@ -1,7 +1,8 @@
 # Alpha量化 — 项目总览
 
 > 所有 Session 的共同基础参考。专项内容见各模块文档。
-> 最后更新：2026-10-10（update_daily 提速与可靠性：moneyflow `stock`/`margin` 每日增量改按 `trade_date` 批量（~1.1万次→每交易日2次）；events E2 全市场改按日期批量（~2.2万次→百余次，约1.5h→1~2min）；港股资金流加 1.5s/只限速+连续失败熔断；批量步骤失败率过高以非零退出码上报（`_check_bulk_result`）；`update_daily.sh` 港股跳过窗口改为仅盘中 09:30–16:15、跳过计入汇总并退出码1）
+> 最后更新：2026-10-27（缠论 P1+P2+P3：`chan/` 纯计算层（包含/分型/笔/中枢/背驰/1-2-3类买卖点/日线+周线确认）+ `chan_theory` L3-A 策略 + `chan` CLI + `agent_tools/chan_tools.py` + A2 缠论摘要 + K线图叠加；详见 `docs/strategy.md` 2.2.1）
+> 2026-10-10（update_daily 提速与可靠性：moneyflow `stock`/`margin` 每日增量改按 `trade_date` 批量（~1.1万次→每交易日2次）；events E2 全市场改按日期批量（~2.2万次→百余次，约1.5h→1~2min）；港股资金流加 1.5s/只限速+连续失败熔断；批量步骤失败率过高以非零退出码上报（`_check_bulk_result`）；`update_daily.sh` 港股跳过窗口改为仅盘中 09:30–16:15、跳过计入汇总并退出码1）
 > 2026-09-30（资金画像 Phase 2：板块/ETF（申万+ETF）—— `agents/sector_aggregator.py` 聚合 + `data/store_fund.py`/`downloader_fund.py`（index_weight/fund_share/fund_nav）+ `capital-profiler --level sector_etf`）
 > 2026-09-29（资金画像 Phase1 增强：席位×主力一致性 + 席位级事件流合力/分歧子信号；产业资本接入 Tushare `repurchase`（E2 `buyback`）；`--hidden-main` 默认关闭）
 > 2026-09-29（资金画像 Phase1 增强：席位×主力一致性；产业资本接入 Tushare `repurchase`（E2 `buyback`））
@@ -131,7 +132,7 @@
 ┌──────────────────────▼──────────────────────────────────┐
 │                   策略层                                 │
 │  strategies/base.py          BaseStrategy + Signal       │
-│  strategies/builtin/         内置策略（7个，正交框架）        │
+│  strategies/builtin/         内置策略（8个，正交框架）        │
 │  strategies/custom/          自定义策略目录               │
 └──────────────────────┬──────────────────────────────────┘
                        │
@@ -212,6 +213,18 @@ alpha量化/
 │
 ├── config/settings.py           # 全局配置
 │
+├── chan/                        # 缠论结构分析（纯计算层，无 IO/策略依赖）
+│   ├── engine.py                # ChanEngine.analyze(df, level) -> ChanResult
+│   ├── models.py                # Bar/MergedBar/Fractal/Bi/Pivot/BuySellPoint/ChanResult
+│   ├── kline.py                 # K线包含处理
+│   ├── fractal.py               # 顶/底分型
+│   ├── bi.py                    # 笔
+│   ├── pivot.py                 # 中枢（ZG/ZD/GG/DD）
+│   ├── divergence.py            # MACD 面积背驰
+│   ├── buy_sell.py              # 1/2/3 类买卖点
+│   ├── multi_level.py           # 日线+周线确认
+│   └── adapter.py               # df 标准化 / 周线聚合
+│
 ├── data/                        # 数据层
 │   ├── store.py                 # market 域存取
 │   ├── store_meta.py
@@ -256,12 +269,13 @@ alpha量化/
 │   ├── builtin/                 # 内置策略 + 注册表
 │   └── custom/                  # 自定义策略
 │
-├── agent_tools/                 # Tool Layer（已完成，25个工具）
+├── agent_tools/                 # Tool Layer（已完成，28个工具）
 │   ├── data_tools.py            # 数据相关 Tools
 │   ├── strategy_tools.py        # 策略/回测 Tools
 │   ├── trade_tools.py           # 交易/风控 Tools
 │   ├── smart_money_tools.py     # 资金主体识别与跨期画像 Tools
-│   └── analysis.py              # A2 辅助分析聚合（技术面/资金流/基本面 P0 摘要）
+│   ├── chan_tools.py            # 缠论结构 Tools（笔/中枢/买卖点/周线）
+│   └── analysis.py              # A2 辅助分析聚合（技术面/资金流/基本面/缠论摘要）
 │
 ├── agents/                      # Agent 实现（已建设，规则版）
 │   ├── orchestrator.py          # Orchestrator（LangGraph）

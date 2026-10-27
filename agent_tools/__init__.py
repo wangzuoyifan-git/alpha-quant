@@ -2,6 +2,11 @@
 Agent Tool Layer — 薄适配层，将下层能力封装为结构化 Tool 供 Agent 调用。
 所有函数返回 dict 格式（AC1）。
 """
+from agent_tools.chan_tools import (
+    get_chan_buy_points,
+    get_chan_multi_level,
+    get_chan_snapshot,
+)
 from agent_tools.data_tools import (
     check_data_freshness,
     check_reduce_window,
@@ -46,6 +51,9 @@ __all__ = [
     "generate_orders",
     "get_active_event_windows",
     "get_capital_consensus",
+    "get_chan_buy_points",
+    "get_chan_multi_level",
+    "get_chan_snapshot",
     "get_domain_stats",
     "get_northbound_behavior",
     "get_pending_orders",
