@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 from ..base import BaseStrategy, Signal
-from data.store_moneyflow import load as load_factor
+from data.store_moneyflow import load_asof as load_factor_asof
 
 
 class MoneyFlowStrategy(BaseStrategy):
@@ -34,11 +34,13 @@ class MoneyFlowStrategy(BaseStrategy):
     def requires_bars(self) -> int:
         return 10
 
-    def generate_signals(self, df: pd.DataFrame, code: str, name: str) -> List[Signal]:
+    def generate_signals(self, df: pd.DataFrame, code: str, name: str,
+                         as_of=None) -> List[Signal]:
         lookback = self.params.get("lookback", 5)
         min_net = self.params.get("min_net_inflow", 0)  # 最低净流入额
 
-        mf = load_factor("stock", code=code)
+        mf = load_factor_asof("stock", code=code, as_of=as_of,
+                              lookback=lookback)
         if mf is None or mf.empty or len(mf) < lookback:
             return []
 

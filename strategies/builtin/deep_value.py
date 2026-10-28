@@ -14,13 +14,21 @@ import numpy as np
 import pandas as pd
 
 from ..base import BaseStrategy, Signal
-from data.store_fundamental import load as load_fund
+from data.store_fundamental import load_asof as load_fund
 
 # 申万一级行业代码中的金融/地产行业（这类行业低PB是常态，不代表低估）
 _EXCLUDED_INDUSTRIES = {"801780", "801790", "801180"}  # 银行、非银金融、房地产
 
 # 金融股通常以 6003xx（银行）/6006xx（证券）前缀，地产以 000002/600048 等，
 # 不做代码前缀排除（太复杂且易误杀），改用行业分类排除（需 meta 域）
+
+
+def _load_fund(code: str, data_type: str, as_of=None, history=None):
+    """兼容旧测试/外部 monkeypatch：优先走 as-of 接口，否则退回旧 load。"""
+    try:
+        return load_fund(code, data_type, as_of=as_of, history=history)
+    except TypeError:
+        return load_fund(code, data_type)
 
 
 class DeepValueStrategy(BaseStrategy):
@@ -50,7 +58,8 @@ class DeepValueStrategy(BaseStrategy):
     def requires_bars(self) -> int:
         return 5
 
-    def generate_signals(self, df: pd.DataFrame, code: str, name: str) -> List[Signal]:
+    def generate_signals(self, df: pd.DataFrame, code: str, name: str,
+                         as_of=None) -> List[Signal]:
         max_pb = self.params.get("max_pb", 1.5)
         max_pe = self.params.get("max_pe", 15.0)
         max_debt = self.params.get("max_debt", 0.6)
@@ -76,7 +85,8 @@ class DeepValueStrategy(BaseStrategy):
         if pd.isna(pb) or pb > max_pb:
             return []
 
-        profit = load_fund(code, "profit")
+        profit = _load_fund(code, "profit", as_of=as_of,
+                                history=max(consecutive, 2))
         if profit is None or profit.empty:
             return []
         # 连续 consecutive 季净利润为正
@@ -86,7 +96,7 @@ class DeepValueStrategy(BaseStrategy):
         if len(recent_profits) < consecutive or not (recent_profits > 0).all():
             return []
 
-        balance = load_fund(code, "balance")
+        balance = _load_fund(code, "balance", as_of=as_of)
         debt = np.nan
         if balance is not None and not balance.empty:
             debt = float(balance.iloc[-1].get("liabilityToAsset", np.nan))

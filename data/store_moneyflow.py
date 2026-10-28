@@ -16,6 +16,7 @@ moneyflow 域存储层
 接口:
   save(data_type, df, code=None, date=None)
   load(data_type, code=None, date=None, start=None, end=None)
+  load_asof(data_type, code=None, as_of=None, lookback=None)  # point-in-time
   exists(data_type, code=None, date=None)
   last_date(data_type, code=None)
   list_codes(data_type)
@@ -118,6 +119,28 @@ def load(data_type: str,
         df = df[df.index >= pd.Timestamp(start)]
     if end:
         df = df[df.index <= pd.Timestamp(end)]
+    return df if not df.empty else None
+
+
+def load_asof(data_type: str,
+              code: Optional[str] = None,
+              as_of=None,
+              lookback: Optional[int] = None,
+              market: str = "cn") -> Optional[pd.DataFrame]:
+    """Point-in-time 读取资金流：只返回 ``as_of`` 当日及以前的数据。
+
+    :param lookback: 仅保留最近 N 行；None 返回全部可见历史。
+    """
+    df = load(data_type, code=code, market=market)
+    if df is None or df.empty:
+        return None
+    df = df.sort_index()
+    if as_of is not None:
+        df = df[df.index <= pd.Timestamp(as_of)]
+        if df.empty:
+            return None
+    if lookback is not None and int(lookback) > 0:
+        df = df.iloc[-int(lookback):]
     return df if not df.empty else None
 
 

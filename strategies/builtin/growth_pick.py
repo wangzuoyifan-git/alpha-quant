@@ -12,8 +12,16 @@ from typing import List
 import numpy as np
 import pandas as pd
 
-from ..base import BaseStrategy, Signal, ttm_sum
-from data.store_fundamental import load as load_fund
+from ..base import BaseStrategy, Signal, ttm_roe
+from data.store_fundamental import load_asof as load_fund
+
+
+def _load_fund(code: str, data_type: str, as_of=None, history=None):
+    """兼容旧测试/外部 monkeypatch：优先走 as-of 接口，否则退回旧 load。"""
+    try:
+        return load_fund(code, data_type, as_of=as_of, history=history)
+    except TypeError:
+        return load_fund(code, data_type)
 
 
 class GrowthPickStrategy(BaseStrategy):
@@ -41,7 +49,8 @@ class GrowthPickStrategy(BaseStrategy):
     def requires_bars(self) -> int:
         return 5
 
-    def generate_signals(self, df: pd.DataFrame, code: str, name: str) -> List[Signal]:
+    def generate_signals(self, df: pd.DataFrame, code: str, name: str,
+                         as_of=None) -> List[Signal]:
         min_ni_growth = self.params.get("min_ni_growth", 0.25)
         min_equity_growth = self.params.get("min_equity_growth", 0.15)
         min_roe = self.params.get("min_roe", 0.10)
@@ -50,7 +59,7 @@ class GrowthPickStrategy(BaseStrategy):
         if df is None or df.empty or "close" not in df.columns:
             return []
 
-        growth = load_fund(code, "growth")
+        growth = _load_fund(code, "growth", as_of=as_of)
         if growth is None or growth.empty:
             return []
         g = growth.iloc[-1]
@@ -61,10 +70,10 @@ class GrowthPickStrategy(BaseStrategy):
         if pd.isna(yoy_equity) or yoy_equity < min_equity_growth:
             return []
 
-        profit = load_fund(code, "profit")
+        profit = _load_fund(code, "profit", as_of=as_of, history=8)
         if profit is None or profit.empty:
             return []
-        roe = ttm_sum(profit.get("roeAvg")) if "roeAvg" in profit.columns else np.nan
+        roe = ttm_roe(profit)
         if pd.isna(roe) or roe < min_roe:
             return []
 

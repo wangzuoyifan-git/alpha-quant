@@ -12,6 +12,7 @@ fundamental 域存储层
 接口:
   save(code, df, data_type)
   load(code, data_type, start=None, end=None)
+  load_asof(code, data_type, as_of=None, history=None)  # point-in-time
   exists(code, data_type)
   last_date(code, data_type)
 """
@@ -111,6 +112,49 @@ def load(code: str,
     if end:
         df = df[df.index <= pd.Timestamp(end)]
     return df if not df.empty else None
+
+
+# 财报默认披露滞后（无 pubDate 时的保守回退，防止报告期即视为可用）
+_DEFAULT_PUB_LAG_DAYS = 90
+
+
+def _publication_dates(df: pd.DataFrame) -> pd.Series:
+    """返回每行的可见日期（pubDate），缺失时按报告期 + 90 天保守估算。"""
+    fallback = pd.Series(df.index + pd.Timedelta(days=_DEFAULT_PUB_LAG_DAYS),
+                         index=df.index)
+    for col in ("pubDate", "pub_date"):
+        if col in df.columns:
+            pub = pd.to_datetime(df[col], errors="coerce")
+            return pub.where(pub.notna(), fallback)
+    return fallback
+
+
+def load_asof(code: str,
+              data_type: str,
+              as_of=None,
+              history: Optional[int] = None,
+              market: str = "cn") -> Optional[pd.DataFrame]:
+    """Point-in-time 读取：只返回 ``as_of`` 当时已公告的财报。
+
+    :param as_of: 回测日（'YYYY-MM-DD' / Timestamp）。None 表示取最新数据，
+                  保持扫描器原有行为。
+    :param history: 返回最近 N 期（含 as_of 当日可见的最新一期）。
+                    None 或 <=0 时只返回最新一期，供“最新快照”类策略使用。
+    提示：需要多期数据计算 TTM 时应显式传 history（如 history=8）。
+    """
+    df = load(code, data_type, market=market)
+    if df is None or df.empty:
+        return None
+    df = df.sort_index()
+    if as_of is not None:
+        cutoff = pd.Timestamp(as_of)
+        visible = _publication_dates(df) <= cutoff
+        df = df[visible]
+        if df.empty:
+            return None
+    if history is None or int(history) <= 0:
+        return df.iloc[[-1]]
+    return df.iloc[-int(history):]
 
 
 def exists(code: str, data_type: str, market: str = "cn") -> bool:

@@ -1,0 +1,245 @@
+{
+  "train": {
+    "sleeves": {
+      "core": {
+        "name": "低波动质量趋势",
+        "total_return": 21.39,
+        "annual_return": 13.78,
+        "max_drawdown": -14.62,
+        "sharpe": 0.75,
+        "calmar": 0.94,
+        "n_days": 368
+      },
+      "etf": {
+        "name": "ETF动量(MA60闸门)",
+        "total_return": 67.5,
+        "annual_return": 41.0,
+        "max_drawdown": -19.06,
+        "sharpe": 1.5,
+        "calmar": 2.15,
+        "n_days": 368
+      },
+      "b1": {
+        "name": "B1质量价值",
+        "total_return": 65.6,
+        "annual_return": 39.93,
+        "max_drawdown": -7.77,
+        "sharpe": 1.86,
+        "calmar": 5.14,
+        "n_days": 368
+      },
+      "b2": {
+        "name": "B2深度价值",
+        "total_return": 25.01,
+        "annual_return": 16.03,
+        "max_drawdown": -12.17,
+        "sharpe": 0.82,
+        "calmar": 1.32,
+        "n_days": 368
+      }
+    },
+    "blend": {
+      "name": "最终组合",
+      "total_return": 44.82,
+      "annual_return": 28.03,
+      "max_drawdown": -13.52,
+      "sharpe": 1.63,
+      "calmar": 2.07,
+      "n_days": 367
+    },
+    "corr": {
+      "core": {
+        "core": 1.0,
+        "etf": 0.243,
+        "b1": 0.22,
+        "b2": 0.271
+      },
+      "etf": {
+        "core": 0.243,
+        "etf": 1.0,
+        "b1": 0.476,
+        "b2": 0.436
+      },
+      "b1": {
+        "core": 0.22,
+        "etf": 0.476,
+        "b1": 1.0,
+        "b2": 0.749
+      },
+      "b2": {
+        "core": 0.271,
+        "etf": 0.436,
+        "b1": 0.749,
+        "b2": 1.0
+      }
+    },
+    "weights": {
+      "core": 0.4,
+      "etf": 0.4,
+      "b1": 0.1,
+      "b2": 0.1
+    }
+  },
+  "test": {
+    "sleeves": {
+      "core": {
+        "name": "低波动质量趋势",
+        "total_return": 16.72,
+        "annual_return": 21.16,
+        "max_drawdown": -9.41,
+        "sharpe": 1.16,
+        "calmar": 2.25,
+        "n_days": 194
+      },
+      "etf": {
+        "name": "ETF动量(MA60闸门)",
+        "total_return": 10.59,
+        "annual_return": 13.32,
+        "max_drawdown": -12.21,
+        "sharpe": 0.65,
+        "calmar": 1.09,
+        "n_days": 194
+      },
+      "b1": {
+        "name": "B1质量价值",
+        "total_return": -9.62,
+        "annual_return": -11.8,
+        "max_drawdown": -21.12,
+        "sharpe": -0.72,
+        "calmar": -0.56,
+        "n_days": 194
+      },
+      "b2": {
+        "name": "B2深度价值",
+        "total_return": 4.6,
+        "annual_return": 5.74,
+        "max_drawdown": -15.55,
+        "sharpe": 0.3,
+        "calmar": 0.37,
+        "n_days": 194
+      }
+    },
+    "blend": {
+      "name": "最终组合",
+      "total_return": 10.85,
+      "annual_return": 13.69,
+      "max_drawdown": -7.02,
+      "sharpe": 0.97,
+      "calmar": 1.95,
+      "n_days": 193
+    },
+    "corr": {
+      "core": {
+        "core": 1.0,
+        "etf": 0.21,
+        "b1": 0.167,
+        "b2": 0.161
+      },
+      "etf": {
+        "core": 0.21,
+        "etf": 1.0,
+        "b1": -0.02,
+        "b2": -0.093
+      },
+      "b1": {
+        "core": 0.167,
+        "etf": -0.02,
+        "b1": 1.0,
+        "b2": 0.63
+      },
+      "b2": {
+        "core": 0.161,
+        "etf": -0.093,
+        "b1": 0.63,
+        "b2": 1.0
+      }
+    },
+    "weights": {
+      "core": 0.4,
+      "etf": 0.4,
+      "b1": 0.1,
+      "b2": 0.1
+    }
+  },
+  "full": {
+    "sleeves": {
+      "core": {
+        "name": "低波动质量趋势",
+        "total_return": 29.51,
+        "annual_return": 11.79,
+        "max_drawdown": -14.62,
+        "sharpe": 0.67,
+        "calmar": 0.81,
+        "n_days": 562
+      },
+      "etf": {
+        "name": "ETF动量(MA60闸门)",
+        "total_return": 100.75,
+        "annual_return": 35.03,
+        "max_drawdown": -19.06,
+        "sharpe": 1.42,
+        "calmar": 1.84,
+        "n_days": 562
+      },
+      "b1": {
+        "name": "B1质量价值",
+        "total_return": 56.33,
+        "annual_return": 21.23,
+        "max_drawdown": -13.07,
+        "sharpe": 1.17,
+        "calmar": 1.62,
+        "n_days": 562
+      },
+      "b2": {
+        "name": "B2深度价值",
+        "total_return": 29.74,
+        "annual_return": 11.87,
+        "max_drawdown": -12.67,
+        "sharpe": 0.66,
+        "calmar": 0.94,
+        "n_days": 562
+      }
+    },
+    "blend": {
+      "name": "最终组合",
+      "total_return": 60.31,
+      "annual_return": 22.58,
+      "max_drawdown": -13.52,
+      "sharpe": 1.45,
+      "calmar": 1.67,
+      "n_days": 561
+    },
+    "corr": {
+      "core": {
+        "core": 1.0,
+        "etf": 0.247,
+        "b1": 0.198,
+        "b2": 0.236
+      },
+      "etf": {
+        "core": 0.247,
+        "etf": 1.0,
+        "b1": 0.387,
+        "b2": 0.326
+      },
+      "b1": {
+        "core": 0.198,
+        "etf": 0.387,
+        "b1": 1.0,
+        "b2": 0.722
+      },
+      "b2": {
+        "core": 0.236,
+        "etf": 0.326,
+        "b1": 0.722,
+        "b2": 1.0
+      }
+    },
+    "weights": {
+      "core": 0.4,
+      "etf": 0.4,
+      "b1": 0.1,
+      "b2": 0.1
+    }
+  }
+}

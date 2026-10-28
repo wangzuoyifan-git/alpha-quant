@@ -1,7 +1,9 @@
 # Alpha量化 — 项目总览
 
 > 所有 Session 的共同基础参考。专项内容见各模块文档。
-> 最后更新：2026-10-27（缠论 P1+P2+P3：`chan/` 纯计算层（包含/分型/笔/中枢/背驰/1-2-3类买卖点/日线+周线确认）+ `chan_theory` L3-A 策略 + `chan` CLI + `agent_tools/chan_tools.py` + A2 缠论摘要 + K线图叠加；详见 `docs/strategy.md` 2.2.1）
+> 最后更新：2026-10-28（回测体系 P0/P1 收口：next-open/涨跌停/T+1/印花税/整手/停牌残留行；as-of 财务与资金流；TTM ROE；`backtest --fast` / `portfolio-backtest` / `walkforward` / `platform-check`；修复后四腿组合 +57.8%/回撤-13.8%/Sharpe1.38，详见 `docs/optimization_progress.md`）
+> 2026-10-27（策略研究：多轮回测综合出最终四腿组合，新增低波动质量趋势策略 `quality_trend`；全区间 +60.3%/回撤-13.5%/Sharpe1.45，详见 `docs/strategy_research.md`）
+> 2026-10-27（缠论 P1+P2+P3：`chan/` 纯计算层（包含/分型/笔/中枢/背驰/1-2-3类买卖点/日线+周线确认）+ `chan_theory` L3-A 策略 + `chan` CLI + `agent_tools/chan_tools.py` + A2 缠论摘要 + K线图叠加；详见 `docs/strategy.md` 2.2.1）
 > 2026-10-10（update_daily 提速与可靠性：moneyflow `stock`/`margin` 每日增量改按 `trade_date` 批量（~1.1万次→每交易日2次）；events E2 全市场改按日期批量（~2.2万次→百余次，约1.5h→1~2min）；港股资金流加 1.5s/只限速+连续失败熔断；批量步骤失败率过高以非零退出码上报（`_check_bulk_result`）；`update_daily.sh` 港股跳过窗口改为仅盘中 09:30–16:15、跳过计入汇总并退出码1）
 > 2026-09-30（资金画像 Phase 2：板块/ETF（申万+ETF）—— `agents/sector_aggregator.py` 聚合 + `data/store_fund.py`/`downloader_fund.py`（index_weight/fund_share/fund_nav）+ `capital-profiler --level sector_etf`）
 > 2026-09-29（资金画像 Phase1 增强：席位×主力一致性 + 席位级事件流合力/分歧子信号；产业资本接入 Tushare `repurchase`（E2 `buyback`）；`--hidden-main` 默认关闭）
@@ -132,7 +134,7 @@
 ┌──────────────────────▼──────────────────────────────────┐
 │                   策略层                                 │
 │  strategies/base.py          BaseStrategy + Signal       │
-│  strategies/builtin/         内置策略（8个，正交框架）        │
+│  strategies/builtin/         内置策略（9个，正交框架）        │
 │  strategies/custom/          自定义策略目录               │
 └──────────────────────┬──────────────────────────────────┘
                        │
@@ -261,7 +263,17 @@ alpha量化/
 │   └── scanner.py               # 全市场扫描引擎
 │
 ├── backtest/
-│   └── engine.py                # 历史回测引擎
+│   ├── engine.py                # 事件驱动回测（兼容旧接口）
+│   ├── execution.py             # 成交规则（next-open/涨跌停/T+1/整手/印花税/停牌）
+│   ├── fast.py                  # 快速面板回测（--fast，复用 research/）
+│   └── portfolio.py             # 多 sleeve 组合层（分配/再平衡/熔断/归因）
+├── research/                    # 策略研究实验室（离线，不参与生产扫描）
+│   ├── panel.py / signals.py / simulator.py / fundamental.py
+│   ├── combo.py                 # 四腿组合 40/40/10/10
+│   ├── experiments.py           # 实验注册表（experiments.jsonl）
+│   ├── walkforward.py           # 3 折 walk-forward
+│   ├── platform.py              # 参数平台稳定性
+│   └── results/                 # 研究指标/净值/图表
 │
 ├── strategies/
 │   ├── base.py                  # BaseStrategy + Signal + ExitLevels + ScaleLevel
@@ -296,12 +308,14 @@ alpha量化/
 ├── scripts/                     # 定期更新脚本
 │   ├── update_daily.sh
 │   ├── update_weekly.sh
-│   └── update_quarterly.sh
+│   ├── update_quarterly.sh
+│   └── research_checks.sh       # 手动：单测 + 快速回测 + 组合 + 数据审计
 │
 ├── tools/                       # 开发验证工具
 │   ├── inspect_data.py          # 数据直查工具（K线/资金流/宏观/基本面）
 │   ├── plot_kline.py
-│   └── test_init_flow.py
+│   ├── test_init_flow.py
+│   └── data_quality_audit.py    # 数据质量抽样审计（P2-1）
 │
 ├── tests/                       # 单元测试
 ├── docs/                        # 文档
@@ -311,6 +325,9 @@ alpha量化/
 │   ├── agent.md                 # Agent 层文档
 │   ├── testing.md               # 测试与验证
 │   ├── ops.md                   # 运维手册
+│   ├── strategy_research.md     # 策略研究成果
+│   ├── optimization_handoff.md  # 回测优化交接
+│   ├── optimization_progress.md # 回测优化进度
 │   └── archive/                 # 过程文档归档
 └── logs/
 ```
@@ -354,6 +371,8 @@ chore:    构建/依赖/配置等杂项
 | `docs/agent.md` | Agent 层：架构设计、Tool Layer 规范、LLM 接入、阶段规划 |
 | `docs/testing.md` | 测试分层策略、覆盖缺口、运行规范 |
 | `docs/ops.md` | CLI 速查、定时脚本、环境变量配置 |
+| `docs/strategy_research.md` | **策略研究成果**：多轮回测过程、最终四腿组合、成本压力与局限 |
+| `docs/optimization_handoff.md` | **回测体系优化交接**：P0/P1 问题清单、实施顺序、验收标准、交接口令 |
 | `docs/capital_profiler.md` | 资金画像系统设计（本项目，Phase1 个股级；基于 reference/资金画像0.1.md 刷新） |
 | `docs/capital_profiler_decisions.md` | 资金画像/席位字典的备选方案与决策记录 |
 | `reference/资金画像0.1.md` | 资金画像系统设计参考（个股/板块/大类三类对象，v3.3，未来扩展参考） |

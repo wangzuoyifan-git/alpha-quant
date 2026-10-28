@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 
 from ..base import BaseStrategy, Signal
-from data.store_moneyflow import load as load_mf
+from data.store_moneyflow import load_asof as load_mf_asof
 
 
 def _calc_adx(df: pd.DataFrame, period: int = 14) -> float:
@@ -77,7 +77,8 @@ class MACrossStrategy(BaseStrategy):
         adx = self.params.get("adx_period", 14)
         return max(slow * 2, adx * 3, 60)
 
-    def generate_signals(self, df: pd.DataFrame, code: str, name: str) -> List[Signal]:
+    def generate_signals(self, df: pd.DataFrame, code: str, name: str,
+                         as_of=None) -> List[Signal]:
         fast = self.params.get("fast_period", 5)
         slow = self.params.get("slow_period", 20)
         vol_ratio = self.params.get("volume_ratio", 1.5)
@@ -133,7 +134,8 @@ class MACrossStrategy(BaseStrategy):
         # ── 资金流确认（内置，可选）──────────────────────────────────
         if mf_lookback > 0:
             try:
-                mf = load_mf("stock", code=code)
+                mf = load_mf_asof("stock", code=code, as_of=as_of,
+                                  lookback=max(mf_lookback, 5))
                 if mf is not None and len(mf) >= mf_lookback and "net_mf_amount" in mf.columns:
                     net = float(mf.iloc[-mf_lookback:]["net_mf_amount"].sum())
                     # 时效标注：资金流最新日期是否明显落后于当前 df

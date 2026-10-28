@@ -194,6 +194,23 @@ python3 main.py backtest --strategy ma_cross
 python3 main.py backtest --strategy ma_cross --start 2024-01-02 --end 2026-06-16
 python3 main.py backtest --strategy etf_momentum --codes 510300 159919  # ETF回测
 # 输出：总收益/年化/最大回撤/夏普/胜率/盈亏比 + 基准收益/超额收益(alpha)/beta
+
+# 快速面板回测（P1-1，研究口径；quality_trend 全市场约 7 秒）
+python3 main.py backtest --strategy quality_trend --fast \
+  --start 2024-07-01 --end 2026-10-26
+
+# 多 sleeve 组合回测（P1-2；默认 40/40/10/10，monthly 再平衡）
+python3 main.py portfolio-backtest --start 2024-07-01 --end 2026-10-26
+python3 main.py portfolio-backtest --rebalance daily --cost-mult 2
+python3 main.py portfolio-backtest \
+  --weights core=0.4,etf=0.4,b1=0.1,b2=0.1 \
+  --max-drawdown 0.20 --cooldown 5
+
+# Walk-forward / 参数平台（P1-3；结果自动写入 research/experiments.jsonl）
+python3 main.py walkforward --strategy quality_trend \
+  --start 2024-01-02 --end 2026-10-26
+python3 main.py platform-check --strategy quality_trend \
+  --start 2024-07-01 --end 2026-10-26
 ```
 
 > `smart-money` 已并入 `capital-profiler`（actor/rank/scan）；旧命令 `python main.py smart-money ...` 仍可用（别名，会提示）。
@@ -412,6 +429,7 @@ python3 tools/plot_kline.py 600519 --chan                       # 日线叠加�
 python3 tools/test_init_flow.py                                 # init 流程端到端验证
 python3 tools/wsl_space.py                                      # WSL 磁盘空间 + VHDX 大小看板（只读）
 python3 tools/wsl_space.py --json                               # 同上，JSON 输出（可接监控）
+python3 -m tools.data_quality_audit --limit 200                 # 数据质量抽样审计（P2-1）
 ```
 
 > `wsl_space.py` 只读：展示 `/`、各 `/mnt/*` 盘用量 + `ext4.vhdx` 真实路径/大小/所在宿主盘可用空间
@@ -458,6 +476,17 @@ scripts/update_quarterly.sh
 # 执行：[1]A股 fundamental 域 update_db（更新财务数据）
 #       → [2]北向个股持股 update-hk-hold --from-portfolio --from-lhb 30（季度披露，约数百只）
 # 注：港股财务在每周脚本中更新；单步失败不中断，末尾汇总；带 flock 并发锁
+```
+
+### 研究与回测检查（手动）
+
+```bash
+bash scripts/research_checks.sh
+# 单测 + quality_trend --fast + portfolio-backtest + 数据质量审计
+# 约 1 分钟；结果写入 research/experiments.jsonl
+
+bash scripts/research_checks.sh --with-walkforward --with-platform
+# 追加 3 折 walk-forward 与参数平台检查（约 +2 分钟）
 ```
 
 ### 用 crontab 配置自动运行

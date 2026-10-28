@@ -86,6 +86,136 @@ def ttm_sum(series: pd.Series, periods: int = 4) -> float:
     return float(v.mean() * periods)
 
 
+def _normalize_roe_value(value) -> float:
+    """把 4.21 / 0.0421 两种 ROE 单位统一为小数。"""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return float("nan")
+    if pd.isna(v):
+        return float("nan")
+    if abs(v) > 2.0:
+        return v / 100.0
+    return v
+
+
+def _prior_year_row(df: pd.DataFrame, current) -> pd.Series | None:
+    target = pd.Timestamp(current) - pd.DateOffset(years=1)
+    if target in df.index:
+        return df.loc[target]
+    same = df[df.index == target]
+    return same.iloc[-1] if not same.empty else None
+
+
+def _last_annual_row(df: pd.DataFrame, current) -> pd.Series | None:
+    annual = df[(df.index < pd.Timestamp(current)) & (df.index.month == 12)]
+    return annual.iloc[-1] if not annual.empty else None
+
+
+def _ttm_flow(df: pd.DataFrame, col: str):
+    """按 YTD 累计口径还原 TTM 流量：本期 YTD + 上年年报 - 上年同期 YTD。"""
+    if col not in df.columns or df.empty:
+        return float("nan")
+    series = pd.to_numeric(df[col], errors="coerce")
+    df = df.assign(**{col: series}).dropna(subset=[col])
+    if df.empty:
+        return float("nan")
+    cur = df.iloc[-1]
+    cur_date = df.index[-1]
+    if cur_date.month == 12:
+        return float(cur[col])
+    annual = _last_annual_row(df, cur_date)
+    prior = _prior_year_row(df, cur_date)
+    if annual is None or prior is None:
+        return float("nan")
+    return float(cur[col]) + float(annual[col]) - float(prior[col])
+
+
+def _looks_cumulative_roe(p: pd.DataFrame) -> bool:
+    """判断 roeAvg 是 YTD 累计还是单季值（启发式）。
+
+    同一自然年内若季度值单调累积（绝对量增加），视为 YTD；
+    若在年度内上下波动或各季持平，视为单季值。
+    数据不足两期时沿用项目当前口径（YTD）。
+    """
+    if p.empty:
+        return True
+    year = p.index[-1].year
+    same_year = p[p.index.year == year]
+    if len(same_year) < 2:
+        return True
+    vals = [_normalize_roe_value(v) for v in same_year["_roe"].tolist()]
+    diffs = [vals[i + 1] - vals[i] for i in range(len(vals) - 1)]
+    if not diffs:
+        return True
+    moving_up = all(d >= -1e-12 for d in diffs) and any(abs(d) > 1e-12 for d in diffs)
+    moving_down = all(d <= 1e-12 for d in diffs) and any(abs(d) > 1e-12 for d in diffs)
+    return bool(moving_up or moving_down)
+
+
+def ttm_roe(profit: pd.DataFrame, balance: pd.DataFrame | None = None,
+            cumulative: bool | None = None, periods: int = 4) -> float:
+    """计算 TTM ROE。
+
+    优先使用 ``TTM 净利润 / 平均净资产``；当缺少可推导的净资产时，
+    退化为 YTD 口径滚动：``上年年报 ROE + 本期 YTD ROE - 上年同期 YTD ROE``。
+    历史不足一年时按 ``YTD ROE × 12 / 报告月份`` 年化，避免用未来数据。
+    ``cumulative=False`` 时沿用旧的 ``ttm_sum``（单季 ROE 累加）。
+
+    默认自动识别 ``roeAvg`` 是 YTD 累计还是单季值；若已知口径可直接传
+    ``cumulative=True/False``。识别失败时按单期年化处理，避免高估。
+    """
+    if profit is None or profit.empty or "roeAvg" not in profit.columns:
+        return float("nan")
+    p = profit.copy()
+    p["_roe"] = pd.to_numeric(p["roeAvg"], errors="coerce")
+    p = p.dropna(subset=["_roe"]).sort_index()
+    if p.empty:
+        return float("nan")
+
+    if cumulative is None:
+        cumulative = _looks_cumulative_roe(p)
+    if not cumulative:
+        return ttm_sum(p["_roe"], periods=periods)
+
+    cur = p.iloc[-1]
+    cur_date = pd.Timestamp(p.index[-1])
+    cur_roe = _normalize_roe_value(cur["_roe"])
+    if pd.isna(cur_roe):
+        return float("nan")
+
+    # ① TTM 净利润 / 平均净资产（净资产由 净利润 / ROE 反推，仅作近似）
+    if "netProfit" in p.columns:
+        ttm_np = _ttm_flow(p, "netProfit")
+        prior = _prior_year_row(p, cur_date)
+        eq_cur = eq_prior = float("nan")
+        if pd.notna(cur["netProfit"]) and abs(cur_roe) > 1e-9:
+            eq_cur = float(cur["netProfit"]) / cur_roe
+        if prior is not None and pd.notna(prior.get("netProfit")):
+            prior_roe = _normalize_roe_value(prior.get("roeAvg"))
+            if abs(prior_roe) > 1e-9:
+                eq_prior = float(prior["netProfit"]) / prior_roe
+        if pd.notna(ttm_np) and eq_cur > 0 and eq_prior > 0:
+            avg_equity = (eq_cur + eq_prior) / 2
+            value = ttm_np / avg_equity
+            if abs(value) < 5.0:  # 防御：单位异常时不采用
+                return float(value)
+
+    # ② YTD 滚动口径
+    annual = _last_annual_row(p, cur_date)
+    prior = _prior_year_row(p, cur_date)
+    if annual is not None and prior is not None:
+        annual_roe = _normalize_roe_value(annual["_roe"])
+        prior_roe = _normalize_roe_value(prior["_roe"])
+        if pd.notna(annual_roe) and pd.notna(prior_roe):
+            return float(annual_roe + cur_roe - prior_roe)
+
+    # ③ 历史不足一年：线性年化本期 YTD，避免累加 YTD 造成高估
+    if cur_date.month == 12:
+        return float(cur_roe)
+    return float(cur_roe * 12.0 / max(cur_date.month, 1))
+
+
 @dataclass
 class Signal:
     """单个交易信号"""
@@ -153,12 +283,14 @@ class BaseStrategy(ABC):
         }
 
     @abstractmethod
-    def generate_signals(self, df: pd.DataFrame, code: str, name: str) -> List[Signal]:
+    def generate_signals(self, df: pd.DataFrame, code: str, name: str,
+                         as_of: Optional[str] = None) -> List[Signal]:
         """
         核心选股逻辑
         :param df: 日线数据 DataFrame（已含技术指标）
         :param code: 股票代码
         :param name: 股票名称
+        :param as_of: point-in-time 回测日（'YYYY-MM-DD'）；None 表示实时扫描
         :return: 信号列表（空表示无信号）
         """
         ...

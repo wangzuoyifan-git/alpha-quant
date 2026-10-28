@@ -56,7 +56,8 @@ class VolPriceBreakoutStrategy(BaseStrategy):
     def requires_bars(self) -> int:
         return self.params.get("lookback", 20) + 20
 
-    def generate_signals(self, df: pd.DataFrame, code: str, name: str) -> List[Signal]:
+    def generate_signals(self, df: pd.DataFrame, code: str, name: str,
+                         as_of=None) -> List[Signal]:
         lookback = self.params.get("lookback", 20)
         vol_ratio = self.params.get("vol_ratio", 2.0)
         breakout_atr = self.params.get("breakout_atr", 0.2)

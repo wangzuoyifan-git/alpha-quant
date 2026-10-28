@@ -99,13 +99,32 @@ class Backtester:
     """
 
     def __init__(self, fetcher: DataFetcher, config: dict):
+        from config.settings import EXECUTION
+
         self.fetcher = fetcher
         self.cfg = config
         self.initial_capital = config.get("initial_capital", 1_000_000)
-        self.commission = config.get("commission_rate", 0.0003)
-        self.slippage = config.get("slippage", 0.001)
         self.position_size = config.get("position_size", 0.1)
         self.max_positions = config.get("max_positions", 10)
+
+        exec_cfg = dict(EXECUTION)
+        exec_cfg.update(config.get("execution", {}))
+        # 兼容旧配置：扁平 commission_rate/slippage 优先于 EXECUTION 默认值
+        if "execution_mode" in config:
+            exec_cfg["mode"] = config["execution_mode"]
+        for key in ("mode", "commission_rate", "slippage", "stamp_duty",
+                    "min_lot", "t_plus_one", "limit_check", "limit_buffer"):
+            if key in config:
+                exec_cfg[key] = config[key]
+        self.exec_cfg = exec_cfg
+        self.execution_mode = str(exec_cfg.get("mode", "next_open"))
+        self.commission = float(exec_cfg.get("commission_rate", 0.0003))
+        self.slippage = float(exec_cfg.get("slippage", 0.001))
+        self.stamp_duty = float(exec_cfg.get("stamp_duty", 0.0005))
+        self.min_lot = int(exec_cfg.get("min_lot", 100))
+        self.t_plus_one = bool(exec_cfg.get("t_plus_one", True))
+        self.limit_check = bool(exec_cfg.get("limit_check", True))
+        self.limit_buffer = float(exec_cfg.get("limit_buffer", 0.98))
 
     def run(self, strategy: BaseStrategy, stock_codes: list[str],
             start: str, end: str, asset_type: str = "stock") -> BacktestResult:
@@ -160,126 +179,307 @@ class Backtester:
             d for df in data.values() for d in df.index
         ))
 
+        import inspect
+
+        from backtest.execution import ExecutionModel
+        from strategies.position_manager import check_exit_triggered, update_trail_stop
+
+        em = ExecutionModel(
+            asset_type=asset_type,
+            commission=self.commission,
+            slippage=self.slippage,
+            stamp_duty=self.stamp_duty,
+            min_lot=self.min_lot,
+            limit_buffer=self.limit_buffer,
+            limit_check=self.limit_check,
+            t_plus_one=self.t_plus_one,
+        )
+        next_open = self.execution_mode != "same_close"
+        sig_params = inspect.signature(strategy.generate_signals).parameters
+        supports_as_of = "as_of" in sig_params
+
+        def _signals(df_slice: pd.DataFrame, code: str, as_of: str):
+            dfr = df_slice.reset_index()
+            if supports_as_of:
+                return strategy.generate_signals(dfr, code, code, as_of=as_of)
+            return strategy.generate_signals(dfr, code, code)
+
+        def _bar(code: str, date):
+            df = data.get(code)
+            if df is None:
+                return None
+            try:
+                return df.loc[date]
+            except KeyError:
+                return None
+
+        def _volume(bar):
+            if "volume" not in bar.index:
+                return None
+            try:
+                return float(bar["volume"])
+            except (TypeError, ValueError):
+                return float("nan")
+
+        def _tradable(bar) -> bool:
+            vol = _volume(bar)
+            return vol is None or (np.isfinite(vol) and vol > 0)
+
+        def _prev_close(code: str, date):
+            """最近一个“有成交”的收盘价；跳过停牌残留行。"""
+            df = data.get(code)
+            if df is None:
+                return None
+            try:
+                loc = df.index.get_loc(date)
+            except KeyError:
+                return None
+            if isinstance(loc, slice) or loc == 0:
+                return None
+            for j in range(loc - 1, -1, -1):
+                row = df.iloc[j]
+                try:
+                    prev = float(row["close"])
+                except (TypeError, ValueError):
+                    continue
+                if not np.isfinite(prev) or prev <= 0:
+                    continue
+                vol = _volume(row)
+                if vol is not None and (not np.isfinite(vol) or vol <= 0):
+                    continue
+                return prev
+            return None
+
         capital = float(self.initial_capital)
-        positions: dict[str, dict] = {}   # code -> {shares, entry_price, entry_date, cost, exit_levels}
+        positions: dict[str, dict] = {}
         trades: list[Trade] = []
         equity = []
+        last_prices: dict[str, float] = {}
+        pending_buys: dict[str, dict] = {}
+        pending_sells: dict[str, dict] = {}
 
-        from strategies.position_manager import check_exit_triggered, update_trail_stop
+        def _open_position(code: str, date, date_str: str, raw_price: float,
+                           reason_in: str = "") -> bool:
+            nonlocal capital
+            if code in positions or len(positions) >= self.max_positions:
+                return False
+            price = em.buy_price(raw_price)
+            alloc = capital * self.position_size
+            shares = em.size_buy(capital, price, alloc, lot=self.min_lot)
+            if shares <= 0:
+                return False
+            cost = em.buy_cost(shares, price)
+            capital -= cost
+            # 次日开盘建仓时，出场框架只能用 t 日及以前的数据；
+            # same_close 复现模式下才允许使用当日收盘。
+            df_slice = data[code].loc[:date]
+            level_df = df_slice.iloc[:-1] if (next_open and len(df_slice) > 1) else df_slice
+            try:
+                el = strategy.compute_exit_levels(
+                    level_df.reset_index(), entry_price=price
+                )
+                el_dict = el.to_dict()
+            except Exception:
+                el_dict = None
+            positions[code] = {
+                "shares": shares,
+                "entry_price": price,
+                "entry_date": date_str,
+                "cost": cost,
+                "exit_levels": el_dict,
+                "triggered_groups": set(),
+            }
+            last_prices[code] = float(raw_price)
+            return True
+
+        def _close_position(code: str, date_str: str, raw_price: float,
+                            shares: int | None = None, reason: str = "") -> bool:
+            nonlocal capital
+            pos = positions.get(code)
+            if pos is None:
+                return False
+            shares_out = pos["shares"] if shares is None else min(int(shares), pos["shares"])
+            if shares_out <= 0:
+                return False
+            sell_price = em.sell_price(raw_price)
+            proceeds = em.sell_proceeds(shares_out, sell_price)
+            capital += proceeds
+            entry_alloc = pos["cost"] * (shares_out / pos["shares"])
+            trades.append(Trade(
+                code=code, name=code,
+                entry_date=pos["entry_date"], entry_price=pos["entry_price"],
+                exit_date=date_str, exit_price=sell_price,
+                shares=shares_out,
+                pnl=proceeds - entry_alloc,
+                pnl_pct=(sell_price / pos["entry_price"] - 1) * 100,
+                reason_out=reason,
+            ))
+            pos["shares"] -= shares_out
+            pos["cost"] -= entry_alloc
+            if pos["shares"] <= 0:
+                del positions[code]
+                pending_sells.pop(code, None)
+            return True
+
+        def _queue_sell(code: str, shares: int, reason: str):
+            pos = positions.get(code)
+            if pos is None:
+                return
+            shares = min(int(shares), pos["shares"])
+            if shares <= 0:
+                return
+            existing = pending_sells.get(code)
+            if existing is not None:
+                # 已有卖单时合并为一次性清仓，避免重复排队
+                existing["shares"] = max(existing["shares"], shares)
+            else:
+                pending_sells[code] = {"shares": shares, "reason": reason}
 
         for date in all_dates:
             date_str = str(date)[:10]
 
-            # 检查持仓是否需要卖出
+            # ── 1. 开盘执行上一交易日挂单（next_open）──────────────
+            if next_open:
+                for code in list(pending_sells.keys()):
+                    order = pending_sells[code]
+                    pos = positions.get(code)
+                    if pos is None:
+                        pending_sells.pop(code, None)
+                        continue
+                    bar = _bar(code, date)
+                    if bar is None:
+                        continue  # 停牌，保留卖单
+                    prev_close = _prev_close(code, date)
+                    if prev_close is None:
+                        continue
+                    o, h, lo_px, c = (float(bar["open"]), float(bar["high"]),
+                                      float(bar["low"]), float(bar["close"]))
+                    if not _tradable(bar):
+                        continue
+                    if not em.can_sell(o, h, lo_px, c, prev_close, code,
+                                       volume=_volume(bar)):
+                        continue
+                    if self.t_plus_one and date_str <= pos["entry_date"]:
+                        continue
+                    _close_position(code, date_str, o, order["shares"], order["reason"])
+                    pending_sells.pop(code, None)
+
+                if pending_buys:
+                    ranked = sorted(pending_buys.items(),
+                                    key=lambda kv: kv[1].get("score", 0.0),
+                                    reverse=True)
+                    pending_buys = {}
+                    for code, order in ranked:
+                        if len(positions) >= self.max_positions:
+                            break
+                        if code in positions:
+                            continue
+                        bar = _bar(code, date)
+                        if bar is None:
+                            continue  # 停牌/信号过期，放弃本次买入
+                        prev_close = _prev_close(code, date)
+                        if prev_close is None:
+                            continue
+                        o, h, lo_px, c = (float(bar["open"]), float(bar["high"]),
+                                          float(bar["low"]), float(bar["close"]))
+                        if not _tradable(bar):
+                            continue
+                        if not em.can_buy(o, h, lo_px, c, prev_close, code,
+                                          volume=_volume(bar)):
+                            continue
+                        _open_position(code, date, date_str, o, order.get("reason", ""))
+
+            # ── 2. 收盘检查持仓出场 ────────────────────────────────
             for code in list(positions.keys()):
-                if code not in data or date not in data[code].index:
-                    continue
+                bar = _bar(code, date)
+                if bar is None or not _tradable(bar):
+                    continue  # 停牌期间不更新、不平仓
                 pos = positions[code]
-                price = float(data[code].loc[date, "close"])
+                price = float(bar["close"])
+                if not np.isfinite(price):
+                    continue
                 df_slice = data[code].loc[:date]
                 el_dict = pos.get("exit_levels")
-                sold = False
 
-                # 优先用策略出场框架检查触发
+                if code in pending_sells:
+                    continue  # 已有待执行卖单，不再重复触发
+
+                # 优先用策略出场框架检查触发（收盘价触发，次日开盘执行）
                 if el_dict and el_dict.get("scale_levels"):
-                    trig = check_exit_triggered(price, el_dict, pos.get("triggered_groups", set()))
+                    trig = check_exit_triggered(
+                        price, el_dict, pos.get("triggered_groups", set())
+                    )
                     if trig:
                         size_pct = abs(trig.get("size_pct", 1.0))
-                        shares_out = max(int(pos["shares"] * size_pct / 100) * 100, 100)
-                        shares_out = min(shares_out, pos["shares"])
-                        sell_price = price * (1 - self.slippage)
-                        proceeds = shares_out * sell_price * (1 - self.commission)
-                        capital += proceeds
-                        entry_alloc = pos["cost"] * (shares_out / pos["shares"])
-                        trade = Trade(
-                            code=code, name=code,
-                            entry_date=pos["entry_date"], entry_price=pos["entry_price"],
-                            exit_date=date_str, exit_price=sell_price,
-                            shares=shares_out,
-                            pnl=proceeds - entry_alloc,
-                            pnl_pct=(sell_price / pos["entry_price"] - 1) * 100,
-                            reason_out=trig.get("reason", trig.get("action", "")),
+                        shares_out = max(
+                            int(pos["shares"] * size_pct / self.min_lot) * self.min_lot,
+                            self.min_lot,
                         )
-                        trades.append(trade)
+                        shares_out = min(shares_out, pos["shares"])
+                        reason = trig.get("reason", trig.get("action", ""))
                         grp = trig.get("cancels_group", "")
                         if grp:
                             pos.setdefault("triggered_groups", set()).add(grp)
-                        pos["shares"] -= shares_out
-                        pos["cost"] -= entry_alloc
-                        if pos["shares"] <= 0:
-                            del positions[code]
-                            sold = True
+                        if next_open:
+                            _queue_sell(code, shares_out, reason)
+                        elif not (self.t_plus_one and date_str <= pos["entry_date"]):
+                            _close_position(code, date_str, price, shares_out, reason)
                         continue
 
-                # 降级：SELL 信号出场（无 exit_levels 或未触发时）
-                if not sold:
-                    sigs = strategy.generate_signals(df_slice.reset_index(), code, code)
-                    sell_sigs = [s for s in sigs if s.signal == "SELL"]
-                    if sell_sigs:
-                        sell_price = price * (1 - self.slippage)
-                        shares = pos["shares"]
-                        proceeds = shares * sell_price * (1 - self.commission)
-                        capital += proceeds
-                        trade = Trade(
-                            code=code, name=code,
-                            entry_date=pos["entry_date"], entry_price=pos["entry_price"],
-                            exit_date=date_str, exit_price=sell_price,
-                            shares=shares,
-                            pnl=proceeds - pos["cost"],
-                            pnl_pct=(sell_price / pos["entry_price"] - 1) * 100,
-                            reason_out=sell_sigs[0].reason,
-                        )
-                        trades.append(trade)
-                        del positions[code]
-                        sold = True
+                # 降级：SELL 信号出场
+                sigs = _signals(df_slice, code, date_str)
+                sell_sigs = [s for s in sigs if s.signal == "SELL"]
+                if sell_sigs:
+                    reason = sell_sigs[0].reason
+                    if next_open:
+                        _queue_sell(code, pos["shares"], reason)
+                    elif not (self.t_plus_one and date_str <= pos["entry_date"]):
+                        _close_position(code, date_str, price, pos["shares"], reason)
+                    continue
 
                 # 移动止损更新（trail_* 逻辑，每日收盘后更新）
-                if not sold and el_dict and el_dict.get("exit_logic", "").startswith("trail_"):
-                    positions[code]["exit_levels"] = update_trail_stop(el_dict, df_slice.reset_index())
+                if el_dict and el_dict.get("exit_logic", "").startswith("trail_"):
+                    positions[code]["exit_levels"] = update_trail_stop(
+                        el_dict, df_slice.reset_index()
+                    )
 
-            # 扫描买入信号（最多同时持仓 max_positions 只）
+            # ── 3. 收盘扫描买入信号 ────────────────────────────────
             if len(positions) < self.max_positions:
                 for code, df in data.items():
-                    if code in positions or date not in df.index:
+                    if code in positions or code in pending_buys:
+                        continue
+                    if date not in df.index:
+                        continue
+                    if not _tradable(df.loc[date]):
                         continue
                     df_slice = df.loc[:date]
                     if len(df_slice) < strategy.requires_bars():
                         continue
-                    sigs = strategy.generate_signals(
-                        df_slice.reset_index(), code, code
-                    )
+                    sigs = _signals(df_slice, code, date_str)
                     buy_sigs = [s for s in sigs if s.signal == "BUY"]
-                    if buy_sigs and len(positions) < self.max_positions:
-                        price = float(df.loc[date, "close"]) * (1 + self.slippage)
-                        alloc = capital * self.position_size
-                        shares = int(alloc / price / 100) * 100
-                        if shares <= 0:
-                            continue
-                        cost = shares * price * (1 + self.commission)
-                        if cost > capital:
-                            continue
-                        capital -= cost
-                        # 建仓时计算出场框架
-                        try:
-                            el = strategy.compute_exit_levels(df_slice.reset_index(), entry_price=price)
-                            el_dict = el.to_dict()
-                        except Exception:
-                            el_dict = None
-                        positions[code] = {
-                            "shares": shares,
-                            "entry_price": price,
-                            "entry_date": date_str,
-                            "cost": cost,
-                            "exit_levels": el_dict,
-                            "triggered_groups": set(),
-                        }
+                    if not buy_sigs:
+                        continue
+                    best = max(buy_sigs, key=lambda s: s.score)
+                    if next_open:
+                        if len(positions) + len(pending_buys) < self.max_positions:
+                            pending_buys[code] = {
+                                "score": float(best.score),
+                                "reason": best.reason,
+                            }
+                    elif len(positions) < self.max_positions:
+                        price = float(df.loc[date, "close"])
+                        _open_position(code, date, date_str, price, best.reason)
 
-            # 计算当日总资产
-            market_value = sum(
-                pos["shares"] * float(data[c].loc[date, "close"])
-                for c, pos in positions.items()
-                if c in data and date in data[c].index
-            )
+            # ── 4. 当日净值（停牌用最后有效价）─────────────────────
+            market_value = 0.0
+            for code, pos in positions.items():
+                bar = _bar(code, date)
+                if bar is not None:
+                    close = float(bar["close"])
+                    if np.isfinite(close) and close > 0:
+                        last_prices[code] = close
+                price = last_prices.get(code, pos["entry_price"])
+                market_value += pos["shares"] * price
             equity.append({"date": date, "equity": capital + market_value})
 
         equity_series = pd.DataFrame(equity).set_index("date")["equity"]

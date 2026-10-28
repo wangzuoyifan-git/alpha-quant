@@ -1,0 +1,926 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Alpha量化 · 策略回测总结</title>
+<meta name="author" content="Alpha量化">
+<meta name="description" content="基于本地数据与全部内置策略的多轮回测总结">
+<style>
+@page {
+  size: A4;
+  margin: 20mm 15mm 18mm 15mm;
+  @top-center {
+    content: "Alpha量化 · 策略回测总结";
+    font-family: "Noto Sans CJK SC", sans-serif;
+    font-size: 7.5pt; color: #999999;
+  }
+  @bottom-right {
+    content: "第 " counter(page) " 页";
+    font-family: "Noto Sans CJK SC", sans-serif;
+    font-size: 7.5pt; color: #999999;
+  }
+}
+@page cover {
+  margin: 0;
+  @top-center { content: none; }
+  @bottom-right { content: none; }
+}
+html { font-family: "Noto Sans CJK SC", sans-serif; }
+body {
+  margin: 0;
+  font-family: "Noto Sans CJK SC", sans-serif;
+  font-size: 9.6pt; line-height: 1.62; color: #222222;
+}
+.cover {
+  page: cover;
+  height: 297mm; box-sizing: border-box;
+  padding: 32mm 24mm 22mm 24mm;
+  background: linear-gradient(160deg, #0f2f4d 0%, #1f4e79 45%, #2b6ca3 100%);
+  color: #ffffff;
+}
+.cover-top { font-size: 9pt; letter-spacing: 2.5pt; color: #bcd6ee; }
+.cover-title {
+  font-size: 38pt; line-height: 1.15; margin: 22mm 0 4mm 0;
+  color: #ffffff; border: none; page-break-before: avoid;
+}
+.cover-sub { font-size: 15pt; color: #dce9f5; }
+.cover-line { width: 42mm; height: 1.4mm; background: #f0b35a; margin: 9mm 0 6mm 0; }
+.cover-period { font-size: 9.5pt; color: #c9dbed; }
+table.kpi {
+  margin-top: 18mm; width: 100%; border-collapse: separate; border-spacing: 4mm 3mm;
+}
+table.kpi tbody tr, table.kpi tbody tr:nth-child(even) { background: transparent !important; }
+table.kpi td {
+  width: 33%; background: rgba(255,255,255,0.10) !important;
+  border: 0.4mm solid rgba(255,255,255,0.25);
+  border-radius: 2mm; padding: 5mm 4mm; text-align: left;
+}
+.kpi-v { font-size: 22pt; font-weight: bold; color: #ffffff; }
+.kpi-l { font-size: 8.5pt; color: #cfe1f2; margin-top: 1.5mm; }
+.cover-weights {
+  margin-top: 16mm; padding: 4mm 5mm; font-size: 10.5pt;
+  background: rgba(240,179,90,0.16); border-left: 1.2mm solid #f0b35a;
+}
+.cover-note { margin-top: 8mm; font-size: 9pt; line-height: 1.7; color: #d8e6f3; }
+.cover-foot { position: absolute; bottom: 18mm; font-size: 8pt; color: #a9c4dd; }
+
+.toc-page { page-break-before: always; }
+.toc-page h2 { border: none; color: #1f4e79; }
+.toc-page ul { list-style: none; padding-left: 0; }
+.toc-page li { margin: 1.1mm 0; font-size: 10pt; }
+.toc-page li ul { padding-left: 5mm; }
+.toc-page a { color: #333333; text-decoration: none; }
+
+h1 {
+  font-size: 20pt; color: #1f4e79; line-height: 1.3;
+  border-bottom: 1.2mm solid #1f4e79; padding-bottom: 3mm;
+  margin: 0 0 5mm 0; page-break-before: always;
+}
+h1 + blockquote { margin-top: 0; }
+h2 {
+  font-size: 14.5pt; color: #1f4e79; margin: 8mm 0 3mm 0;
+  border-bottom: 0.3mm solid #cfdbe6; padding-bottom: 1.6mm;
+  page-break-after: avoid;
+}
+h3 {
+  font-size: 11.5pt; color: #2b5f8a; margin: 5.5mm 0 2mm 0;
+  page-break-after: avoid;
+}
+p { margin: 0 0 2.6mm 0; text-align: justify; }
+strong { color: #163b5c; }
+hr { border: none; border-top: 0.3mm solid #e0e0e0; margin: 5mm 0; }
+blockquote {
+  margin: 3mm 0 4mm 0; padding: 2.5mm 4mm;
+  background: #f4f8fc; border-left: 1mm solid #7fa8cc;
+  color: #3d4b58; font-size: 9pt;
+}
+ul, ol { margin: 1.5mm 0 3mm 0; padding-left: 6mm; }
+li { margin: 0.8mm 0; }
+code {
+  font-family: "DejaVu Sans Mono", monospace; font-size: 8.2pt;
+  background: #f2f4f6; color: #8a2f2f; padding: 0.2mm 1mm; border-radius: 0.8mm;
+}
+pre {
+  background: #f6f8fa; border: 0.3mm solid #e3e7eb; border-radius: 1mm;
+  padding: 3mm 4mm; margin: 3mm 0 4mm 0; page-break-inside: avoid;
+}
+pre code { background: none; color: #333333; font-size: 8pt; }
+table {
+  width: 100%; border-collapse: collapse; margin: 3mm 0 5mm 0;
+  font-size: 7.8pt; line-height: 1.35; page-break-inside: auto;
+}
+thead { display: table-header-group; }
+tr { page-break-inside: avoid; }
+th {
+  background: #eaf1f7; color: #1f4e79; font-weight: bold;
+  border: 0.25mm solid #c8d6e2; padding: 1.8mm 1.5mm; text-align: center;
+}
+td {
+  border: 0.25mm solid #d8e1e8; padding: 1.6mm 1.5mm;
+  text-align: left; vertical-align: top; word-break: break-word;
+}
+tbody tr:nth-child(even) { background: #fafcfe; }
+
+.charts { page-break-before: always; }
+figure {
+  margin: 2mm 0 3mm 0; text-align: center; page-break-inside: avoid;
+}
+figure img { width: 100%; max-width: 154mm; border: 0.25mm solid #e0e6eb; }
+figcaption { font-size: 8.5pt; color: #666666; margin-top: 2mm; }
+
+.toc-page { page-break-after: always; }
+a { color: #1f4e79; text-decoration: none; }
+</style>
+</head>
+<body>
+
+<section class="cover">
+  <div class="cover-top">ALPHA QUANT · STRATEGY RESEARCH</div>
+  <h1 class="cover-title">策略回测总结</h1>
+  <div class="cover-sub">从 9 个内置策略到最终四腿组合</div>
+  <div class="cover-line"></div>
+  <div class="cover-period">回测区间 2024-07-01 ~ 2026-10-26 &nbsp;|&nbsp; 样本外 2026-01 ~ 2026-10</div>
+
+  <table class="kpi">
+    <tr>
+      <td><div class="kpi-v">+60.3%</div><div class="kpi-l">全区间收益</div></td>
+      <td><div class="kpi-v">-13.5%</div><div class="kpi-l">最大回撤</div></td>
+      <td><div class="kpi-v">1.45</div><div class="kpi-l">Sharpe</div></td>
+    </tr>
+    <tr>
+      <td><div class="kpi-v">+10.9%</div><div class="kpi-l">OOS 收益</div></td>
+      <td><div class="kpi-v">-7.0%</div><div class="kpi-l">OOS 回撤</div></td>
+      <td><div class="kpi-v">+17.98%</div><div class="kpi-l">沪深300 全区间</div></td>
+    </tr>
+  </table>
+
+  <div class="cover-weights">
+    <b>最终配置</b>　Core 40%　·　ETF 40%　·　B1 10%　·　B2 10%
+  </div>
+  <div class="cover-note">
+    数据：本地 A 股 5595 只 / ETF 2210 只。回测含次日开盘成交、涨跌停不可买/不可卖、
+    T+1、佣金/滑点/印花税。双倍成本压力测试：+51.6%，回撤 -14.8%，Sharpe 1.25。
+  </div>
+  <div class="cover-foot">生成日期：2026-10-28　|　详细过程见 docs/strategy_research.md</div>
+</section>
+
+<section class="toc-page"><h2>目录</h2><div class="toc">
+<ul>
+<li><a href="#alpha-2026-10">Alpha量化 — 策略研究成果（2026-10）</a><ul>
+<li><a href="#0">0. 结论摘要</a></li>
+<li><a href="#1-backtestenginepy">1. 回测方法（为什么不能直接用 backtest/engine.py）</a></li>
+<li><a href="#2-1">2. 第 1 轮：全部内置策略基线</a></li>
+<li><a href="#3-2-alpha">3. 第 2 轮：事件研究——找出真正有 Alpha 的状态</a></li>
+<li><a href="#4-3-v1">4. 第 3 轮：低波动质量趋势 v1（发现“涨停买不进”偏差）</a></li>
+<li><a href="#5-4-v2-ma20">5. 第 4 轮：v2 改为“回踩 MA20 再站上”，参数稳健性</a></li>
+<li><a href="#6-5">6. 第 5 轮：过滤器证伪（资金流、行业上限、缠论）</a></li>
+<li><a href="#7-6">7. 第 6 轮：组合构建</a></li>
+<li><a href="#8-7">8. 第 7 轮：成本压力与最终表现</a></li>
+<li><a href="#9">9. 最终策略定义（可执行版）</a><ul>
+<li><a href="#91-core-40strategiesbuiltinquality_trendpy">9.1 Core 40%：低波动质量趋势（strategies/builtin/quality_trend.py）</a></li>
+<li><a href="#92-etf-40-etf_momentum">9.2 ETF 40%：动量轮动（复用 etf_momentum 逻辑）</a></li>
+<li><a href="#93-1010b1-b2">9.3 配置腿 10%+10%：B1 质量 / B2 深度价值</a></li>
+</ul>
+</li>
+<li><a href="#10">10. 局限与后续</a></li>
+<li><a href="#11">11. 复现与产物</a></li>
+</ul>
+</li>
+</ul>
+</div>
+</section>
+<h1 id="alpha-2026-10">Alpha量化 — 策略研究成果（2026-10）</h1>
+<blockquote>
+<p>目标：基于本地数据与全部已实现策略，通过多轮回测，综合出一个可执行的最佳组合。
+数据区间：2024-01-02 ~ 2026-10-26（本地全量 A 股 5595 只 + ETF 2210 只）。
+回测区间：2024-07-01 ~ 2026-10-26（前 6 个月用于指标预热）。
+样本外（OOS）：2026-01-01 ~ 2026-10-26；训练集：2024-07-01 ~ 2025-12-31。</p>
+<p>复现入口：<code>python -m research.combo --period all --cost 1</code>（结果写入 <code>research/results/</code>）。
+PDF 版：<code>docs/Alpha量化_策略回测总结_2026-10.pdf</code>（<code>python -m research.make_report_pdf</code>）。
+研究代码：<code>research/panel.py</code>、<code>research/signals.py</code>、<code>research/simulator.py</code>、
+<code>research/fundamental.py</code>、<code>research/combo.py</code>。新增策略：<code>strategies/builtin/quality_trend.py</code>。</p>
+</blockquote>
+<hr />
+<h2 id="0">0. 结论摘要</h2>
+<p>最终组合（四腿，按资金权重）：</p>
+<table>
+<thead>
+<tr>
+<th>腿</th>
+<th>策略</th>
+<th>权重</th>
+<th>角色</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Core</td>
+<td>低波动质量趋势（新增 <code>quality_trend</code>）</td>
+<td>40%</td>
+<td>个股趋势，低波动/不过热/回踩入场</td>
+</tr>
+<tr>
+<td>ETF</td>
+<td>ETF 动量轮动（<code>etf_momentum</code> lb=30, Top5, 20日调仓）</td>
+<td>40%</td>
+<td>主题/宽基 ETF 趋势轮动</td>
+</tr>
+<tr>
+<td>B1</td>
+<td>质量价值（<code>fundamental_value</code>）</td>
+<td>10%</td>
+<td>长期质量因子</td>
+</tr>
+<tr>
+<td>B2</td>
+<td>深度价值（<code>deep_value</code>）</td>
+<td>10%</td>
+<td>低估值防御</td>
+</tr>
+</tbody>
+</table>
+<p>组合回测结果（含 0.03% 佣金、0.1% 滑点、0.05% 印花税、T+1、涨停不可买/跌停不可卖）：</p>
+<table>
+<thead>
+<tr>
+<th>区间</th>
+<th style="text-align: right;">总收益</th>
+<th style="text-align: right;">年化</th>
+<th style="text-align: right;">最大回撤</th>
+<th style="text-align: right;">Sharpe</th>
+<th style="text-align: right;">Calmar</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>训练 2024-07~2025-12</td>
+<td style="text-align: right;"><strong>+44.82%</strong></td>
+<td style="text-align: right;">+28.03%</td>
+<td style="text-align: right;">-13.52%</td>
+<td style="text-align: right;">1.63</td>
+<td style="text-align: right;">2.07</td>
+</tr>
+<tr>
+<td>OOS 2026-01~2026-10</td>
+<td style="text-align: right;"><strong>+10.85%</strong></td>
+<td style="text-align: right;">+13.69%</td>
+<td style="text-align: right;">-7.02%</td>
+<td style="text-align: right;">0.97</td>
+<td style="text-align: right;">1.95</td>
+</tr>
+<tr>
+<td>全区间 2024-07~2026-10</td>
+<td style="text-align: right;"><strong>+60.31%</strong></td>
+<td style="text-align: right;">+22.58%</td>
+<td style="text-align: right;">-13.52%</td>
+<td style="text-align: right;">1.45</td>
+<td style="text-align: right;">1.67</td>
+</tr>
+<tr>
+<td>全区间 · 双倍成本</td>
+<td style="text-align: right;"><strong>+51.60%</strong></td>
+<td style="text-align: right;">+19.66%</td>
+<td style="text-align: right;">-14.75%</td>
+<td style="text-align: right;">1.25</td>
+<td style="text-align: right;">1.33</td>
+</tr>
+</tbody>
+</table>
+<p>同期基准（沪深300）：全区间 <strong>+17.98%</strong>，最大回撤 <strong>-20.2%</strong>；OOS <strong>-13.02%</strong>。
+分年度：2024H2 +13.16%、2025 +29.39%、2026 +9.90%；月度胜率 66.7%，最差单月 -3.93%。</p>
+<p><strong>关键结论</strong>：单策略里 ETF 动量绝对收益最高，但回撤大；个股低波动质量趋势风险调整后最稳；
+B1/B2 与两者相关性低（0.2~0.5），四腿组合把全区间 Sharpe 从单腿的 0.67/1.42 提升到 1.45，
+并把最大回撤压到 -13.5%。</p>
+<hr />
+<section class="charts"><h2>图表</h2><figure><img src="file:///home/wz/alpha-quant/research/results/fig_equity.png" alt="图 1  最终组合净值与回撤（对比沪深300）"><figcaption>图 1  最终组合净值与回撤（对比沪深300）</figcaption></figure><figure><img src="file:///home/wz/alpha-quant/research/results/fig_yearly.png" alt="图 2  分年度收益：最终组合 vs 沪深300"><figcaption>图 2  分年度收益：最终组合 vs 沪深300</figcaption></figure><figure><img src="file:///home/wz/alpha-quant/research/results/fig_sleeves.png" alt="图 3  四腿净值曲线（Core / ETF / B1 / B2）"><figcaption>图 3  四腿净值曲线（Core / ETF / B1 / B2）</figcaption></figure></section><h2 id="1-backtestenginepy">1. 回测方法（为什么不能直接用 <code>backtest/engine.py</code>）</h2>
+<p>原引擎逐日、逐股重算 <code>generate_signals(df_slice)</code>，全市场 5595 只 × 562 天需要数百万次
+pandas 计算，不可用于参数搜索；且存在两处会影响结论的细节：</p>
+<ol>
+<li><strong>成交时点</strong>：原引擎在信号当日收盘价买入（隐含“收盘前已知收盘价”）。</li>
+<li><strong>涨停可买性</strong>：A 股涨停/一字板次日往往买不进，原引擎仍按收盘价成交，会系统性高估
+   动量/突破类策略（本项目实测可高估 20 个百分点以上，见第 4 轮）。</li>
+</ol>
+<p>研究版回测器 <code>research/simulator.py</code> 的约束：</p>
+<ul>
+<li>信号在 t 日收盘生成，<strong>t+1 日开盘成交</strong>；</li>
+<li>主板 10% / 创业板·科创板 20% / 北交所 30% 涨跌停，次日开盘接近涨停则买不进，
+  一字跌停则卖不出；</li>
+<li>T+1、100 股整手、佣金/滑点/印花税、现金约束；</li>
+<li>硬止损/移动止损/止盈按日内 high/low 触发，含跳空处理；</li>
+<li>股票池剔除 ST、上市不足 60 天、5 日均成交额 &lt; 3000 万；ETF 池剔除上市不足 60 天、
+  成交额 &lt; 500 万；</li>
+<li>基本面只用 <code>pubDate &lt;= 回测日</code> 的财报（point-in-time），PE 分位只用当日之前数据。</li>
+</ul>
+<p>数据/缓存：<code>data/cache/research_panel_*.npz</code>、<code>research_mf.npz</code>、<code>research_fund.npz</code>。</p>
+<hr />
+<h2 id="2-1">2. 第 1 轮：全部内置策略基线</h2>
+<p>统一配置：<code>regime=trend</code>（沪深300 在 MA60 上方且 MA20&gt;MA60 才开仓）、最多 10 仓、
+单仓 10%、3×ATR 硬止损、3×ATR 移动止损；ETF 为 Top5/20 日调仓。
+区间 2024-07-01 ~ 2026-10-26，含涨跌停约束。</p>
+<table>
+<thead>
+<tr>
+<th>策略</th>
+<th style="text-align: right;">总收益</th>
+<th style="text-align: right;">年化</th>
+<th style="text-align: right;">最大回撤</th>
+<th style="text-align: right;">Sharpe</th>
+<th style="text-align: right;">盈亏比</th>
+<th style="text-align: right;">交易数</th>
+<th style="text-align: right;">仓位暴露</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ma_cross</td>
+<td style="text-align: right;">-5.68%</td>
+<td style="text-align: right;">-2.49%</td>
+<td style="text-align: right;">-40.18%</td>
+<td style="text-align: right;">-0.11</td>
+<td style="text-align: right;">2.55</td>
+<td style="text-align: right;">199</td>
+<td style="text-align: right;">73.8%</td>
+</tr>
+<tr>
+<td>macd_rsi</td>
+<td style="text-align: right;">+0.91%</td>
+<td style="text-align: right;">+0.39%</td>
+<td style="text-align: right;">-31.18%</td>
+<td style="text-align: right;">0.01</td>
+<td style="text-align: right;">2.43</td>
+<td style="text-align: right;">235</td>
+<td style="text-align: right;">75.1%</td>
+</tr>
+<tr>
+<td>vol_price_breakout</td>
+<td style="text-align: right;">-63.34%</td>
+<td style="text-align: right;">-35.11%</td>
+<td style="text-align: right;">-66.83%</td>
+<td style="text-align: right;">-1.21</td>
+<td style="text-align: right;">0.83</td>
+<td style="text-align: right;">119</td>
+<td style="text-align: right;">79.7%</td>
+</tr>
+<tr>
+<td>etf_momentum lb20</td>
+<td style="text-align: right;">+115.10%</td>
+<td style="text-align: right;">+39.11%</td>
+<td style="text-align: right;">-22.76%</td>
+<td style="text-align: right;">1.27</td>
+<td style="text-align: right;">1.44</td>
+<td style="text-align: right;">134</td>
+<td style="text-align: right;">100%</td>
+</tr>
+<tr>
+<td>etf_momentum lb30</td>
+<td style="text-align: right;">+109.60%</td>
+<td style="text-align: right;">+37.56%</td>
+<td style="text-align: right;">-19.03%</td>
+<td style="text-align: right;">1.33</td>
+<td style="text-align: right;">1.59</td>
+<td style="text-align: right;">124</td>
+<td style="text-align: right;">100%</td>
+</tr>
+<tr>
+<td>etf_momentum lb30 + 趋势过滤 + MA60闸门</td>
+<td style="text-align: right;">+100.75%</td>
+<td style="text-align: right;">+35.03%</td>
+<td style="text-align: right;">-19.06%</td>
+<td style="text-align: right;">1.42</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+</tr>
+<tr>
+<td>B1 fundamental_value（月调仓 Top20）</td>
+<td style="text-align: right;">+56.33%</td>
+<td style="text-align: right;">+21.23%</td>
+<td style="text-align: right;">-13.07%</td>
+<td style="text-align: right;">1.17</td>
+<td style="text-align: right;">1.54</td>
+<td style="text-align: right;">252</td>
+<td style="text-align: right;">95.9%</td>
+</tr>
+<tr>
+<td>B2 deep_value（月调仓 Top20）</td>
+<td style="text-align: right;">+29.74%</td>
+<td style="text-align: right;">+11.87%</td>
+<td style="text-align: right;">-12.67%</td>
+<td style="text-align: right;">0.66</td>
+<td style="text-align: right;">1.49</td>
+<td style="text-align: right;">120</td>
+<td style="text-align: right;">95.9%</td>
+</tr>
+<tr>
+<td>B3 growth_pick（月调仓 Top20）</td>
+<td style="text-align: right;">+65.88%</td>
+<td style="text-align: right;">+24.37%</td>
+<td style="text-align: right;">-15.14%</td>
+<td style="text-align: right;">1.09</td>
+<td style="text-align: right;">2.06</td>
+<td style="text-align: right;">162</td>
+<td style="text-align: right;">100%</td>
+</tr>
+</tbody>
+</table>
+<p><strong>观察</strong>：</p>
+<ul>
+<li>原有 L3-A 技术策略在加入“次日开盘 + 涨停不可买”后全部失效，说明其历史表现高度依赖
+  追涨/涨停成交假设。</li>
+<li>ETF 动量是单腿最强，但最大回撤接近 -20%，且 OOS 波动大，不能单独作为核心。</li>
+<li>B 系列（配置仓）绝对收益不低，但 2026 年 B1/B3 均为负收益，需组合分散。</li>
+</ul>
+<hr />
+<h2 id="3-2-alpha">3. 第 2 轮：事件研究——找出真正有 Alpha 的状态</h2>
+<p>不看策略，直接在“上升趋势”样本内统计未来 20 日收益（<code>trend = close&gt;MA60 &amp; MA20&gt;MA60</code>）：</p>
+<table>
+<thead>
+<tr>
+<th>条件</th>
+<th style="text-align: right;">样本数</th>
+<th style="text-align: right;">未来20日平均</th>
+<th style="text-align: right;">胜率</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>趋势内全部</td>
+<td style="text-align: right;">1,263,487</td>
+<td style="text-align: right;">+0.39%</td>
+<td style="text-align: right;">44.5%</td>
+</tr>
+<tr>
+<td>偏离 MA20 0~5%</td>
+<td style="text-align: right;">469,122</td>
+<td style="text-align: right;"><strong>+0.85%</strong></td>
+<td style="text-align: right;">46.2%</td>
+</tr>
+<tr>
+<td>偏离 MA20 10~20%</td>
+<td style="text-align: right;">142,214</td>
+<td style="text-align: right;">-0.42%</td>
+<td style="text-align: right;">43.9%</td>
+</tr>
+<tr>
+<td>偏离 MA20 20~50%</td>
+<td style="text-align: right;">59,815</td>
+<td style="text-align: right;">-3.42%</td>
+<td style="text-align: right;">41.1%</td>
+</tr>
+<tr>
+<td>偏离 MA20 &gt;50%</td>
+<td style="text-align: right;">5,209</td>
+<td style="text-align: right;"><strong>-7.89%</strong></td>
+<td style="text-align: right;">36.0%</td>
+</tr>
+<tr>
+<td>20日动量 0~10%</td>
+<td style="text-align: right;">501,487</td>
+<td style="text-align: right;">+0.76%</td>
+<td style="text-align: right;">45.6%</td>
+</tr>
+<tr>
+<td>20日动量 10~25%</td>
+<td style="text-align: right;">328,110</td>
+<td style="text-align: right;">+0.70%</td>
+<td style="text-align: right;">46.1%</td>
+</tr>
+<tr>
+<td>20日动量 50~100%</td>
+<td style="text-align: right;">37,720</td>
+<td style="text-align: right;">-4.28%</td>
+<td style="text-align: right;">40.5%</td>
+</tr>
+<tr>
+<td>20日动量 &gt;100%</td>
+<td style="text-align: right;">6,819</td>
+<td style="text-align: right;"><strong>-8.56%</strong></td>
+<td style="text-align: right;">35.5%</td>
+</tr>
+<tr>
+<td>ATR/收盘 &lt;3%</td>
+<td style="text-align: right;">262,340</td>
+<td style="text-align: right;"><strong>+3.58%</strong></td>
+<td style="text-align: right;">50.6%</td>
+</tr>
+<tr>
+<td>ATR/收盘 3~5%</td>
+<td style="text-align: right;">496,825</td>
+<td style="text-align: right;">+1.09%</td>
+<td style="text-align: right;">43.9%</td>
+</tr>
+<tr>
+<td>ATR/收盘 5~8%</td>
+<td style="text-align: right;">384,559</td>
+<td style="text-align: right;">-0.37%</td>
+<td style="text-align: right;">42.8%</td>
+</tr>
+<tr>
+<td>ATR/收盘 &gt;8%</td>
+<td style="text-align: right;">118,941</td>
+<td style="text-align: right;">-2.2%</td>
+<td style="text-align: right;">39.0%</td>
+</tr>
+</tbody>
+</table>
+<p>结论：<strong>低波动 + 温和动量 + 不偏离均线太远</strong>才有正 Alpha；高波动、追高是主要亏损来源。
+这直接决定了新策略的三个过滤器：<code>ATR/close &lt; 5%</code>、<code>偏离 MA20 &lt; 8%</code>、<code>20日动量 &lt; 25%</code>。</p>
+<hr />
+<h2 id="4-3-v1">4. 第 3 轮：低波动质量趋势 v1（发现“涨停买不进”偏差）</h2>
+<p>v1 规则：趋势 + 低波动 + 不过热 + <strong>状态首次满足时入场</strong>，跌破 MA20 离场。</p>
+<table>
+<thead>
+<tr>
+<th>版本</th>
+<th style="text-align: right;">总收益</th>
+<th style="text-align: right;">最大回撤</th>
+<th style="text-align: right;">Sharpe</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>不约束涨停（原研究口径）</td>
+<td style="text-align: right;">+21.33%</td>
+<td style="text-align: right;">-8.21%</td>
+<td style="text-align: right;">0.67</td>
+</tr>
+<tr>
+<td>加入“次日开盘接近涨停不可买”</td>
+<td style="text-align: right;"><strong>+1.72%</strong></td>
+<td style="text-align: right;">-17.36%</td>
+<td style="text-align: right;">-0.04</td>
+</tr>
+</tbody>
+</table>
+<p><strong>诊断</strong>：v1 的收益主要来自“首次满足条件”当天的强势股，次日往往高开甚至涨停，实盘买不进。
+加入真实成交约束后 Alpha 消失。这是一次关键证伪——如果直接交付 v1，会严重高估策略。</p>
+<hr />
+<h2 id="5-4-v2-ma20">5. 第 4 轮：v2 改为“回踩 MA20 再站上”，参数稳健性</h2>
+<p>v2 入场条件（不再追涨）：</p>
+<pre><code>趋势：close &gt; MA60 且 MA20 &gt; MA60
+质量：ATR14/close &lt; 5%，0 &lt;= close/MA20-1 &lt; 8%，0 &lt; 20日动量 &lt; 25%
+流动：5 日均成交额 &gt;= 1 亿
+触发：当日 low &lt;= MA20 且 close &gt; MA20 且 前一日 close &lt;= 前一日 MA20
+出场：close 跌破 MA20（交叉日）；3×ATR 硬止损，研究版叠加 3×ATR 移动止损
+</code></pre>
+<p>参数网格（含涨停约束，全区间；网格评分归一化与最终落地版略有差异，见下方说明）：</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: right;">vol_max</th>
+<th style="text-align: right;">ext_max</th>
+<th style="text-align: right;">mom_max</th>
+<th style="text-align: right;">总收益</th>
+<th style="text-align: right;">最大回撤</th>
+<th style="text-align: right;">Sharpe</th>
+<th style="text-align: right;">训练收益</th>
+<th style="text-align: right;">OOS 收益</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">0.05</td>
+<td style="text-align: right;">0.10</td>
+<td style="text-align: right;">0.20</td>
+<td style="text-align: right;">+33.08%</td>
+<td style="text-align: right;">-14.26%</td>
+<td style="text-align: right;">0.749</td>
+<td style="text-align: right;">+27.5%</td>
+<td style="text-align: right;">+13.5%</td>
+</tr>
+<tr>
+<td style="text-align: right;">0.05</td>
+<td style="text-align: right;">0.08</td>
+<td style="text-align: right;">0.20</td>
+<td style="text-align: right;">+33.16%</td>
+<td style="text-align: right;">-14.72%</td>
+<td style="text-align: right;">0.744</td>
+<td style="text-align: right;">+26.3%</td>
+<td style="text-align: right;">+10.8%</td>
+</tr>
+<tr>
+<td style="text-align: right;"><strong>0.05</strong></td>
+<td style="text-align: right;"><strong>0.08</strong></td>
+<td style="text-align: right;"><strong>0.25</strong></td>
+<td style="text-align: right;"><strong>+31.24%</strong></td>
+<td style="text-align: right;"><strong>-14.75%</strong></td>
+<td style="text-align: right;"><strong>0.700</strong></td>
+<td style="text-align: right;"><strong>+22.4%</strong></td>
+<td style="text-align: right;"><strong>+16.9%</strong></td>
+</tr>
+<tr>
+<td style="text-align: right;">0.05</td>
+<td style="text-align: right;">0.12</td>
+<td style="text-align: right;">0.20</td>
+<td style="text-align: right;">+30.30%</td>
+<td style="text-align: right;">-14.73%</td>
+<td style="text-align: right;">0.693</td>
+<td style="text-align: right;">+24.7%</td>
+<td style="text-align: right;">+13.3%</td>
+</tr>
+<tr>
+<td style="text-align: right;">0.05</td>
+<td style="text-align: right;">0.08</td>
+<td style="text-align: right;">0.30</td>
+<td style="text-align: right;">+30.83%</td>
+<td style="text-align: right;">-15.12%</td>
+<td style="text-align: right;">0.692</td>
+<td style="text-align: right;">+22.7%</td>
+<td style="text-align: right;">+16.7%</td>
+</tr>
+<tr>
+<td style="text-align: right;">0.06</td>
+<td style="text-align: right;">0.08</td>
+<td style="text-align: right;">0.25</td>
+<td style="text-align: right;">+28.35%</td>
+<td style="text-align: right;">-17.70%</td>
+<td style="text-align: right;">0.610</td>
+<td style="text-align: right;">+18.2%</td>
+<td style="text-align: right;">+18.7%</td>
+</tr>
+</tbody>
+</table>
+<p>参数平台较宽（vol 4.5%~6%、ext 6%~12%、mom 20%~40% 均为正），训练/测试 Sharpe 相关性
+0.37（v1 的状态入场仅 0.09）。最终取平台中部 <code>vol=5% / ext=8% / mom=25%</code>，而非全区间最优，
+以降低过拟合。</p>
+<p>v2 最终单腿（落地版评分归一化）：全区间 <strong>+29.51% / -14.62% / Sharpe 0.67</strong>；
+训练 +21.39%，OOS <strong>+16.72% / -9.41% / Sharpe 1.16</strong>（OOS 强于训练）。</p>
+<hr />
+<h2 id="6-5">6. 第 5 轮：过滤器证伪（资金流、行业上限、缠论）</h2>
+<p>在 v2 上逐项加入，全区间对比：</p>
+<table>
+<thead>
+<tr>
+<th>版本</th>
+<th style="text-align: right;">总收益</th>
+<th style="text-align: right;">最大回撤</th>
+<th style="text-align: right;">Sharpe</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>v2 基线</td>
+<td style="text-align: right;"><strong>+29.51%</strong></td>
+<td style="text-align: right;">-14.62%</td>
+<td style="text-align: right;">0.67</td>
+</tr>
+<tr>
+<td>+ 行业集中度 ≤3 只</td>
+<td style="text-align: right;">+25.00%</td>
+<td style="text-align: right;">-14.35%</td>
+<td style="text-align: right;">0.58</td>
+</tr>
+<tr>
+<td>+ 主力资金 5 日净流入 &gt;0</td>
+<td style="text-align: right;"><strong>-13.53%</strong></td>
+<td style="text-align: right;">-23.23%</td>
+<td style="text-align: right;">-0.43</td>
+</tr>
+<tr>
+<td>+ 两者</td>
+<td style="text-align: right;">-12.81%</td>
+<td style="text-align: right;">-22.88%</td>
+<td style="text-align: right;">-0.41</td>
+</tr>
+</tbody>
+</table>
+<p><strong>结论</strong>：资金流过滤在本区间显著有害（与项目文档中“资金流作为确认层”的假设相反），
+行业上限也小幅降低收益。两者均不纳入最终策略。</p>
+<p>其他策略评估：</p>
+<ul>
+<li><strong>chan_theory</strong>：受限于逐日重算成本，仅在流动性前 120 只股票、每周重算（2025-03 起）。
+  全区间 +200.1%，但仅 17 笔交易、平均持有 183 天，OOS -6.1%、回撤 -38.2%，
+  收益高度集中于少数样本，<strong>不纳入组合</strong>（可作为人工结构确认工具）。</li>
+<li><strong>B3 growth_pick</strong>：全区间 +65.9%、Sharpe 1.09，但 OOS 2026 为 -8.3%（基准 -13.0%），
+  回撤 -24.1%，波动过大，<strong>不纳入</strong>。</li>
+<li><strong>B1 / B2</strong>：B1 全区间 +56.3%/Sharpe 1.17，OOS -9.6% 但相对基准 Alpha +4.1%；
+  B2 全区间 +29.7%/Sharpe 0.66，OOS +4.6%/Alpha +21.6%。两者与 Core/ETF 相关性低，
+  作为 10%+10% 防御腿纳入。</li>
+</ul>
+<hr />
+<h2 id="7-6">7. 第 6 轮：组合构建</h2>
+<p>四个 sleeve 的日收益相关性（全区间）：</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th style="text-align: right;">Core</th>
+<th style="text-align: right;">ETF</th>
+<th style="text-align: right;">B1</th>
+<th style="text-align: right;">B2</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Core</td>
+<td style="text-align: right;">1.00</td>
+<td style="text-align: right;">0.25</td>
+<td style="text-align: right;">0.20</td>
+<td style="text-align: right;">0.24</td>
+</tr>
+<tr>
+<td>ETF</td>
+<td style="text-align: right;">0.25</td>
+<td style="text-align: right;">1.00</td>
+<td style="text-align: right;">0.39</td>
+<td style="text-align: right;">0.33</td>
+</tr>
+<tr>
+<td>B1</td>
+<td style="text-align: right;">0.20</td>
+<td style="text-align: right;">0.39</td>
+<td style="text-align: right;">1.00</td>
+<td style="text-align: right;">0.72</td>
+</tr>
+<tr>
+<td>B2</td>
+<td style="text-align: right;">0.24</td>
+<td style="text-align: right;">0.33</td>
+<td style="text-align: right;">0.72</td>
+<td style="text-align: right;">1.00</td>
+</tr>
+</tbody>
+</table>
+<p>权重对比（全区间 / OOS）：</p>
+<table>
+<thead>
+<tr>
+<th>权重 Core/ETF/B1/B2</th>
+<th style="text-align: right;">全区间收益</th>
+<th style="text-align: right;">全区间 Sharpe</th>
+<th style="text-align: right;">全区间回撤</th>
+<th style="text-align: right;">OOS 收益</th>
+<th style="text-align: right;">OOS Sharpe</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>40/40/20/0</td>
+<td style="text-align: right;">+63.26%</td>
+<td style="text-align: right;">1.50</td>
+<td style="text-align: right;">-12.68%</td>
+<td style="text-align: right;">+9.16%</td>
+<td style="text-align: right;">0.80</td>
+</tr>
+<tr>
+<td>40/40/0/20</td>
+<td style="text-align: right;">+57.37%</td>
+<td style="text-align: right;">1.39</td>
+<td style="text-align: right;">-14.36%</td>
+<td style="text-align: right;">+12.54%</td>
+<td style="text-align: right;">1.14</td>
+</tr>
+<tr>
+<td><strong>40/40/10/10</strong></td>
+<td style="text-align: right;"><strong>+60.31%</strong></td>
+<td style="text-align: right;"><strong>1.45</strong></td>
+<td style="text-align: right;"><strong>-13.52%</strong></td>
+<td style="text-align: right;"><strong>+10.85%</strong></td>
+<td style="text-align: right;"><strong>0.97</strong></td>
+</tr>
+<tr>
+<td>30/40/10/20</td>
+<td style="text-align: right;">+60.41%</td>
+<td style="text-align: right;">1.46</td>
+<td style="text-align: right;">-13.27%</td>
+<td style="text-align: right;">+9.69%</td>
+<td style="text-align: right;">0.89</td>
+</tr>
+</tbody>
+</table>
+<p>选择 <strong>40/40/10/10</strong>：全区间 Sharpe 与最高者仅差 0.05，但 OOS Sharpe 从 0.80 提升到 0.97，
+且不过度依赖单一 B1 腿。权重未做全区间最优化（最优化会重仓 ETF+B1，OOS 不稳定）。</p>
+<hr />
+<h2 id="8-7">8. 第 7 轮：成本压力与最终表现</h2>
+<p>双倍交易成本（佣金 0.06% + 滑点 0.2% + 印花税 0.1%）：</p>
+<table>
+<thead>
+<tr>
+<th>区间</th>
+<th style="text-align: right;">总收益</th>
+<th style="text-align: right;">年化</th>
+<th style="text-align: right;">最大回撤</th>
+<th style="text-align: right;">Sharpe</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>训练</td>
+<td style="text-align: right;">+39.66%</td>
+<td style="text-align: right;">+24.97%</td>
+<td style="text-align: right;">-14.75%</td>
+<td style="text-align: right;">1.45</td>
+</tr>
+<tr>
+<td>OOS</td>
+<td style="text-align: right;">+9.14%</td>
+<td style="text-align: right;">+11.51%</td>
+<td style="text-align: right;">-7.31%</td>
+<td style="text-align: right;">0.80</td>
+</tr>
+<tr>
+<td>全区间</td>
+<td style="text-align: right;">+51.60%</td>
+<td style="text-align: right;">+19.66%</td>
+<td style="text-align: right;">-14.75%</td>
+<td style="text-align: right;">1.25</td>
+</tr>
+</tbody>
+</table>
+<p>最终组合分年度（单倍成本）：</p>
+<table>
+<thead>
+<tr>
+<th>年份</th>
+<th style="text-align: right;">组合</th>
+<th style="text-align: right;">沪深300</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2024H2</td>
+<td style="text-align: right;">+13.16%</td>
+<td style="text-align: right;">+13.13%</td>
+</tr>
+<tr>
+<td>2025</td>
+<td style="text-align: right;">+29.39%</td>
+<td style="text-align: right;">+21.19%</td>
+</tr>
+<tr>
+<td>2026 至 10-26</td>
+<td style="text-align: right;"><strong>+9.90%</strong></td>
+<td style="text-align: right;"><strong>-13.02%</strong></td>
+</tr>
+</tbody>
+</table>
+<p>月度胜率 66.7%，最差单月 -3.93%（2026-07），最大回撤 -13.52%。</p>
+<hr />
+<h2 id="9">9. 最终策略定义（可执行版）</h2>
+<h3 id="91-core-40strategiesbuiltinquality_trendpy">9.1 Core 40%：低波动质量趋势（<code>strategies/builtin/quality_trend.py</code>）</h3>
+<ul>
+<li>股票池：非 ST、上市 ≥60 天、5 日均成交额 ≥1 亿；</li>
+<li>趋势：<code>close &gt; MA60</code> 且 <code>MA20 &gt; MA60</code>；</li>
+<li>质量：<code>ATR14/close &lt; 5%</code>、<code>0 ≤ close/MA20-1 &lt; 8%</code>、<code>0 &lt; 20日动量 &lt; 25%</code>；</li>
+<li>入场：<code>low ≤ MA20</code> 且 <code>close &gt; MA20</code> 且前一日 <code>close ≤ MA20</code>；</li>
+<li>出场：<code>close</code> 跌破 MA20；3×ATR 硬止损 + MA20 移动止损（生产版 <code>trail_ma20</code>）；</li>
+<li>仓位：最多 10 只，单只 10% 总资金；仅在沪深300 <code>close&gt;MA60 且 MA20&gt;MA60</code> 时开新仓。</li>
+</ul>
+<h3 id="92-etf-40-etf_momentum">9.2 ETF 40%：动量轮动（复用 <code>etf_momentum</code> 逻辑）</h3>
+<ul>
+<li>ETF 池：上市 ≥60 天、5 日均成交额 ≥500 万；</li>
+<li>过滤：<code>close &gt; MA60</code> 且 <code>MA20 &gt; MA60</code>；</li>
+<li>评分：30 日动量；</li>
+<li>调仓：每 20 个交易日，持有评分最高 5 只，等权（每只 20% ETF 腿资金）；</li>
+<li>闸门：沪深300 在 MA60 下方时 ETF 腿整体空仓（下一交易日生效）。</li>
+</ul>
+<h3 id="93-1010b1-b2">9.3 配置腿 10%+10%：B1 质量 / B2 深度价值</h3>
+<ul>
+<li>每月最后一个交易日调仓，各持有评分最高 20 只，等权；</li>
+<li>只用已公告财报（<code>pubDate</code>），B2 排除金融/地产；</li>
+<li>配置腿不做价格止损，按财报/估值变化退出。</li>
+</ul>
+<blockquote>
+<p>回测口径为 B1/B2 各 20 只；实盘若为降低持仓数改为各 10 只，需重新验证（选股数变化会改变收益/回撤）。
+Core 与 ETF 腿按上述规则。组合月度再平衡回 40/40/10/10；单票/单 ETF 权重偏离超过 5 个百分点时再平衡。</p>
+</blockquote>
+<hr />
+<h2 id="10">10. 局限与后续</h2>
+<ol>
+<li><strong>样本长度</strong>：仅 2.8 年（其中 OOS 10 个月），只覆盖一轮“政策底—成长牛—急跌”周期，
+   不能证明跨周期稳健性。建议前向模拟盘至少运行 3~6 个月。</li>
+<li><strong>幸存者偏差</strong>：本地行情只包含当前仍在库的股票/ETF，退市标的缺失，动量类策略可能被高估。</li>
+<li><strong>ETF 容量与溢价</strong>：未建模 ETF 折溢价、流动性冲击；主题 ETF 规模差异大，实盘需限制单只
+   ETF 的日均成交额占比（建议 ≤5%）。</li>
+<li><strong>涨停约束仍偏乐观</strong>：只过滤了“开盘接近涨停”，未建模盘中涨停打开/排队成交；打板类
+   策略不可用本框架评估。</li>
+<li><strong>基本面口径</strong>：<code>ttm_sum</code> 假设 <code>roeAvg</code> 为单季值，但当前数据源部分为 YTD 累计，B1 的 ROE
+   阈值可能被高估；B1 结果应视为“排序有效”而非“绝对阈值精确”。后续应改为
+   <code>TTM 净利润 / 平均净资产</code>。</li>
+<li><strong>执行细节</strong>：未建模停牌复牌、除权除息现金流、融资融券；实盘需接入交易接口后重新校准。</li>
+</ol>
+<p><strong>后续优先级</strong>：</p>
+<ol>
+<li>用更长历史（2020 起）补齐数据，做 3 折 walk-forward；</li>
+<li>修正 B1 的 TTM ROE 口径，重跑基本面腿；</li>
+<li>为 ETF 腿加入折溢价/规模/成交量过滤；</li>
+<li>把 <code>research.combo</code> 的组合权重与再平衡规则接入 <code>portfolio</code>/指令单流程；</li>
+<li>前向模拟盘跟踪，按月记录实盘与回测的偏差。</li>
+</ol>
+<hr />
+<h2 id="11">11. 复现与产物</h2>
+<pre><code class="language-bash"># 组合回测（训练/样本外/全区间）
+venv/bin/python3 -m research.combo --period all --cost 1
+# 双倍成本压力测试
+venv/bin/python3 -m research.combo --period all --cost 2
+# 内置策略基线（结果见 research/results/baseline.csv）
+</code></pre>
+<p>产物：</p>
+<ul>
+<li><code>research/results/final_metrics_cost1.0.json</code> / <code>cost2.0.json</code></li>
+<li><code>research/results/final_equity_cost1.0.csv</code> / <code>cost2.0.csv</code></li>
+<li><code>research/results/baseline.csv</code></li>
+<li><code>research/rounds/</code>（各轮原始实验记录，按需补充）</li>
+</ul>
+</body>
+</html>

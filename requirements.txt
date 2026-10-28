@@ -44,3 +44,7 @@ anthropic>=0.40.0        # Anthropic 官方原生（可选）
 # ---- 开发/测试 ----
 pytest>=7.4.0
 pytest-cov>=4.1.0
+
+# ---- 研究报告 PDF（可选）----
+weasyprint>=70.0         # Markdown -> PDF（中文字体走 fontconfig）
+markdown>=3.11           # Markdown 渲染

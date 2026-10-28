@@ -46,7 +46,8 @@ class ETFMomentumStrategy(BaseStrategy):
         ma_trend = self.params.get("ma_trend", 60)
         return max(lookback + 5, ma_trend + 5)
 
-    def generate_signals(self, df: pd.DataFrame, code: str, name: str) -> List[Signal]:
+    def generate_signals(self, df: pd.DataFrame, code: str, name: str,
+                         as_of=None) -> List[Signal]:
         lookback = self.params.get("lookback", 20)
         ma_trend = self.params.get("ma_trend", 60)
         vol_pen = self.params.get("vol_penalty", True)

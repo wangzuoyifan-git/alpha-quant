@@ -36,7 +36,8 @@ class ChanTheoryStrategy(BaseStrategy):
     def requires_bars(self) -> int:
         return max(int(self.params.get("min_bars", 300)), 120)
 
-    def generate_signals(self, df: pd.DataFrame, code: str, name: str) -> list[Signal]:
+    def generate_signals(self, df: pd.DataFrame, code: str, name: str,
+                         as_of=None) -> list[Signal]:
         if len(df) < self.requires_bars():
             return []
 

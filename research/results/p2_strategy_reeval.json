@@ -1,0 +1,102 @@
+{
+  "quality_trend": {
+    "train": {
+      "total_return": 21.39,
+      "mdd": -14.62,
+      "sharpe": 0.75,
+      "trades": 284
+    },
+    "test": {
+      "total_return": 16.72,
+      "mdd": -9.41,
+      "sharpe": 1.16,
+      "trades": 119
+    },
+    "full": {
+      "total_return": 29.51,
+      "mdd": -14.62,
+      "sharpe": 0.67,
+      "trades": 403
+    }
+  },
+  "ma_cross": {
+    "train": {
+      "total_return": 18.06,
+      "mdd": -24.51,
+      "sharpe": 0.54,
+      "trades": 124
+    },
+    "test": {
+      "total_return": -20.34,
+      "mdd": -27.81,
+      "sharpe": -1.21,
+      "trades": 75
+    },
+    "full": {
+      "total_return": -5.68,
+      "mdd": -40.18,
+      "sharpe": -0.11,
+      "trades": 199
+    }
+  },
+  "macd_rsi": {
+    "train": {
+      "total_return": 9.74,
+      "mdd": -23.91,
+      "sharpe": 0.33,
+      "trades": 152
+    },
+    "test": {
+      "total_return": -17.41,
+      "mdd": -36.07,
+      "sharpe": -1.09,
+      "trades": 87
+    },
+    "full": {
+      "total_return": 0.91,
+      "mdd": -31.18,
+      "sharpe": 0.01,
+      "trades": 235
+    }
+  },
+  "vol_price_breakout": {
+    "train": {
+      "total_return": -47.58,
+      "mdd": -52.73,
+      "sharpe": -1.15,
+      "trades": 78
+    },
+    "test": {
+      "total_return": -0.38,
+      "mdd": -28.79,
+      "sharpe": 0.11,
+      "trades": 49
+    },
+    "full": {
+      "total_return": -63.34,
+      "mdd": -66.83,
+      "sharpe": -1.21,
+      "trades": 119
+    }
+  },
+  "etf_momentum": {
+    "train": {
+      "total_return": 81.43,
+      "mdd": -20.15,
+      "sharpe": 1.44,
+      "trades": 87
+    },
+    "test": {
+      "total_return": 3.42,
+      "mdd": -42.31,
+      "sharpe": 0.23,
+      "trades": 47
+    },
+    "full": {
+      "total_return": 115.75,
+      "mdd": -23.39,
+      "sharpe": 1.28,
+      "trades": 133
+    }
+  }
+}

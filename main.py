@@ -23,7 +23,7 @@ except ImportError:
 import logging.handlers
 
 from backtest.engine import Backtester
-from config.settings import BACKTEST, DATA_SOURCE, LOG, NOTIFIER, RISK_CONTROL, SCAN, SCHEDULE, WEB
+from config.settings import BACKTEST, DATA_SOURCE, EXECUTION, LOG, NOTIFIER, RISK_CONTROL, SCAN, SCHEDULE, WEB
 from data.downloader import KlineDownloader
 from data.fetcher import DataFetcher
 from engine.scanner import ScanEngine
@@ -437,7 +437,8 @@ def cmd_chan(code: str, level: str = "daily", asof: str | None = None,
 def cmd_backtest(strategy_key: str = "macd_rsi",
                  start: str = "2022-01-01",
                  end: str = "2024-12-31",
-                 codes: list | None = None):
+                 codes: list | None = None,
+                 fast: bool = False):
     """运行回测"""
     from rich.console import Console
     console = Console()
@@ -447,14 +448,25 @@ def cmd_backtest(strategy_key: str = "macd_rsi",
         console.print(f"可用策略: {list(BUILTIN_STRATEGIES.keys())}")
         return
 
-    strategy_cls = BUILTIN_STRATEGIES[strategy_key]
-    strategy = strategy_cls()
-
+    backtester = Backtester(fetcher, BACKTEST)
     # codes 为空 -> 传空列表给 backtester，由它自动使用本地全市场数据
     codes = codes or []
 
-    backtester = Backtester(fetcher, BACKTEST)
-    result = backtester.run(strategy, codes, start, end)
+    if fast:
+        from backtest.fast import run_fast, supported
+        if not supported(strategy_key):
+            console.print(
+                f"[red]策略 {strategy_key} 暂不支持 --fast[/red]，"
+                "可先使用逐日回测，或选择 quality_trend/ma_cross/macd_rsi/"
+                "vol_price_breakout/etf_momentum"
+            )
+            return
+        result = run_fast(strategy_key, start, end, codes, BACKTEST)
+    else:
+        strategy_cls = BUILTIN_STRATEGIES[strategy_key]
+        strategy = strategy_cls()
+        result = backtester.run(strategy, codes, start, end)
+
     console.print(result.summary())
 
     # B3：回测结果持久化
@@ -462,10 +474,150 @@ def cmd_backtest(strategy_key: str = "macd_rsi",
     console.print(f"回测结果已保存: {result_path}")
 
     # 保存权益曲线
+    equity_path = None
     if not result.equity_curve.empty:
         out = Path("data/processed") / f"equity_{strategy_key}.csv"
         result.equity_curve.to_csv(out, header=True)
+        equity_path = str(out)
         console.print(f"权益曲线已保存: {out}")
+
+    try:
+        from research.experiments import record_experiment
+        record_experiment(
+            kind="backtest_fast" if fast else "backtest",
+            name=strategy_key,
+            params={"strategy_params": getattr(strategy, "params", {}) if not fast else {}},
+            periods={"start": start, "end": end},
+            metrics={
+                "total_return": result.total_return,
+                "annual_return": result.annual_return,
+                "max_drawdown": result.max_drawdown,
+                "sharpe": result.sharpe_ratio,
+                "trades": result.total_trades,
+            },
+            equity_file=equity_path,
+            conclusion="production/slow engine" if not fast else "fast panel engine",
+        )
+    except Exception as exc:
+        logger.warning(f"实验注册表写入失败（不影响回测）: {exc}")
+
+
+def _parse_weights(text: str | None) -> dict:
+    from backtest.portfolio import DEFAULT_WEIGHTS
+    if not text:
+        return dict(DEFAULT_WEIGHTS)
+    weights = {}
+    for part in text.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "=" not in part:
+            raise ValueError(f"权重格式应为 key=value: {part}")
+        key, val = part.split("=", 1)
+        key = key.strip()
+        if key not in DEFAULT_WEIGHTS:
+            raise ValueError(f"未知 sleeve: {key}（可选 core/etf/b1/b2）")
+        weights[key] = float(val)
+    for key in DEFAULT_WEIGHTS:
+        weights.setdefault(key, 0.0)
+    if sum(weights.values()) > 1.0 + 1e-9:
+        raise ValueError("权重之和不能超过 1")
+    return weights
+
+
+def cmd_portfolio_backtest(start: str = "2024-07-01",
+                           end: str = "2026-10-26",
+                           weights: str | None = None,
+                           rebalance: str = "monthly",
+                           tolerance: float = 0.05,
+                           max_drawdown: float = 0.0,
+                           cooldown: int = 5,
+                           cost_mult: float = 1.0,
+                           name: str = "多 sleeve 组合"):
+    """P1-2：多 sleeve 组合回测（组合层统一分配/再平衡/熔断/归因）。"""
+    import json
+    from datetime import datetime
+
+    from backtest.portfolio import PortfolioConfig, run_portfolio_backtest
+
+    cfg = PortfolioConfig(
+        weights=_parse_weights(weights),
+        rebalance=rebalance,
+        tolerance=tolerance,
+        commission=EXECUTION["commission_rate"] * cost_mult,
+        slippage=EXECUTION["slippage"] * cost_mult,
+        stamp_duty=EXECUTION["stamp_duty"] * cost_mult,
+        max_drawdown=max_drawdown,
+        cooldown_days=cooldown,
+        rebalance_cost_bps=EXECUTION.get("rebalance_cost_bps", 5.0),
+    )
+    result = run_portfolio_backtest(start, end, cfg, name=name)
+    print(result.summary())
+
+    out_dir = Path("data/processed")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    metrics_path = out_dir / f"portfolio_backtest_{ts}.json"
+    equity_path = out_dir / f"portfolio_equity_{ts}.csv"
+    metrics_path.write_text(
+        json.dumps(result.to_dict(), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    result.equity.to_csv(equity_path, header=True)
+    print(f"组合指标已保存: {metrics_path}")
+    print(f"组合净值已保存: {equity_path}")
+    try:
+        from research.experiments import record_experiment
+        record_experiment(
+            kind="portfolio_backtest",
+            name=name,
+            params={"weights": cfg.weights, "rebalance": cfg.rebalance,
+                    "tolerance": cfg.tolerance, "max_drawdown": cfg.max_drawdown,
+                    "cooldown": cfg.cooldown_days, "cost_mult": cost_mult},
+            periods={"start": start, "end": end},
+            metrics=result.to_dict(),
+            equity_file=str(equity_path),
+            conclusion="multi-sleeve portfolio",
+        )
+    except Exception as exc:
+        logger.warning(f"实验注册表写入失败（不影响回测）: {exc}")
+    return result
+
+
+def cmd_walkforward(strategy_key: str = "quality_trend",
+                    start: str = "2024-01-02",
+                    end: str = "2026-10-26",
+                    folds: int = 3,
+                    train_months: int = 12,
+                    valid_months: int = 3,
+                    test_months: int = 4,
+                    cost_mult: float = 1.0):
+    """P1-3：3 折滚动 walk-forward。"""
+    from backtest.fast import supported
+    from research.walkforward import format_walkforward, run_walkforward
+
+    if not supported(strategy_key):
+        print(f"策略 {strategy_key} 暂不支持 walk-forward（先使用 --fast 支持的策略）")
+        return None
+    result = run_walkforward(
+        strategy_key, start, end, n_folds=folds,
+        train_months=train_months, valid_months=valid_months,
+        test_months=test_months, cost_mult=cost_mult,
+    )
+    print(format_walkforward(result))
+    return result
+
+
+def cmd_platform_check(strategy_key: str = "quality_trend",
+                       start: str = "2024-01-02",
+                       end: str = "2026-10-26",
+                       cost_mult: float = 1.0):
+    """P1-3：邻域参数稳定性检查。"""
+    from research.platform import format_platform, run_platform
+
+    result = run_platform(strategy_key, start, end, cost_mult=cost_mult)
+    print(format_platform(result))
+    return result
 
 
 def cmd_orders():
@@ -2503,6 +2655,44 @@ if __name__ == "__main__":
     p_bt.add_argument("--start", default="2024-01-02", help="开始日期（默认2024-01-02）")
     p_bt.add_argument("--end", default="2026-05-25", help="结束日期（默认2026-05-25）")
     p_bt.add_argument("--codes", nargs="*", help="股票代码列表（空格分隔）")
+    p_bt.add_argument("--fast", action="store_true",
+                      help="快速面板回测（研究口径，复用本地数据缓存）")
+
+    # portfolio-backtest（P1-2）
+    p_pbt = sub.add_parser("portfolio-backtest", help="多 sleeve 组合回测（40/40/10/10）")
+    p_pbt.add_argument("--start", default="2024-07-01", help="开始日期")
+    p_pbt.add_argument("--end", default="2026-10-26", help="结束日期")
+    p_pbt.add_argument("--weights", default=None,
+                       help="权重，如 core=0.4,etf=0.4,b1=0.1,b2=0.1")
+    p_pbt.add_argument("--rebalance", default="monthly",
+                       choices=["daily", "monthly", "quarterly"],
+                       help="再平衡频率（默认 monthly）")
+    p_pbt.add_argument("--tolerance", type=float, default=0.05,
+                       help="权重偏离阈值（默认 5pp）")
+    p_pbt.add_argument("--max-drawdown", type=float, default=0.0,
+                       help="组合级回撤熔断阈值（0=关闭）")
+    p_pbt.add_argument("--cooldown", type=int, default=5,
+                       help="熔断后空仓天数")
+    p_pbt.add_argument("--cost-mult", type=float, default=1.0,
+                       help="交易成本倍数")
+    p_pbt.add_argument("--name", default="多 sleeve 组合")
+
+    # walkforward / platform-check（P1-3）
+    p_wf = sub.add_parser("walkforward", help="3 折滚动 walk-forward")
+    p_wf.add_argument("--strategy", default="quality_trend")
+    p_wf.add_argument("--start", default="2024-01-02")
+    p_wf.add_argument("--end", default="2026-10-26")
+    p_wf.add_argument("--folds", type=int, default=3)
+    p_wf.add_argument("--train-months", type=int, default=12)
+    p_wf.add_argument("--valid-months", type=int, default=3)
+    p_wf.add_argument("--test-months", type=int, default=4)
+    p_wf.add_argument("--cost-mult", type=float, default=1.0)
+
+    p_pc = sub.add_parser("platform-check", help="参数平台稳定性检查")
+    p_pc.add_argument("--strategy", default="quality_trend")
+    p_pc.add_argument("--start", default="2024-01-02")
+    p_pc.add_argument("--end", default="2026-10-26")
+    p_pc.add_argument("--cost-mult", type=float, default=1.0)
 
     # orders
     sub.add_parser("orders", help="查看待确认指令单")
@@ -2815,6 +3005,31 @@ if __name__ == "__main__":
             start=args.start,
             end=args.end,
             codes=args.codes,
+            fast=args.fast,
+        )
+    elif args.command == "portfolio-backtest":
+        cmd_portfolio_backtest(
+            start=args.start,
+            end=args.end,
+            weights=args.weights,
+            rebalance=args.rebalance,
+            tolerance=args.tolerance,
+            max_drawdown=args.max_drawdown,
+            cooldown=args.cooldown,
+            cost_mult=args.cost_mult,
+            name=args.name,
+        )
+    elif args.command == "walkforward":
+        cmd_walkforward(
+            strategy_key=args.strategy, start=args.start, end=args.end,
+            folds=args.folds, train_months=args.train_months,
+            valid_months=args.valid_months, test_months=args.test_months,
+            cost_mult=args.cost_mult,
+        )
+    elif args.command == "platform-check":
+        cmd_platform_check(
+            strategy_key=args.strategy, start=args.start, end=args.end,
+            cost_mult=args.cost_mult,
         )
     elif args.command == "orders":
         cmd_orders()

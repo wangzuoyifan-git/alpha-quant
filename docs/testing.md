@@ -1,7 +1,9 @@
 # Alpha量化 — 测试与验证
 
 > 测试分层定义、当前测试文件、关键测试用例模板、运行规范。
-> 最后更新：2026-10-10（moneyflow 批量化 + events 批量测试：`test_downloader_moneyflow.py` 12 passed、`test_downloader_events.py` 13 passed；全量 667 passed/2 skipped，另有既有 `test_smart_money::test_assess_routes` 失败与改动无关）
+> 最后更新：2026-10-28（回测体系 P0/P1：成交真实性、as-of、TTM ROE、组合层、快速引擎、walk-forward；
+> 新增 `test_execution.py` / `test_pit_data.py` / `test_fast_backtest.py` / `test_portfolio.py` /
+> `test_walkforward.py`；重点测试 146 passed，全量 738 passed/3 skipped，2 个既有失败与本轮无关）
 >
 > **项目基础信息见 `docs/project.md`**
 > **需求与测试追溯矩阵（含完整 GAP 编号覆盖缺口）见 `docs/traceability.md`**
@@ -47,6 +49,11 @@
 | `tests/test_store.py` | save/load/exists/last_date/stats/IPO 接口 | 已有，覆盖较全 |
 | `tests/test_strategies.py` | MACross/MACD_RSI/VolBreakout 信号生成、边界条件、score 范围 | 已有，ETFMomentum 缺失 |
 | `tests/test_backtest.py` | BacktestResult 指标计算、数据加载逻辑 | 已有 |
+| **`tests/test_execution.py`** | **成交真实性：next-open、涨跌停、T+1、印花税、整手、停牌残留行** | **✅ 22 passed** |
+| **`tests/test_pit_data.py`** | **point-in-time 财报/资金流、`ttm_sum` / `ttm_roe`、策略 as-of** | **✅ 11 passed** |
+| **`tests/test_fast_backtest.py`** | **快速引擎、生产/研究质量趋势信号一致性、研究模拟器停牌** | **✅ 3 passed** |
+| **`tests/test_portfolio.py`** | **组合资金分配、日/月再平衡、回撤熔断、归因** | **✅ 5 passed** |
+| **`tests/test_walkforward.py`** | **折切分、实验注册表、walk-forward、参数平台** | **✅ 5 passed** |
 | `tests/test_signals.py` | save_signals/load_signals 往返一致性 | 已有 |
 | `tests/test_downloader.py` | `_is_trading_day`、日期格式、DEFAULT_START | 已有，仅覆盖工具函数 |
 | `tests/test_agent_tools.py` | agent_tools 18 个单元测试（data/strategy/trade） | 已有，全通过 |
@@ -279,6 +286,11 @@ source venv/bin/activate
 # L1+L2：每次 commit 前运行
 pytest tests/ -v
 
+# 回测体系重点回归（更快）
+pytest tests/test_execution.py tests/test_pit_data.py tests/test_fast_backtest.py \
+    tests/test_portfolio.py tests/test_walkforward.py tests/test_backtest.py \
+    tests/test_strategies.py tests/test_l3b_strategies.py tests/test_scanner.py -q
+
 # 带覆盖率报告
 pytest tests/ -v --cov=. --cov-report=term-missing \
     --cov-omit="venv/*,data/market/*,data/fundamental/*"
@@ -301,13 +313,12 @@ pip install pytest pytest-cov pytest-timeout
 
 ### 5.3 CI 建议
 
-当前无 CI，建议在 `scripts/` 下新增 `run_tests.sh`，在每次 `git push` 前手动运行：
+当前无 CI。每次 `git push` 前建议运行：
 
 ```bash
-#!/bin/bash
-cd /home/wz/alpha量化
-source venv/bin/activate
-pytest tests/ -v --tb=short
+venv/bin/python3 -m pytest tests/ -q --tb=short
+# 回测体系专项（含快速回测/组合/walk-forward）
+bash scripts/research_checks.sh
 ```
 
 ### 5.4 不测什么

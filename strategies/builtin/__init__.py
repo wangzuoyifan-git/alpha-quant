@@ -1,13 +1,14 @@
 # 内置策略注册表（正交框架，v2）
+from .chan_theory import ChanTheoryStrategy
+from .deep_value import DeepValueStrategy
+from .etf_momentum import ETFMomentumStrategy
+from .fundamental_value import FundamentalValueStrategy
+from .growth_pick import GrowthPickStrategy
 from .ma_cross import MACrossStrategy
 from .macd_rsi import MACDRSIStrategy
-from .vol_price_breakout import VolPriceBreakoutStrategy
-from .etf_momentum import ETFMomentumStrategy
-from .chan_theory import ChanTheoryStrategy
-from .fundamental_value import FundamentalValueStrategy
-from .deep_value import DeepValueStrategy
-from .growth_pick import GrowthPickStrategy
 from .money_flow import MoneyFlowStrategy  # @deprecated：保留类供回测历史兼容，不注册进策略池
+from .quality_trend import QualityTrendStrategy
+from .vol_price_breakout import VolPriceBreakoutStrategy
 
 BUILTIN_STRATEGIES = {
     # L3-A 交易仓（4个正交维度）
@@ -16,6 +17,7 @@ BUILTIN_STRATEGIES = {
     "vol_price_breakout": VolPriceBreakoutStrategy, # 突破
     "etf_momentum":       ETFMomentumStrategy,      # ETF 轮动
     "chan_theory":        ChanTheoryStrategy,        # 缠论三买/三卖（结构突破）
+    "quality_trend":      QualityTrendStrategy,      # 低波动质量趋势（趋势跟踪增强）
     # L3-B 配置仓（3个 Fama-French 正交维度）
     "fundamental_value":  FundamentalValueStrategy, # 质量（Quality）
     "deep_value":         DeepValueStrategy,        # 价值（Value）
@@ -25,7 +27,14 @@ BUILTIN_STRATEGIES = {
 
 __all__ = [
     "BUILTIN_STRATEGIES",
-    "MACrossStrategy", "MACDRSIStrategy", "VolPriceBreakoutStrategy",
-    "ETFMomentumStrategy", "ChanTheoryStrategy", "FundamentalValueStrategy",
-    "DeepValueStrategy", "GrowthPickStrategy", "MoneyFlowStrategy",
+    "ChanTheoryStrategy",
+    "DeepValueStrategy",
+    "ETFMomentumStrategy",
+    "FundamentalValueStrategy",
+    "GrowthPickStrategy",
+    "MACDRSIStrategy",
+    "MACrossStrategy",
+    "MoneyFlowStrategy",
+    "QualityTrendStrategy",
+    "VolPriceBreakoutStrategy",
 ]

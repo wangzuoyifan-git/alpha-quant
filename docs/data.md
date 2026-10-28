@@ -189,9 +189,14 @@ import data.store_fundamental as store_fund
 
 store_fund.save(code, df, data_type, market="cn") -> None
 store_fund.load(code, data_type, start=None, end=None, market="cn") -> Optional[DataFrame]
+store_fund.load_asof(code, data_type, as_of=None, history=None, market="cn") -> Optional[DataFrame]
 store_fund.exists(code, data_type, market="cn") -> bool
 store_fund.last_date(code, data_type, market="cn") -> Optional[str]
 ```
+
+`load_asof` 为 point-in-time 接口：只返回 `pubDate <= as_of` 的财报；
+缺 `pubDate` 时按报告期 +90 天保守估算可见日。`history` 指定返回最近 N 期
+（TTM 计算需 `history>=8`），不传则只返回最新一期。`as_of=None` 等价于最新快照。
 
 `data_type` 取值：`profit` / `balance` / `cashflow` / `growth` / `dupont`
 `market` 取值：`cn`（默认，`data/fundamental/{type}/`）/ `hk`（`data/fundamental/hk/{type}/`，来源东财：三表 + 主要指标拆分）
@@ -249,12 +254,20 @@ import data.store_moneyflow as store_mf
 # 支持 code分片 / date分片 / 单文件 三种存储模式（market: cn 默认 / hk）
 store_mf.save(data_type, df, code=None, date=None, market="cn") -> None
 store_mf.load(data_type, code=None, date=None, start=None, end=None, market="cn") -> Optional[DataFrame]
+store_mf.load_asof(data_type, code=None, as_of=None, lookback=None, market="cn") -> Optional[DataFrame]
 store_mf.exists(data_type, code=None, date=None, market="cn") -> bool
 store_mf.list_codes(data_type, market="cn") -> List[str]
 store_mf.list_dates(data_type, market="cn") -> List[str]
 store_mf.last_date(data_type, code=None, market="cn") -> Optional[str]
 store_mf.stats() -> dict
 ```
+
+`load_asof` 只返回 `as_of` 当日及以前的数据，`lookback` 限制最近 N 行；
+策略回测必须使用该接口，扫描（`as_of=None`）等价于最新数据。
+
+> 数据质量审计：`venv/bin/python3 -m tools.data_quality_audit --limit 200`。
+> 停牌日可能保留“前收 OHLC + 成交量 0/NaN”的残留行；回测成交判定必须要求
+> `volume > 0`，否则会在停牌日错误成交。
 
 `data_type` 取值：
 - code分片：`stock`（个股资金流）/ `margin`（融资融券）/ `hk_hold`（北向个股持股）

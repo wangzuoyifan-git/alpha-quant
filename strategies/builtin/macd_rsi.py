@@ -66,7 +66,8 @@ class MACDRSIStrategy(BaseStrategy):
         rsi_no_new_low = float(rsi.iloc[-1]) > float(window_rsi.min()) + 2.0
         return price_new_low and rsi_no_new_low
 
-    def generate_signals(self, df: pd.DataFrame, code: str, name: str) -> list[Signal]:
+    def generate_signals(self, df: pd.DataFrame, code: str, name: str,
+                         as_of=None) -> list[Signal]:
         p = self.params
         fast = p.get("fast", 12)
         slow = p.get("slow", 26)

@@ -242,6 +242,7 @@ class BaseStrategy(ABC):
 | `vol_price_breakout` | breakout | [risk_on] | aggressive | short | v2.0 | 突破（蓄力确认+ATR标准化） |
 | `etf_momentum` | momentum | [risk_on, balanced] | balanced | short | v2.0 | ETF 轮动（绝对+相对动量，仅ETF） |
 | `chan_theory` | breakout | [balanced, risk_on] | balanced | short | v1.0 | 缠论结构突破（三买/三卖 + 周线确认） |
+| `quality_trend` | momentum | [risk_on, balanced] | balanced | short | v1.0 | 低波动质量趋势（回踩MA20入场，2026-10研究新增） |
 | `fundamental_value` | quality | [crisis,risk_off,balanced,risk_on,volatile] | defensive | medium | v3.0 | 质量（Quality，PE历史分位） |
 | `deep_value` | value | [crisis,risk_off,balanced,risk_on,volatile] | defensive | long | v2.0 | 价值（Value，行业排除+股息） |
 | `growth_pick` | growth | [crisis,risk_off,balanced,risk_on,volatile] | balanced | medium | v2.0 | 成长（Growth，PEG控估值） |
@@ -294,6 +295,7 @@ class BaseStrategy(ABC):
 | 突破 | `vol_price_breakout`（v2：蓄力确认 + ATR标准化 + SELL语义明确） | ✅ 已修复 |
 | ETF 轮动 | `etf_momentum`（v2：绝对动量过滤） | ✅ 已优化 |
 | 结构突破 | `chan_theory`（三买/三卖 + 周线确认 + 中枢出场） | ✅ P1+P2 |
+| 趋势跟踪（质量增强） | `quality_trend`（低波动+不过热+回踩MA20，2026-10研究新增） | ✅ 已注册 |
 | ~~资金流~~ | ~~`money_flow`~~ → 已降级，能力并入趋势跟踪过滤层 | ✅ 已降级 |
 
 **L3-B 基本面策略**（半系统化，配置仓候选，WATCH，`position_type=config`，经 L2 行业池过滤后供人工确认）
@@ -365,6 +367,27 @@ python main.py backtest --strategy chan_theory --codes 600519 --start 2024-01-01
 - 笔/线段规则存在歧义，当前采用「分型 + 最小间隔 4」的简化规则，参数在 `config/settings.py::CHAN`。
 - 回测按日重算完整结构，全市场回测较慢；建议先用 `--codes` 小样本验证。
 - 所有结构只使用传入 `df` 的历史数据，策略只消费 `orig_idx <= 当前索引` 的买卖点。
+
+### 2.2.2 低波动质量趋势（`quality_trend`，2026-10 研究新增）
+
+> 来源：`docs/strategy_research.md` 第 3~5 轮。基于全市场 2024-07~2026-10 回测，
+> 在“次日开盘成交 + 涨停不可买 + T+1”的真实约束下筛选出的个股趋势策略。
+
+**规则**：
+
+- 趋势：`close > MA60` 且 `MA20 > MA60`
+- 质量：`ATR14/close < 5%`、`0 ≤ close/MA20-1 < 8%`、`0 < 20日动量 < 25%`
+- 流动：5 日均成交额 ≥ 1 亿
+- 入场：`low ≤ MA20` 且 `close > MA20` 且前一日 `close ≤ MA20`（回踩再站上，避免追涨停）
+- 出场：`close` 跌破 MA20；3×ATR 硬止损 + 3×ATR 移动止损
+- 画像：`style=momentum`，`applicable_regimes=[risk_on, balanced]`，`time_horizon=short`
+
+**关键发现**：在上升趋势中，低波动 + 温和动量的股票未来 20 日收益显著高于高波动/追高组；
+最初的“状态首次触发”版本在加入涨停不可买约束后 Alpha 从 +21% 降到 +2%，改为“回踩 MA20
+再站上”后恢复到 +29.5%（全区间）/ +16.7%（OOS 2026），且 OOS 回撤仅 -9.4%。
+
+**组合定位**：作为最终四腿组合的 Core（40%），与 ETF 动量（40%）、B1（10%）、B2（10%）
+组合后，全区间 +60.3%、最大回撤 -13.5%、Sharpe 1.45。
 
 ### 2.3 与分层决策集成（约束流）
 
@@ -509,11 +532,20 @@ result = backtester.run(strategy, stock_codes=[], start="2024-01-02", end="2026-
 print(result.summary())
 ```
 
-回测约定：
-- `stock_codes` 为空时自动使用本地全市场数据
-- `asset_type` 支持 "stock"（默认）/ "etf"
-- 最多同时持仓10只（当前硬编码，待从 config 读取）
-- 按 `position_size`（默认10%）分配资金
+回测约定（P0-1，2026-10-28）：
+- `stock_codes` 为空时自动使用本地全市场数据；`asset_type` 支持 "stock"（默认）/ "etf"
+- **成交时点**：`config.settings.EXECUTION["mode"]` 默认 `next_open`（t 日收盘信号 → t+1 开盘成交）；
+  `same_close` 仅用于复现旧结果，含未来函数
+- **可成交性**：涨停/一字板不可买；一字跌停不可卖；停牌（无 OHLC）跳过
+- 涨跌幅自动识别：主板 10%、创业板/科创板 20%、北交所 30%、ETF 10%、ST 5%
+- **T+1**：当日买入次日才能卖；**整手** 100 股；**印花税** 仅卖出收取（默认 5bp）
+- 最多同时持仓从 `BACKTEST["max_positions"]` 读取；按 `position_size`（默认10%）分配资金
+- 逐日事件驱动全市场回测较慢；快速验证用 `python main.py backtest --strategy quality_trend --fast`
+  （复用研究面板，quality_trend 全区间约 7 秒，指标与 `research.combo` core 腿一致）
+- 多 sleeve 组合回测：`python main.py portfolio-backtest --rebalance monthly`
+  （权重/再平衡/回撤熔断/归因，默认 40/40/10/10）
+- Walk-forward 与参数平台：`python main.py walkforward`、`python main.py platform-check`；
+  每次回测自动写入 `research/experiments.jsonl`（代码版本/数据快照/参数/指标）
 - 夏普比率已扣除无风险利率（2%）
 - **基准对比**：`BacktestResult` 含 `benchmark_return`（沪深300同期收益）/ `alpha`（超额年化）/ `beta`，
   `summary()` 有基准数据时展示「基准收益/超额收益(alpha)/beta」
