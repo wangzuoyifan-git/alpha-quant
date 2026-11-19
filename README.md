@@ -3,7 +3,7 @@
 ## 项目结构
 
 ```
-alpha量化/
+alpha-quant/
 ├── main.py                 # 主入口（CLI）
 ├── requirements.txt        # 依赖清单
 ├── .env.example            # 环境变量模板
@@ -38,19 +38,41 @@ alpha量化/
 │   └── push.py             # 多渠道推送（企业微信/邮件/Telegram）
 ├── trader/
 │   └── assistant.py        # 半自动交易辅助（指令单管理）
-├── web/                    # Web 看板静态资源
+├── web/                    # Web 看板静态资源（可选；看板 HTML 内嵌于 main.py，无此目录也可运行）
 ├── logs/                   # 运行日志
 └── data/orders/            # 交易指令单存档
 ```
 
 ## 快速开始
 
-### 1. 安装依赖
+### 0. 环境要求
+
+- **Python ≥ 3.12**（已在 3.12 / 3.13 实测通过）
+- 支持 **Linux / WSL** 与 **Windows** 双环境，路径均用 `pathlib` 处理，数据为 parquet 格式（依赖 `pyarrow`）
+
+### 1. 创建虚拟环境并安装依赖
+
+**Linux / WSL：**
 
 ```bash
-cd alpha量化
+cd alpha-quant
+python3 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 ```
+
+**Windows（PowerShell 或 Git Bash）：**
+
+```powershell
+cd alpha-quant
+python -m venv .venv
+.\.venv\Scripts\activate        # PowerShell
+# 或 Git Bash: source .venv/Scripts/activate
+pip install -r requirements.txt
+```
+
+> 依赖含 `pyarrow`（parquet 读写）、`psutil`（跨平台进程检测），安装需联网；
+> 若默认 PyPI 源不通，可换用可用的镜像源。
 
 ### 2. 配置环境变量
 
@@ -60,6 +82,8 @@ cp .env.example .env
 ```
 
 ### 3. 常用命令
+
+以下命令均在**已激活的虚拟环境**中执行（Windows / Linux 命令一致）。
 
 ```bash
 # 全市场扫描（今日）

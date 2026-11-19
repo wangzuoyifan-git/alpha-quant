@@ -1,7 +1,7 @@
 # Alpha量化 — 项目总览
 
 > 所有 Session 的共同基础参考。专项内容见各模块文档。
-> 最后更新：2026-11-19（每日更新可靠性：Tushare 空结果重试/报错、目标交易日启动快照 `TARGET_TRADE_DATE`、flock 等待、收尾覆盖率校验、`repair-kline` 强制刷新；A股 16:00 前启动只更新上一交易日，当日由下一次运行补）
+> 最后更新：2026-11-19（每日更新可靠性：Tushare 空结果重试/报错、目标交易日启动快照 `TARGET_TRADE_DATE`、flock 等待、收尾覆盖率校验、`repair-kline` 强制刷新；A股 16:00 前启动只更新上一交易日，当日由下一次运行补；Windows + Python 3.13 兼容性适配，详见 README「快速开始」）
 > 2026-11-11（数据修复：ETF `fund_adj` 后复权（消除份额折算断层）+ `repair-etf-adj`；港股指数 HSI/HSCEI/HSTECH 接入（`update-hk` 自动包含）+ `update-hk-index`；主要宽基指数 PE/PB 回填 + `update-index-valuation`；Tushare 资金流无权限时 AKShare/东财 fallback + `repair-moneyflow-ak`）
 > 2026-10-28（回测体系 P0/P1 收口：next-open/涨跌停/T+1/印花税/整手/停牌残留行；as-of 财务与资金流；TTM ROE；`backtest --fast` / `portfolio-backtest` / `walkforward` / `platform-check`；修复后四腿组合 +57.8%/回撤-13.8%/Sharpe1.38，详见 `docs/optimization_progress.md`）
 > 2026-10-27（策略研究：多轮回测综合出最终四腿组合，新增低波动质量趋势策略 `quality_trend`；全区间 +60.3%/回撤-13.5%/Sharpe1.45，详见 `docs/strategy_research.md`）
@@ -26,9 +26,9 @@
 | 项目 | 说明 |
 |---|---|
 | 项目名称 | Alpha量化 — A股量化分析与自动交易系统 |
-| 根目录 | `/home/wz/alpha量化` |
-| Python | 3.12，虚拟环境 `venv/` |
-| 运行方式 | `venv/bin/python3 main.py <command>` |
+| 根目录 | 仓库根目录（Linux/WSL 如 `/home/wz/alpha-quant`，Windows 如 `D:\workbuddy\alpha-quant`） |
+| Python | ≥ 3.12（3.12 / 3.13 实测通过）；虚拟环境 Linux/WSL 用 `venv/`，Windows 用 `.venv/` |
+| 运行方式 | 激活虚拟环境后 `python3 main.py <command>`（Windows 为 `python main.py <command>`） |
 | 主入口 | `main.py`（CLI 分发） |
 | 配置文件 | `config/settings.py` |
 | 环境变量 | `.env`（从 `.env.example` 复制，不纳入 git） |
@@ -70,7 +70,7 @@
 |---|---|
 | LLM 接入 | 国内 API 为主（DeepSeek / Qwen / 文心），OpenAI/Anthropic 通过代理备用；API 格式兼容 OpenAI |
 | 数据源 | BaoStock（免费，A股/基本面主力）、AKShare（免费，ETF/宏观/因子主力）、Tushare Pro（已付费，积分充足）；详细限制见 `docs/data.md` 第五章 |
-| 运行环境 | Linux，Python 3.12，本地部署，无 K8s/云原生要求 |
+| 运行环境 | Linux/WSL 与 Windows 双环境均支持（2026-11-19 适配），Python ≥ 3.12，本地部署，无 K8s/云原生要求 |
 | 开发工具 | opencode 作为主要编码辅助，不依赖 Claude Code |
 | 时间周期 | 当前日线，未来扩展日内 |
 

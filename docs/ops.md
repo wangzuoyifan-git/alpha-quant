@@ -1,7 +1,8 @@
 # Alpha量化 — 运维手册
 
 > CLI 速查、定时脚本、环境变量配置、Git 规范。
-> 最后更新：2026-06-21（L2行业评分升级到申万L2/131个细分行业；ETF独立三维评分体系 etf_agent+etf_config.json；portfolio 新增 theme_etf 出场路径；L3联动强势主题ETF补入选股池）
+> 最后更新：2026-11-19（补充 Windows / WSL 双环境虚拟环境激活方式与 Python ≥3.12 要求）
+> 历史：2026-06-21（L2行业评分升级到申万L2/131个细分行业；ETF独立三维评分体系 etf_agent+etf_config.json；portfolio 新增 theme_etf 出场路径；L3联动强势主题ETF补入选股池）
 >
 > **项目基础信息见 `docs/project.md`**
 > **持仓管理设计详见 `docs/position_management.md`**
@@ -40,12 +41,31 @@ OPENAI_API_KEY=       # 通过代理备用
 OPENAI_BASE_URL=      # 代理地址
 ```
 
-### 1.2 激活虚拟环境
+### 1.2 创建并激活虚拟环境
+
+环境要求：**Python ≥ 3.12**（3.12 / 3.13 实测通过），Windows + Linux/WSL 均可运行。
+
+**Linux / WSL：**
 
 ```bash
-cd /home/wz/alpha量化
+cd /home/wz/alpha-quant        # 或你的实际项目路径
+python3 -m venv venv
 source venv/bin/activate
+pip install -r requirements.txt
 ```
+
+**Windows（PowerShell）：**
+
+```powershell
+cd D:\workbuddy\alpha-quant     # 或你的实际项目路径
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+> 本文后续命令示例均以 `python3 main.py ...` 表示（Linux 习惯）；
+> Windows 激活虚拟环境后改用 `python main.py ...`，参数完全一致。
+> 依赖含 `pyarrow`（parquet 读写，本地数据必需）与 `psutil`（跨平台进程检测）。
 
 ---
 
