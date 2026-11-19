@@ -20,8 +20,15 @@ import mplfinance as mpf
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-# 配置中文字体
-plt.rcParams["font.family"] = ["Noto Sans CJK SC", "DejaVu Sans"]
+# 配置中文字体（跨平台：Linux 用 Noto，Windows 用微软雅黑/黑体）
+from matplotlib import font_manager as _fm
+_available_fonts = {f.name for f in _fm.fontManager.ttflist}
+_cjk_font = next(
+    (f for f in ("Noto Sans CJK SC", "Microsoft YaHei", "SimHei", "WenQuanYi Micro Hei")
+     if f in _available_fonts),
+    "DejaVu Sans",
+)
+plt.rcParams["font.family"] = [_cjk_font, "DejaVu Sans"]
 plt.rcParams["axes.unicode_minus"] = False
 
 import data.store as store

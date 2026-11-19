@@ -87,7 +87,7 @@ def confirm_order(order_id: str) -> dict:
             import json
             path = ORDER_DIR / f"{order_id}.json"
             if path.exists():
-                with open(path) as f:
+                with open(path, encoding="utf-8") as f:
                     result["confirmed_at"] = json.load(f).get("confirmed_at")
         return result
     except Exception as e:

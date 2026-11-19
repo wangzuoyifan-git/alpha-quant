@@ -375,7 +375,7 @@ class TradeAssistant:
         orders = []
         for f in sorted(ORDER_DIR.glob("*.json")):
             try:
-                with open(f) as fp:
+                with open(f, encoding="utf-8") as fp:
                     d = json.load(fp)
                 if d.get("status") == "PENDING":
                     orders.append(d)
@@ -389,14 +389,14 @@ class TradeAssistant:
         if not path.exists():
             logger.error(f"指令单不存在: {order_id}")
             return False
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             d = json.load(f)
         d["status"] = "CONFIRMED"
         d["confirmed_at"] = datetime.now().isoformat()
         # F1：记录预期买入价
         if "expected_price" not in d:
             d["expected_price"] = d.get("price")
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(d, f, ensure_ascii=False, indent=2)
         logger.info(f"指令单已确认: {order_id}")
         return True
@@ -406,10 +406,10 @@ class TradeAssistant:
         path = ORDER_DIR / f"{order_id}.json"
         if not path.exists():
             return False
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             d = json.load(f)
         d["status"] = "CANCELLED"
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(d, f, ensure_ascii=False, indent=2)
         logger.info(f"指令单已取消: {order_id}")
         return True
@@ -421,7 +421,7 @@ class TradeAssistant:
         if not path.exists():
             logger.error(f"指令单不存在: {order_id}")
             return False
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             d = json.load(f)
         d["status"] = "EXECUTED"
         d["actual_price"] = actual_price
@@ -431,7 +431,7 @@ class TradeAssistant:
         expected = d.get("expected_price") or d.get("price")
         if expected and expected > 0:
             d["price_deviation"] = round((actual_price / expected - 1) * 100, 2)
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(d, f, ensure_ascii=False, indent=2)
         logger.info(f"执行结果已记录: {order_id} 实际¥{actual_price} x{actual_quantity}股")
         return True
@@ -441,7 +441,7 @@ class TradeAssistant:
         orders = []
         for f in sorted(ORDER_DIR.glob("*.json")):
             try:
-                with open(f) as fp:
+                with open(f, encoding="utf-8") as fp:
                     d = json.load(fp)
                 if d.get("status") in ("EXECUTED",):
                     orders.append(d)
@@ -482,7 +482,7 @@ class TradeAssistant:
         orders = []
         for f in sorted(ORDER_DIR.glob("*.json")):
             try:
-                with open(f) as fp:
+                with open(f, encoding="utf-8") as fp:
                     orders.append(json.load(fp))
             except Exception:
                 pass
@@ -506,5 +506,5 @@ class TradeAssistant:
 
     def _save_order(self, order: TradeOrder):
         path = ORDER_DIR / f"{order.order_id}.json"
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(order.to_dict(), f, ensure_ascii=False, indent=2)

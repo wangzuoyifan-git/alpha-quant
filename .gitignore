@@ -58,3 +58,9 @@ logs/
 .coverage
 htmlcov/
 .pytest_cache/
+
+# 本地数据归档（体积大，不纳入版本控制）
+*.tar
+
+# 工作区本地记忆（非项目代码）
+.workbuddy/

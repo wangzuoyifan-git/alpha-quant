@@ -316,7 +316,7 @@ def _aggregate_raw_dims_cached(code_to_ind: dict, level: str, date: str = None):
 
     if cache_file.exists():
         try:
-            with open(cache_file) as f:
+            with open(cache_file, encoding="utf-8") as f:
                 cached = json.load(f)
             return cached["moneyflow"], cached["prosperity"], cached["valuation"]
         except Exception:
@@ -328,7 +328,7 @@ def _aggregate_raw_dims_cached(code_to_ind: dict, level: str, date: str = None):
 
     try:
         _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        with open(cache_file, "w") as f:
+        with open(cache_file, "w", encoding="utf-8") as f:
             json.dump({"moneyflow": raw_mf, "prosperity": raw_pros,
                        "valuation": raw_val}, f)
     except Exception as e:

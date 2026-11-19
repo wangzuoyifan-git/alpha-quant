@@ -659,7 +659,7 @@ def _get_pro():
     if not token:
         env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
         if os.path.exists(env_path):
-            for line in open(env_path):
+            for line in open(env_path, encoding="utf-8"):
                 if line.startswith("TUSHARE_TOKEN="):
                     token = line.strip().split("=", 1)[1]
                     break

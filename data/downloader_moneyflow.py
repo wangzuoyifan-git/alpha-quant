@@ -484,7 +484,7 @@ class MoneyflowDownloader:
         ipo_path = Path(__file__).parent / "market" / "ipo_dates.json"
         ipo_dates: dict = {}
         if ipo_path.exists():
-            with open(ipo_path) as f:
+            with open(ipo_path, encoding="utf-8") as f:
                 raw = json.load(f)
             for k, v in raw.items():
                 code6 = k.split(":")[-1]

@@ -2379,8 +2379,20 @@ def cmd_data_status():
     # ── 后台更新进程检测 ──────────────────────────────────────
     bg_tasks = {}  # cmd_keyword -> last_log_line
     try:
-        result = subprocess.run(["ps", "aux"], capture_output=True, text=True)
-        for line in result.stdout.splitlines():
+        # 跨平台获取进程命令行：Windows 无 ps，优先用 psutil，POSIX 退回 ps aux。
+        proc_lines = []
+        try:
+            import psutil
+            for p in psutil.process_iter(["cmdline"]):
+                cmdline = p.info.get("cmdline")
+                if cmdline:
+                    proc_lines.append(" ".join(str(x) for x in cmdline))
+        except ImportError:
+            import platform as _platform
+            if _platform.system() != "Windows":
+                result = subprocess.run(["ps", "aux"], capture_output=True, text=True)
+                proc_lines = result.stdout.splitlines()
+        for line in proc_lines:
             if "main.py" not in line or "grep" in line:
                 continue
             today = datetime.now().strftime("%Y%m%d")

@@ -26,7 +26,14 @@ DOCS = ROOT / "docs"
 MD_PATH = DOCS / "strategy_research.md"
 PDF_PATH = DOCS / "Alpha量化_策略回测总结_2026-10.pdf"
 
-CJK = "Noto Sans CJK SC"
+# 动态选择系统中可用的中文字体（Linux 多为 Noto，Windows 多为微软雅黑/黑体）
+from matplotlib import font_manager as _fm
+_available_fonts = {f.name for f in _fm.fontManager.ttflist}
+CJK = next(
+    (f for f in ("Noto Sans CJK SC", "Microsoft YaHei", "SimHei", "WenQuanYi Micro Hei")
+     if f in _available_fonts),
+    "DejaVu Sans",
+)
 BLUE = "#1f4e79"
 ORANGE = "#d97706"
 GREEN = "#2e7d32"
@@ -220,12 +227,12 @@ CSS = """
   margin: 20mm 15mm 18mm 15mm;
   @top-center {
     content: "Alpha量化 · 策略回测总结";
-    font-family: "Noto Sans CJK SC", sans-serif;
+    font-family: "Noto Sans CJK SC", "Microsoft YaHei", "SimHei", sans-serif;
     font-size: 7.5pt; color: #999999;
   }
   @bottom-right {
     content: "第 " counter(page) " 页";
-    font-family: "Noto Sans CJK SC", sans-serif;
+    font-family: "Noto Sans CJK SC", "Microsoft YaHei", "SimHei", sans-serif;
     font-size: 7.5pt; color: #999999;
   }
 }
@@ -234,10 +241,10 @@ CSS = """
   @top-center { content: none; }
   @bottom-right { content: none; }
 }
-html { font-family: "Noto Sans CJK SC", sans-serif; }
+html { font-family: "Noto Sans CJK SC", "Microsoft YaHei", "SimHei", sans-serif; }
 body {
   margin: 0;
-  font-family: "Noto Sans CJK SC", sans-serif;
+  font-family: "Noto Sans CJK SC", "Microsoft YaHei", "SimHei", sans-serif;
   font-size: 9.6pt; line-height: 1.62; color: #222222;
 }
 .cover {
