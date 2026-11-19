@@ -1,15 +1,21 @@
 #!/usr/bin/env bash
 # =============================================================
-# Alpha量化 — 每日数据更新脚本
-# 建议通过 crontab 在收盘后（17:30 左右）运行
-# （A股 EOD 数据 16:00 后落定；港股 16:00 收盘，17:30 可拿到当日最终值）
+# Alpha量化 — 每日数据更新脚本（Windows / WSL 双兼容）
+# =============================================================
+# 跨平台适配（2026-11-19）：
+#   - 路径由脚本自身位置推导，不再写死 /home/wz/alpha-quant
+#   - Python 自动选择：优先 .venv/Scripts/python.exe（Windows），
+#     其次 venv/bin/python3（WSL/Linux），最后系统 python3
+#   - 并发锁：flock 在 Windows Git Bash(cygwin) 下不可用，统一改用 mkdir 原子锁
+#   - 换行符必须为 LF；若报 $'\r': command not found，执行：
+#       sed -i 's/\r$//' scripts/update_daily.sh
 #
-# crontab 配置示例（每个交易日 17:30 运行）：
-#   30 17 * * 1-5 /home/wz/alpha-quant/scripts/update_daily.sh
-# 脚本内部会 tee 到 logs/update_daily.log，crontab 无需再重定向
-#
-# 手动运行：
-#   bash /home/wz/alpha-quant/scripts/update_daily.sh
+# 触发方式：
+#   Windows：bash /d/workbuddy/alpha-quant/scripts/update_daily.sh
+#   WSL：    bash /home/wz/alpha-quant/scripts/update_daily.sh
+#   crontab（WSL 每交易日 17:30）：
+#     30 17 * * 1-5 /home/wz/alpha-quant/scripts/update_daily.sh
+# 脚本内部会 tee 到 logs/update_daily.log，调度器无需再重定向。
 #
 # 说明：
 #   - 开始前先做 Tushare 连通性预检，失败直接终止，避免接口抖动导致空跑假成功
@@ -30,15 +36,29 @@
 
 set -uo pipefail
 
-PROJ_DIR="/home/wz/alpha-quant"
-PYTHON="${PROJ_DIR}/venv/bin/python3"
+# ---- 路径与解释器：由脚本自身位置推导，Windows / WSL 通用 ----
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJ_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 LOG_DIR="${PROJ_DIR}/logs"
 LOG_FILE="${LOG_DIR}/update_daily.log"
+LOCK_DIR="${LOG_DIR}/update_daily.lock.d"
+
+# Windows Python 输出中文需 UTF-8，避免日志乱码
+export PYTHONIOENCODING=utf-8
+
+# 选择 Python：Windows venv > WSL venv > 系统 python3
+if [ -x "${PROJ_DIR}/.venv/Scripts/python.exe" ]; then
+  PYTHON="${PROJ_DIR}/.venv/Scripts/python.exe"
+elif [ -x "${PROJ_DIR}/venv/bin/python3" ]; then
+  PYTHON="${PROJ_DIR}/venv/bin/python3"
+else
+  PYTHON="python3"
+fi
 
 # 记录本次运行日期/时刻（跨夜运行也以启动时点为准，供收尾校验使用）
 RUN_DATE=$(date '+%Y-%m-%d')
 RUN_HM=$(date '+%H%M')
-export RUN_DATE RUN_HM
+export RUN_DATE RUN_HM PROJ_DIR
 
 mkdir -p "${LOG_DIR}"
 cd "${PROJ_DIR}"
@@ -46,22 +66,28 @@ cd "${PROJ_DIR}"
 # 输出同时写入终端与日志
 exec > >(tee -a "${LOG_FILE}") 2>&1
 
-# 防止重复运行：若已有实例（例如手动更新）在跑，默认等待其结束再执行，
-# 避免 17:30 定时任务因手动长任务占用锁被整天跳过。
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] 环境: PROJ_DIR=${PROJ_DIR}  PYTHON=${PYTHON}"
+
+# ---- 并发锁：mkdir 原子操作，Windows(Git Bash) 与 WSL 均可用 ----
+# 若已有实例（例如手动更新）在跑，默认等待其结束再执行，
+# 避免定时任务因手动长任务占用锁被整天跳过。
 # 等待上限默认 3 小时；设为 0 则退回"立即退出"行为。
 LOCK_WAIT=${UPDATE_LOCK_WAIT:-10800}
-exec 9>"${LOG_DIR}/update_daily.lock"
-if ! flock -n 9; then
-  if [ "${LOCK_WAIT}" -le 0 ]; then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 已有 update_daily 实例在运行，本次退出"
-    exit 75
-  fi
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] 已有 update_daily 实例在运行，最多等待 ${LOCK_WAIT}s..."
-  waited=0
-  until flock -n 9; do
+release_lock() { rmdir "${LOCK_DIR}" 2>/dev/null || true; }
+
+acquire_lock() {
+  local waited=0 step remaining
+  while ! mkdir "${LOCK_DIR}" 2>/dev/null; do
+    if [ "${LOCK_WAIT}" -le 0 ]; then
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] 已有 update_daily 实例在运行，本次退出"
+      return 75
+    fi
+    if [ "${waited}" -eq 0 ]; then
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] 已有 update_daily 实例在运行，最多等待 ${LOCK_WAIT}s..."
+    fi
     if [ "${waited}" -ge "${LOCK_WAIT}" ]; then
       echo "[$(date '+%Y-%m-%d %H:%M:%S')] 等待锁超时（${LOCK_WAIT}s），本次退出"
-      exit 75
+      return 75
     fi
     step=30
     remaining=$((LOCK_WAIT - waited))
@@ -69,8 +95,13 @@ if ! flock -n 9; then
     sleep "${step}"
     waited=$((waited + step))
   done
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] 已获取锁，继续执行（RUN_DATE=${RUN_DATE}）"
-fi
+  # 拿到锁后注册退出清理（含 Ctrl+C / 异常退出）
+  trap release_lock EXIT HUP INT TERM
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] 已获取锁（RUN_DATE=${RUN_DATE}）"
+  return 0
+}
+
+acquire_lock || exit 75
 
 FAILED=()
 SKIPPED=()
