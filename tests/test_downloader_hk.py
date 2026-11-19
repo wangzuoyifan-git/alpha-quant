@@ -435,3 +435,20 @@ class TestConnectTsFallback:
         dl = HKDownloader.__new__(HKDownloader)
         dl._pro = None
         assert dl._get_connect_codes_ts() == {}
+
+
+class TestFullListGuard:
+    class EmptyPro:
+        def hk_basic(self, **kwargs):
+            return pd.DataFrame()
+
+    def test_empty_hk_basic_raises(self, monkeypatch):
+        import data.tushare_utils as tu
+        from data.tushare_utils import TushareEmptyError
+
+        monkeypatch.setattr(tu.time, "sleep", lambda *_: None)
+        dl = HKDownloader.__new__(HKDownloader)
+        dl._pro = self.EmptyPro()
+
+        with pytest.raises(TushareEmptyError):
+            dl._get_full_list()

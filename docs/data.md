@@ -1,7 +1,9 @@
 # Alpha量化 — 数据层文档
 
 > 数据层接口、各域结构、数据源说明、待办缺口。
-> 最后更新：2026-10-10（moneyflow `stock`/`margin` 每日增量改按 `trade_date` 批量一次取全市场，请求数 ~1.1 万→每交易日 2 次；events E2 全市场改按日期批量（减持按月/回购按周/质押逐日探测 `end_date`/分红按交易日），~2.2 万次→百余次、约 1.5h→1~2min，逐只 `--codes` 保留；港股资金流加最小间隔限速+连续失败熔断+失败穿透 `_check_bulk_result`；`update_daily.sh` 港股跳过窗口改为仅盘中 09:30–16:15、跳过计入汇总并以退出码 1 结束）
+> 最后更新：2026-11-19（每日更新可靠性：Tushare HTTP 非 2xx 静默空表防护（`call_nonempty` 重试/报错）；目标交易日启动快照 `TARGET_TRADE_DATE`（16:00 前只更新上一交易日，整轮不中途切换）；`update_daily.sh` flock 等待、预检与收尾覆盖率校验；`repair-kline` 强制覆盖修复异常 K 线）
+> 2026-11-11（ETF `fund_adj` 后复权 + `repair-etf-adj`；港股指数 HSI/HSCEI/HSTECH 接入；主要宽基指数 PE/PB 回填；Tushare 资金流无权限时 AKShare/东财 fallback）
+> 2026-10-10（moneyflow `stock`/`margin` 每日增量改按 `trade_date` 批量一次取全市场，请求数 ~1.1 万→每交易日 2 次；events E2 全市场改按日期批量（减持按月/回购按周/质押逐日探测 `end_date`/分红按交易日），~2.2 万次→百余次、约 1.5h→1~2min，逐只 `--codes` 保留；港股资金流加最小间隔限速+连续失败熔断+失败穿透 `_check_bulk_result`；`update_daily.sh` 港股跳过窗口改为仅盘中 09:30–16:15、跳过计入汇总并以退出码 1 结束）
 > 2026-09-29（events E2 新增回购 `buyback`（Tushare `repurchase`）；moneyflow 域资金主体数据 `top_inst`/`block_trade`/`hk_hold`）
 > 2026-09-28（moneyflow 域新增资金主体数据 `top_inst` 龙虎榜席位明细 / `block_trade` 大宗交易 / `hk_hold` 北向个股持股；下载器 `init_top_inst`/`init_block_trade`/`update_hk_hold`）
 > 2026-09-23（港股数据批次1：资金流 `update-hk-moneyflow`、财务 5 表 `update-hk-financials`、分红事件 `update-hk-events`、PCF 估值；store_moneyflow/store_fundamental 增加 market 维度；A股 pcf_ttm 补充 `update-cn-pcf`）
@@ -402,7 +404,14 @@ dl = TushareKlineDownloader(pro)
 dl.init_db(start="2024-01-02", end=None, force=False,
            types=["stock", "index", "etf"]) -> dict
 dl.update_db(end=None, types=["stock", "index", "etf"]) -> dict
+dl.refresh_recent(days=5, types=["stock"], codes=None) -> dict  # force 覆盖，修复异常
 ```
+
+> **可靠性（2026-11-19）**：Tushare 在 HTTP 非 2xx 时会静默返回空表，`stock_basic/index_basic/fund_basic/hk_basic`
+> 统一走 `data/tushare_utils.call_nonempty`（重试耗尽即抛错），避免空列表被当成"无需更新"。
+> `_settled_end` 在 16:00 前把目标日回退到上一交易日；每日脚本以启动时刻快照 `TARGET_TRADE_DATE`
+> 传给 K 线与 moneyflow，整轮运行不因跨过收盘而切换目标日。
+> 另有 CLI `repair-kline --days N [--types ...] [--codes ...]` 强制刷新最近 K 线。
 
 数据源映射：
 - stock：`pro_bar(adj='hfq')` + `daily_basic`（pe/pb/ps/turn）

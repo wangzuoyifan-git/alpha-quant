@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -200,3 +201,73 @@ class TestLatestTradeDate:
     def test_none_when_empty(self, monkeypatch):
         monkeypatch.setattr(mfl, "_get_trade_dates", lambda p, s, e: [])
         assert mfl._latest_trade_date(None) is None
+
+
+class TestAkFallbackParsing:
+    """东财板块资金流 klines 解析（AKShare fallback）"""
+
+    def test_parse_board_fflow(self):
+        line = ("2026-11-11,7675108096.0,-2871089152.0,-4792115200.0,"
+                "2700819200.0,4974288896.0,3.67,-1.37,-2.29,1.29,2.38,"
+                "2273.82,3.10,0.00,0.00")
+        df = mfl._parse_em_fflow_klines([line])
+        assert df is not None and len(df) == 1
+        row = df.iloc[0]
+        assert row["net_amount"] == 7675108096.0
+        assert row["buy_elg_amount"] == 4974288896.0
+        assert row["close"] == 2273.82
+        assert row["pct_change"] == 3.10
+
+    def test_parse_bad_lines(self):
+        assert mfl._parse_em_fflow_klines([]) is None
+        assert mfl._parse_em_fflow_klines(["bad,line"]) is None
+
+
+class TestStockListGuard:
+    class EmptyPro:
+        def stock_basic(self, **kwargs):
+            return pd.DataFrame()
+
+    def test_empty_stock_basic_raises(self, monkeypatch):
+        monkeypatch.setattr(mfl.time, "sleep", lambda *_: None)
+        with pytest.raises(RuntimeError):
+            mfl._get_all_stock_codes(self.EmptyPro())
+
+
+class TestSettlementAwareTradeDate:
+    def _patch(self, monkeypatch, hm):
+        import datetime as real_dt
+
+        class FakeDatetime(real_dt.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return cls(2026, 11, 19, int(hm), 0)
+
+        monkeypatch.setattr(mfl, "datetime", FakeDatetime)
+        monkeypatch.setattr(mfl, "_get_trade_dates",
+                            lambda p, s, e: ["20261117", "20261118", "20261119"])
+
+    def test_before_settle_excludes_today(self, monkeypatch):
+        self._patch(monkeypatch, "10")
+        assert mfl._latest_trade_date(None) == "2026-11-18"
+
+    def test_after_settle_includes_today(self, monkeypatch):
+        self._patch(monkeypatch, "17")
+        assert mfl._latest_trade_date(None) == "2026-11-19"
+
+
+class TestTargetSnapshot:
+    def test_env_override(self, monkeypatch):
+        monkeypatch.setenv("TARGET_TRADE_DATE", "2026-11-17")
+        dl = MoneyflowDownloader()
+        assert dl._target(None) == "2026-11-17"
+
+    def test_cached_once(self, monkeypatch):
+        monkeypatch.delenv("TARGET_TRADE_DATE", raising=False)
+        calls = []
+        monkeypatch.setattr(mfl, "_settled_end",
+                            lambda p: (calls.append(1) or "2026-11-17"))
+        dl = MoneyflowDownloader()
+        assert dl._target(None) == "2026-11-17"
+        assert dl._target(None) == "2026-11-17"
+        assert len(calls) == 1

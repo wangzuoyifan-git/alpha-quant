@@ -31,6 +31,7 @@ import pandas as pd
 
 import data.store as store
 from config.settings import DATA_SOURCE
+from data.tushare_utils import call_nonempty, TushareEmptyError
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,13 @@ _BAIDU_HEADERS = {
     "Referer": "https://gushitong.baidu.com/",
 }
 _VALUATION_COLS = ("pe_ttm", "pb_mrq", "pcf_ttm")
+
+# 港股主要指数（AKShare Sina 源，symbol → 名称）
+_HK_INDEXES = (
+    ("HSI", "恒生指数"),
+    ("HSCEI", "恒生中国企业指数"),
+    ("HSTECH", "恒生科技指数"),
+)
 
 # 东财资金流接口（港股 secid=116.xxxxx；主域名 TLS 常被重置，备用域名/HTTP）
 _EM_FFLOW_HOSTS = ("https://91.push2his.eastmoney.com",
@@ -251,6 +259,50 @@ class HKDownloader:
         _log("更新完成！")
         self._save_ipo_dates(connect_only=connect_only)
         return self._print_stats(result)
+
+    # ------------------------------------------------------------------
+    # 港股指数（恒指/国企/恒生科技，AKShare Sina 源）
+    # ------------------------------------------------------------------
+
+    def update_index(self, codes: list[str] | None = None,
+                     sleep: float = _SLEEP) -> dict:
+        """下载港股主要指数日线并整表覆盖（HSI/HSCEI/HSTECH）。"""
+        import akshare as ak
+
+        wanted = set(codes) if codes else None
+        targets = [(c, n) for c, n in _HK_INDEXES
+                   if wanted is None or c in wanted]
+        result = {"ok": 0, "skip": 0, "fail": 0, "total": len(targets)}
+        _log("=" * 55)
+        _log(f"HKDownloader — 港股指数更新  标的: {len(targets)} 只")
+        _log("=" * 55)
+
+        for code, name in targets:
+            try:
+                df = ak.stock_hk_index_daily_sina(symbol=code)
+                if df is None or df.empty:
+                    result["skip"] += 1
+                    continue
+                df = df.rename(columns={"date": "date"}).copy()
+                df["date"] = pd.to_datetime(df["date"], errors="coerce")
+                df = (df.dropna(subset=["date"])
+                        .sort_values("date")
+                        .set_index("date"))
+                for col in ("open", "high", "low", "close", "volume", "amount"):
+                    if col in df.columns:
+                        df[col] = pd.to_numeric(df[col], errors="coerce")
+                df["preclose"] = df["close"].shift(1)
+                df["pct_chg"] = (df["close"] / df["preclose"] - 1.0) * 100.0
+                store.replace(code, df, asset_type="index", market="hk")
+                _log(f"  {code} {name}: {len(df)} 行 "
+                     f"{df.index.min().date()} ~ {df.index.max().date()}")
+                result["ok"] += 1
+            except Exception as e:
+                logger.warning(f"港股指数 {code} 更新失败: {e}")
+                result["fail"] += 1
+            if sleep:
+                time.sleep(sleep)
+        return result
 
     # ------------------------------------------------------------------
     # 港股估值（PE/PB，来源：百度股市通）
@@ -668,22 +720,33 @@ class HKDownloader:
         return self._get_full_list()
 
     def _get_full_list(self) -> list[tuple[str, str]]:
-        """从 Tushare hk_basic 取全部上市港股列表。"""
+        """从 Tushare hk_basic 取全部上市港股列表。
+
+        hk_basic 连续返回空会抛 TushareEmptyError，使上层步骤失败，
+        避免"港股通列表非空但全量列表为空"导致全部港股被静默跳过。
+        """
         if self._pro is None:
-            _log("[警告] 无 Tushare 配置，无法获取港股列表，跳过")
-            return []
+            _log("[警告] 无 Tushare 配置，无法获取港股列表")
+            raise TushareEmptyError("未配置 TUSHARE_TOKEN，无法获取港股列表")
         try:
-            df = self._pro.hk_basic(list_status="L", fields="ts_code,name")
-            out = []
-            for _, row in df.iterrows():
-                tscode = row["ts_code"]
-                if not tscode.endswith(".HK"):
-                    continue
-                out.append((tscode.split(".")[0], row.get("name", "")))
-            return out
+            df = call_nonempty(
+                lambda: self._pro.hk_basic(
+                    list_status="L", fields="ts_code,name"),
+                label="hk_basic", min_rows=1000,
+            )
+        except TushareEmptyError:
+            raise
         except Exception as e:
-            logger.warning(f"hk_basic 获取失败: {e}")
-            return []
+            raise TushareEmptyError(f"hk_basic 获取失败: {e}") from e
+        out = []
+        for _, row in df.iterrows():
+            tscode = row["ts_code"]
+            if not tscode.endswith(".HK"):
+                continue
+            out.append((tscode.split(".")[0], row.get("name", "")))
+        if not out:
+            raise TushareEmptyError("hk_basic 返回数据中无 .HK 标的")
+        return out
 
     @staticmethod
     def _apply_connect(full, connect_codes):
@@ -945,7 +1008,11 @@ class HKDownloader:
         try:
             if self._pro is None:
                 return
-            df = self._pro.hk_basic(list_status="L", fields="ts_code,name,list_date")
+            df = call_nonempty(
+                lambda: self._pro.hk_basic(
+                    list_status="L", fields="ts_code,name,list_date"),
+                label="hk_basic(ipo)", min_rows=1000,
+            )
             connect = self._get_connect_codes()
             ipo = {}
             for _, row in df.iterrows():

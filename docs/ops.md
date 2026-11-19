@@ -73,6 +73,7 @@ python3 main.py update-events --codes 000001 600519   # 只更新指定股票（
 python3 main.py init-moneyflow                    # 资金流与情绪（stock 2010起，其余 2024起）
 python3 main.py init-moneyflow --types stock      # 只下载个股资金流
 python3 main.py update-moneyflow                  # 增量更新 moneyflow 域（stock/margin 按交易日批量，约1min）
+python3 main.py repair-moneyflow-ak               # AKShare 补齐大盘/行业资金流（约120交易日窗口）
 python3 main.py update-hk-hold --codes 000001 600519   # 北向个股持股（hk_hold，季度披露，按代码）
 python3 main.py update-hk-hold --from-portfolio       # 标的取自当前持仓
 python3 main.py update-hk-hold --from-lhb 30          # 标的取自最近30个龙虎榜上榜交易日
@@ -82,13 +83,23 @@ python3 main.py update-hk-valuation               # 更新港股 PE/PB/PCF（港
 python3 main.py update-hk-moneyflow               # 更新港股个股资金流（东财，滚动约100个交易日，按1.5s/只限速防封禁）
 python3 main.py update-hk-financials              # 更新港股财务（三大报表+成长/杜邦）
 python3 main.py update-hk-events                  # 更新港股分红事件（events E2）
+python3 main.py update-hk-index                   # 更新港股主要指数（HSI/HSCEI/HSTECH；update-hk 已自动包含）
 python3 main.py update-cn-pcf                     # 补充 A 股 pcf_ttm（百度市现率）
+python3 main.py repair-etf-adj                    # 回填/刷新 ETF 后复权（修复份额折算断层；--codes 指定单只）
+python3 main.py repair-kline --days 5              # 强制刷新最近5个自然日 A股K线（覆盖修复残缺/异常；--codes 可指定）
+python3 main.py update-index-valuation            # 回填主要宽基指数 PE_TTM/PB（--codes 可指定）
 python3 main.py update-fund                       # Phase2：ETF 列表 + ETF→指数映射
 python3 main.py update-fund --codes 510300 159915  # 指定 ETF 份额/净值/指数权重
 
 # 全域更新
 python3 main.py update-all                        # 全域：A股/港股K线+估值、meta、fundamental、factor、macro、moneyflow、events、A股PCF、fund（耗时长）
 ```
+
+> ETF 后复权：`update`/`update-hk` 之外的存量修复用 `repair-etf-adj`；下载时自动按
+> Tushare `fund_adj` 最新因子缩放，最新价保持不变，历史份额折算断点消除。
+> 指数估值：`index_dailybasic` 仅覆盖主要宽基/规模指数（15 个），其余指数会跳过。
+> 资金流兜底：Tushare `moneyflow_mkt_dc/ind_dc` 无权限时，`update-moneyflow` 会自动
+> 切到 AKShare/东财（约 120 交易日窗口）；也可手动 `repair-moneyflow-ak` 补齐。
 
 ### 数据直查（inspect）
 
@@ -453,8 +464,15 @@ scripts/update_daily.sh
 #       → [8]update-hk-moneyflow(约20m，按1.5s/只限速) → [9]update-hk-events(约15m)
 #       → [10]factor(台阶二前空跑) → scan(stock，默认注释)
 # 注：北向个股持股 hk_hold 为季度披露且按代码逐只，不在每日脚本，见季度脚本
+# 注：开始前做 Tushare 连通性预检（stock_basic >1000 只），失败直接退出，避免接口抖动空跑假成功
+# 注：结束前核对 market/stock、moneyflow/stock 是否达到最近交易日，不达标退出码 1；
+#     market/hk 因港A节假日不同仅告警（避免港休日误判整体失败）
 # 注：单步失败不中断，末尾汇总；有失败或被跳过的步骤时退出码 1；输出同时写入 logs/update_daily.log
-#     脚本带 flock 并发锁（上一轮未结束时新执行直接退出）
+#     脚本带 flock 并发锁；若已有实例在跑（如手动更新）默认最多等待 3 小时再执行，
+#     避免 17:30 定时任务被整天跳过；等待超时退出码 75（UPDATE_LOCK_WAIT 可调，0=不等待）
+# 注：目标交易日按任务启动时刻快照：16:00 前启动只更新到上一交易日，即使任务跑到
+#     收盘后也不改目标，当日数据由下一次运行补；K线/资金流共用该快照（TARGET_TRADE_DATE）
+#     已有异常数据用 repair-kline 强制覆盖修复
 #     港股 4 个步骤（K线/估值/资金流/分红）仅在盘中 09:30–16:15 跳过（避免盘中残缺 bar）；
 #     收盘后、或跨夜到凌晨（已收盘）均正常执行，不再整天漏更
 #     17:30 运行可拿到港股当日最终值；macro 的港股/境外当日 bar 次日刷新会自动覆盖修正
@@ -503,6 +521,18 @@ crontab -e
 # 每季度首月1日 09:00 运行季度更新
 0 9 1 1,4,8,10 /home/wz/alpha-quant/scripts/update_quarterly.sh
 ```
+
+### 每日更新可靠性机制
+
+- **预检**：开始前用 Tushare `stock_basic` 校验（>1000 只）；失败直接退出，避免接口抖动被当成“0 更新”。
+- **目标日快照**：按任务启动时刻确定 `TARGET_TRADE_DATE`（16:00 前=上一交易日，16:00 后=最近交易日）。
+  整轮 K线/资金流共用该目标；即使跑到收盘后或跨夜，也不中途切换，当日数据留给下一次运行。
+- **并发锁等待**：已有实例在跑时最多等待 3 小时（`UPDATE_LOCK_WAIT` 可调），避免定时任务被跳过；
+  超时退出码 75。
+- **收尾校验**：核对 `market/stock`、`moneyflow/stock` 的覆盖率是否达到 `TARGET_TRADE_DATE`（≥90%），
+  不达标退出码 1；`market/hk` 因港A节假日不同仅告警。
+- **异常修复**：怀疑残缺/异常 K 线时用 `venv/bin/python3 main.py repair-kline --days 5` 强制覆盖；
+  `--codes` 可只修指定标的。
 
 ### 用 APScheduler 运行（内置调度器）
 

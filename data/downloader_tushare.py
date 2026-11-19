@@ -21,10 +21,15 @@ from datetime import datetime, timedelta
 import pandas as pd
 
 import data.store as store
+from data.tushare_utils import call_nonempty, TushareEmptyError
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_START = "2024-01-02"
+
+# A 股当日 EOD 数据落定时点：早于该时点运行只更新到上一交易日，
+# 避免盘中/刚收盘时写入残缺 bar（与港股 _settled_end 逻辑对齐）。
+_CN_SETTLE_TIME = "16:00"
 
 # tushare 同一接口并发控制：批间 sleep
 _SLEEP = 0.3          # 每只之间最短间隔（秒）
@@ -53,6 +58,63 @@ def _ts_code(code: str) -> str:
         return f"{code}.BJ"
     else:
         return f"{code}.SZ"
+
+
+def _index_ts_code(code: str) -> str:
+    """指数代码 → tushare ts_code（0/8/9 开头归上交所，其余深交所）"""
+    return f"{code}.{'SH' if str(code)[0] in ('0', '8', '9') else 'SZ'}"
+
+
+def _etf_ts_code(code: str) -> str:
+    """ETF 代码 → tushare ts_code（5 开头上交所，其余深交所）"""
+    return f"{code}.{'SH' if str(code).startswith('5') else 'SZ'}"
+
+
+_PRICE_COLS = ("open", "high", "low", "close", "preclose")
+
+# Tushare index_dailybasic 目前覆盖的主要宽基/规模指数
+_INDEX_VALUATION_CODES = {
+    "000001", "000005", "000006", "000016", "000300", "000688", "000852",
+    "000905", "399001", "399005", "399006", "399016", "399300", "399673",
+    "399905",
+}
+
+
+def _apply_fund_adj(df: pd.DataFrame, factors: pd.Series,
+                    latest: float) -> pd.DataFrame:
+    """按 fund_adj 因子做后复权：price * factor / latest_factor。
+
+    factors 为按日期索引的原始复权因子；latest 为最新因子。
+    传入的 df 必须是未复权原始价格（有 date 列或 DatetimeIndex）。
+    """
+    if df is None or df.empty or factors is None or factors.empty:
+        return df
+    latest = float(latest)
+    if not latest or latest != latest:
+        return df
+    out = df.copy()
+    if "date" in out.columns:
+        dates = pd.to_datetime(out["date"])
+        f = factors.reindex(dates).ffill().fillna(factors.iloc[0])
+        out["adj_factor"] = f.to_numpy()
+        ratio = (f / latest).to_numpy()
+    else:
+        f = factors.reindex(out.index).ffill().fillna(factors.iloc[0])
+        out["adj_factor"] = f
+        ratio = f / latest
+    for col in _PRICE_COLS:
+        if col in out.columns:
+            out[col] = pd.to_numeric(out[col], errors="coerce") * ratio
+    return out
+
+
+def _rescale_price_cols(df: pd.DataFrame, ratio: float) -> pd.DataFrame:
+    """把已复权价格从旧 latest_factor 缩放到新 latest_factor。"""
+    out = df.copy()
+    for col in _PRICE_COLS:
+        if col in out.columns:
+            out[col] = pd.to_numeric(out[col], errors="coerce") * ratio
+    return out
 
 
 def _log(msg: str):
@@ -92,6 +154,38 @@ class TushareKlineDownloader:
         self._ts = ts
 
     # ------------------------------------------------------------------
+    # 收盘落定保护
+    # ------------------------------------------------------------------
+
+    def _settled_end(self, end: str) -> str:
+        """把目标日期收敛到"已收盘落定"的最近交易日。
+
+        - end 早于今天：原样返回（补历史/指定日期不受影响）
+        - 今天 16:00 后：允许更新到今天
+        - 今天 16:00 前：回退到上一交易日（盘中运行不写残缺 bar）
+        """
+        now = datetime.now()
+        today = now.strftime("%Y-%m-%d")
+        if end < today:
+            return end
+        if now.strftime("%H:%M") >= _CN_SETTLE_TIME:
+            return min(end, today)
+
+        yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+        try:
+            start = (now - timedelta(days=20)).strftime("%Y-%m-%d")
+            df = self._pro.trade_cal(
+                exchange="SSE", start_date=_to_ts_date(start),
+                end_date=_to_ts_date(yesterday), is_open="1",
+                fields="cal_date",
+            )
+            if df is not None and not df.empty:
+                return _to_dash_date(str(df["cal_date"].max()))
+        except Exception as e:
+            logger.warning(f"trade_cal 获取失败，按昨日回退: {e}")
+        return yesterday
+
+    # ------------------------------------------------------------------
     # 公共接口（与 KlineDownloader 对齐）
     # ------------------------------------------------------------------
 
@@ -101,7 +195,10 @@ class TushareKlineDownloader:
                 force: bool = False,
                 types: list[str] | None = None) -> dict:
         """全量初始化，支持断点续传"""
-        end = end or _today()
+        requested_end = end or _today()
+        end = self._settled_end(requested_end)
+        if end != requested_end:
+            _log(f"[提示] A股当日数据需收盘后落定，目标日期由 {requested_end} 回退至 {end}")
         types = types or ["stock", "index", "etf"]
 
         _log("=" * 55)
@@ -148,7 +245,10 @@ class TushareKlineDownloader:
                   end: str | None = None,
                   types: list[str] | None = None) -> dict:
         """增量更新：各证券从本地最新日期+1天补到 end"""
-        end = end or _today()
+        requested_end = end or _today()
+        end = self._settled_end(requested_end)
+        if end != requested_end:
+            _log(f"[提示] A股当日数据需收盘后落定，目标日期由 {requested_end} 回退至 {end}")
         types = types or ["stock", "index", "etf"]
 
         _log("=" * 55)
@@ -193,52 +293,100 @@ class TushareKlineDownloader:
         self._save_ipo_dates()
         return self._print_stats(total_result)
 
+    def refresh_recent(self, days: int = 5,
+                       types: list[str] | None = None,
+                       codes: list[str] | None = None) -> dict:
+        """强制重下最近 N 个自然日并覆盖已有行（修复残缺/异常 K 线）。
+
+        与 update_db 不同：使用 force=True 覆盖同日期旧数据，适合在怀疑
+        盘中残缺 bar、复权口径变更或个别数据异常后做定向修复。
+        """
+        types = types or ["stock"]
+        days = max(int(days), 1)
+        end = self._settled_end(_today())
+        start = (datetime.strptime(end, "%Y-%m-%d")
+                 - timedelta(days=days - 1)).strftime("%Y-%m-%d")
+        wanted = {str(c) for c in codes} if codes else None
+
+        _log("=" * 55)
+        _log(f"TushareKlineDownloader — 强制刷新最近数据  {start} ~ {end}")
+        _log(f"资产类型: {', '.join(types)}"
+             + (f"  指定代码: {len(wanted)} 只" if wanted else ""))
+        _log("=" * 55)
+
+        all_secs = self._get_security_list(types)
+        total_result = {"ok": 0, "skip": 0, "fail": 0, "total": 0}
+        for atype in types:
+            secs = all_secs.get(atype, [])
+            if wanted:
+                secs = [(c, n) for c, n in secs if c in wanted]
+            _log(f"[{atype}] 待刷新: {len(secs)} 只")
+            if not secs:
+                continue
+            result = self._batch_download(
+                secs, atype, start=start, end=end, force=True)
+            for k in ("ok", "skip", "fail", "total"):
+                total_result[k] += result[k]
+
+        _log("强制刷新完成！")
+        self._save_ipo_dates()
+        return self._print_stats(total_result)
+
     # ------------------------------------------------------------------
     # 证券列表（tushare stock_basic）
     # ------------------------------------------------------------------
 
     def _get_security_list(self, types: list[str]) -> dict:
-        result = {t: [] for t in types}
+        """获取待更新证券列表。
 
-        if "stock" in types or "index" in types or "etf" in types:
-            # 股票
-            if "stock" in types:
-                df = self._pro.stock_basic(
+        Tushare 在 HTTP 非 2xx 时会静默返回空表，故基础列表一律走
+        call_nonempty：重试耗尽仍为空则抛错，避免空跑被当成"无需更新"。
+        """
+        result = {t: [] for t in types}
+        min_rows = {"stock": 1000, "index": 100, "etf": 100}
+
+        if "stock" in types:
+            df = call_nonempty(
+                lambda: self._pro.stock_basic(
                     exchange="", list_status="L",
                     fields="ts_code,name,list_date"
+                ),
+                label="stock_basic", min_rows=min_rows["stock"],
+            )
+            for _, row in df.iterrows():
+                code = row["ts_code"].split(".")[0]
+                result["stock"].append((code, row["name"]))
+
+        if "index" in types:
+            idx_codes = []
+            for mkt in ("SSE", "SZSE"):
+                df_idx = call_nonempty(
+                    lambda m=mkt: self._pro.index_basic(
+                        market=m, fields="ts_code,name"),
+                    label=f"index_basic({mkt})", min_rows=10,
                 )
-                for _, row in df.iterrows():
-                    code = row["ts_code"].split(".")[0]
-                    result["stock"].append((code, row["name"]))
+                idx_codes.extend(
+                    (r["ts_code"].split(".")[0], r["name"])
+                    for _, r in df_idx.iterrows()
+                )
+            result["index"] = idx_codes
 
-            # 指数：沪深主流指数（上交所 + 深交所）
-            if "index" in types:
-                idx_codes = []
-                for mkt in ("SSE", "SZSE"):
-                    try:
-                        df_idx = self._pro.index_basic(market=mkt, fields="ts_code,name")
-                        idx_codes.extend(
-                            (r["ts_code"].split(".")[0], r["name"])
-                            for _, r in df_idx.iterrows()
-                        )
-                    except Exception as e:
-                        logger.warning(f"index_basic {mkt} 失败: {e}")
-                result["index"] = idx_codes
+        if "etf" in types:
+            df_etf = call_nonempty(
+                lambda: self._pro.fund_basic(
+                    status="L", market="E", fields="ts_code,name"),
+                label="fund_basic", min_rows=min_rows["etf"],
+            )
+            result["etf"] = [
+                (r["ts_code"].split(".")[0], r["name"])
+                for _, r in df_etf.iterrows()
+            ]
 
-            # ETF：fund_basic list_status=L type=ETF
-            if "etf" in types:
-                try:
-                    df_etf = self._pro.fund_basic(
-                        status="L", market="E",
-                        fields="ts_code,name"
-                    )
-                    result["etf"] = [
-                        (r["ts_code"].split(".")[0], r["name"])
-                        for _, r in df_etf.iterrows()
-                    ]
-                except Exception as e:
-                    logger.warning(f"fund_basic 失败: {e}")
-
+        for atype in types:
+            n = len(result.get(atype, []))
+            if n < min_rows.get(atype, 1):
+                raise TushareEmptyError(
+                    f"{atype} 证券列表过少（{n} 只），疑似 Tushare 异常")
         return result
 
     # ------------------------------------------------------------------
@@ -396,7 +544,7 @@ class TushareKlineDownloader:
         return df
 
     def _download_index(self, tscode: str, sd: str, ed: str) -> pd.DataFrame | None:
-        """index：index_daily，preclose 由 close.shift(1) 补"""
+        """index：index_daily + index_dailybasic（pe_ttm/pb_mrq）"""
         for attempt in range(3):
             try:
                 df = self._pro.index_daily(
@@ -428,10 +576,43 @@ class TushareKlineDownloader:
         else:
             df["preclose"] = df["close"].shift(1)
 
+        # 指数估值（Tushare index_dailybasic；仅主要宽基指数支持）
+        code = tscode.split(".")[0]
+        if code in _INDEX_VALUATION_CODES:
+            try:
+                time.sleep(_SLEEP)
+                db = self._pro.index_dailybasic(
+                    ts_code=tscode, start_date=sd, end_date=ed,
+                    fields="trade_date,pe_ttm,pb",
+                )
+                if db is not None and not db.empty:
+                    db = db.rename(columns={"trade_date": "date", "pb": "pb_mrq"})
+                    db["date"] = pd.to_datetime(db["date"], format="%Y%m%d")
+                    keep = [c for c in ("pe_ttm", "pb_mrq") if c in db.columns]
+                    df = df.merge(db[["date", *keep]], on="date", how="left")
+            except Exception as e:
+                logger.debug(f"index_dailybasic {tscode} 失败（忽略）: {e}")
+
         return df
 
+    def _fetch_fund_adj(self, tscode: str) -> pd.Series | None:
+        """获取单只 ETF 的完整原始复权因子（trade_date → adj_factor）。"""
+        try:
+            adj = self._pro.fund_adj(ts_code=tscode)
+        except Exception as e:
+            logger.warning(f"fund_adj {tscode} 失败: {e}")
+            return None
+        if adj is None or adj.empty or "adj_factor" not in adj.columns:
+            return None
+        adj = adj.copy()
+        adj["trade_date"] = pd.to_datetime(adj["trade_date"], format="%Y%m%d")
+        s = (adj.sort_values("trade_date")
+             .set_index("trade_date")["adj_factor"]
+             .astype(float))
+        return s[~s.index.duplicated(keep="last")]
+
     def _download_etf(self, tscode: str, sd: str, ed: str) -> pd.DataFrame | None:
-        """ETF：pro_bar(asset='FD', adj=None)，不复权"""
+        """ETF：pro_bar(asset='FD', adj=None) + fund_adj 后复权"""
         for attempt in range(3):
             try:
                 df = self._ts.pro_bar(
@@ -463,7 +644,142 @@ class TushareKlineDownloader:
         if "preclose" not in df.columns:
             df["preclose"] = df["close"].shift(1)
 
-        return df
+        # 后复权：份额折算/分红会造成不复权价格断层，统一按最新因子缩放
+        code = tscode.split(".")[0]
+        factors = self._fetch_fund_adj(tscode)
+        if factors is None or factors.empty:
+            logger.warning(f"fund_adj {tscode} 无数据，ETF 保持不复权")
+            return df
+
+        latest = float(factors.iloc[-1])
+        existing = store.load(code, asset_type="etf", market="cn")
+        if existing is not None and not existing.empty:
+            has_adj = ("adj_factor" in existing.columns
+                       and existing["adj_factor"].notna().any())
+            if not has_adj:
+                # 兼容历史存量：旧文件为不复权，先整体补复权
+                existing = _apply_fund_adj(existing, factors, latest)
+                store.replace(code, existing, asset_type="etf", market="cn")
+            else:
+                old_latest = float(existing["adj_factor"].dropna().iloc[-1])
+                if old_latest and abs(latest / old_latest - 1.0) > 1e-9:
+                    # 期间发生新折算：把已复权价格从旧基准缩放到新基准
+                    existing = _rescale_price_cols(existing, old_latest / latest)
+                    store.replace(code, existing, asset_type="etf", market="cn")
+
+        return _apply_fund_adj(df, factors, latest)
+
+    # ------------------------------------------------------------------
+    # 存量维护：ETF 复权 / 指数估值
+    # ------------------------------------------------------------------
+
+    def repair_etf_adjust(self, codes: list[str] | None = None,
+                          sleep: float = 0.35) -> dict:
+        """回填/刷新本地 ETF 后复权（不重新下载行情）。
+
+        旧文件无 adj_factor 列：视为不复权，按完整 fund_adj 因子缩放。
+        已复权文件：若最新因子变化，则把历史价格缩放到新基准。
+        """
+        codes = codes or store.list_codes("etf", market="cn")
+        result = {"ok": 0, "skip": 0, "fail": 0, "total": len(codes)}
+        for i, code in enumerate(codes):
+            try:
+                df = store.load(code, asset_type="etf", market="cn")
+                if df is None or df.empty:
+                    result["skip"] += 1
+                    continue
+                factors = self._fetch_fund_adj(_etf_ts_code(code))
+                if factors is None or factors.empty:
+                    result["skip"] += 1
+                    continue
+                latest = float(factors.iloc[-1])
+                if ("adj_factor" in df.columns
+                        and df["adj_factor"].notna().any()):
+                    old_latest = float(df["adj_factor"].dropna().iloc[-1])
+                    if old_latest and abs(latest / old_latest - 1.0) > 1e-9:
+                        df = _rescale_price_cols(df, old_latest / latest)
+                else:
+                    df = _apply_fund_adj(df, factors, latest)
+                store.replace(code, df, asset_type="etf", market="cn")
+                result["ok"] += 1
+            except Exception as e:
+                logger.warning(f"ETF 复权修复 {code} 失败: {e}")
+                result["fail"] += 1
+            if (i + 1) % 200 == 0 or i + 1 == len(codes):
+                _log(f"  ETF 复权修复进度: {i+1}/{len(codes)} "
+                     f"成功={result['ok']} 跳过={result['skip']} "
+                     f"失败={result['fail']}")
+            if sleep:
+                time.sleep(sleep)
+        return result
+
+    def update_index_valuation(self, codes: list[str] | None = None,
+                               start: str | None = None,
+                               end: str | None = None,
+                               sleep: float = 0.5) -> dict:
+        """回填本地指数 PE_TTM/PB（Tushare index_dailybasic）。
+
+        默认只处理 Tushare 支持的主要宽基指数，避免对大量不支持的
+        细分/主题指数空跑并触发接口限频；可用 codes 显式指定其他代码。
+        """
+        if codes is None:
+            local = set(store.list_codes("index", market="cn"))
+            codes = sorted(local & _INDEX_VALUATION_CODES)
+        else:
+            codes = list(codes)
+        result = {"ok": 0, "skip": 0, "fail": 0, "total": len(codes)}
+        for i, code in enumerate(codes):
+            try:
+                # 仅处理标准 6 位数字指数代码（过滤外汇/自定义指数）
+                if not (len(str(code)) == 6 and str(code).isdigit()):
+                    result["skip"] += 1
+                    continue
+                df = store.load(code, asset_type="index", market="cn")
+                if df is None or df.empty:
+                    result["skip"] += 1
+                    continue
+                sd = _to_ts_date(start or df.index.min().strftime("%Y-%m-%d"))
+                ed = _to_ts_date(end or df.index.max().strftime("%Y-%m-%d"))
+                db = None
+                for attempt in range(4):
+                    try:
+                        db = self._pro.index_dailybasic(
+                            ts_code=_index_ts_code(code),
+                            start_date=sd, end_date=ed,
+                            fields="trade_date,pe_ttm,pb",
+                        )
+                        break
+                    except Exception as e:
+                        if "频率超限" in str(e) and attempt < 3:
+                            _log("  指数估值接口限频，等待 61s 后重试...")
+                            time.sleep(61)
+                            continue
+                        raise
+                if db is None or db.empty:
+                    result["skip"] += 1
+                    continue
+                db = db.rename(columns={"trade_date": "date", "pb": "pb_mrq"})
+                db["date"] = pd.to_datetime(db["date"], format="%Y%m%d")
+                db = db.set_index("date")
+                merged = df.copy()
+                for col in ("pe_ttm", "pb_mrq"):
+                    if col not in merged.columns:
+                        merged[col] = float("nan")
+                    if col in db.columns:
+                        new = db[col].reindex(merged.index)
+                        merged[col] = new.combine_first(merged[col])
+                store.replace(code, merged, asset_type="index", market="cn")
+                result["ok"] += 1
+            except Exception as e:
+                logger.warning(f"指数估值回填 {code} 失败: {e}")
+                result["fail"] += 1
+            if (i + 1) % 200 == 0 or i + 1 == len(codes):
+                _log(f"  指数估值回填进度: {i+1}/{len(codes)} "
+                     f"成功={result['ok']} 跳过={result['skip']} "
+                     f"失败={result['fail']}")
+            if sleep:
+                time.sleep(sleep)
+        return result
 
     # ------------------------------------------------------------------
     # 上市日期索引（tushare stock_basic）
@@ -471,9 +787,11 @@ class TushareKlineDownloader:
 
     def _save_ipo_dates(self) -> None:
         try:
-            df = self._pro.stock_basic(
-                exchange="", list_status="L",
-                fields="ts_code,name,list_date"
+            df = call_nonempty(
+                lambda: self._pro.stock_basic(
+                    exchange="", list_status="L",
+                    fields="ts_code,name,list_date"),
+                label="stock_basic(ipo)", min_rows=1000,
             )
             ipo = {}
             for _, row in df.iterrows():

@@ -55,11 +55,11 @@ COLUMNS: Dict[str, Dict[str, List[str]]] = {
         ],
         "index": [
             "open", "high", "low", "close", "preclose",
-            "volume", "amount", "pct_chg",
+            "volume", "amount", "pct_chg", "pe_ttm", "pb_mrq",
         ],
         "etf": [
             "open", "high", "low", "close", "preclose",
-            "volume", "amount", "pct_chg",
+            "volume", "amount", "pct_chg", "adj_factor",
         ],
     },
     "hk": {

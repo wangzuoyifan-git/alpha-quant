@@ -54,6 +54,133 @@ DEFAULT_START = "2024-01-01"
 _FMT = "%Y%m%d"
 _FMT_DASH = "%Y-%m-%d"
 
+# A 股当日 EOD 数据落定时点：早于该时点只更新到上一交易日，
+# 避免盘中运行把当日未落定的数据写入本地（次日增量又不会回补）。
+_CN_SETTLE_TIME = "16:00"
+
+# 东财板块资金流历史（AKShare 同源，直接按 BK 代码拉取，避免逐板块重复取映射）
+_EM_FFLOW_URL = "https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get"
+_EM_FFLOW_FIELDS = ("f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,"
+                    "f61,f62,f63,f64,f65")
+_EM_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) "
+                   "Chrome/120 Safari/537.36"),
+    "Referer": "https://data.eastmoney.com/",
+}
+_AK_SLEEP = 0.12
+
+
+def _parse_em_fflow_klines(klines) -> Optional[pd.DataFrame]:
+    """东财板块 fflow klines → 与 Tushare moneyflow_ind_dc 对齐的 DataFrame。"""
+    rows = []
+    for line in klines or []:
+        p = str(line).split(",")
+        if len(p) < 12:
+            continue
+        try:
+            rows.append({
+                "date": p[0],
+                "net_amount": float(p[1]),
+                "buy_sm_amount": float(p[2]),
+                "buy_md_amount": float(p[3]),
+                "buy_lg_amount": float(p[4]),
+                "buy_elg_amount": float(p[5]),
+                "net_amount_rate": float(p[6]),
+                "buy_sm_amount_rate": float(p[7]),
+                "buy_md_amount_rate": float(p[8]),
+                "buy_lg_amount_rate": float(p[9]),
+                "buy_elg_amount_rate": float(p[10]),
+                "close": float(p[11]),
+                "pct_change": float(p[12]) if len(p) > 12 else float("nan"),
+            })
+        except (TypeError, ValueError):
+            continue
+    if not rows:
+        return None
+    df = pd.DataFrame(rows)
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    return (df.dropna(subset=["date"])
+              .drop_duplicates("date")
+              .set_index("date")
+              .sort_index())
+
+
+def _fetch_em_board_fflow(bk_code: str) -> Optional[pd.DataFrame]:
+    """按东财板块代码（BKxxxx）拉取约 120 个交易日的资金流历史。"""
+    import requests
+
+    params = {
+        "lmt": "0",
+        "klt": "101",
+        "fields1": "f1,f2,f3,f7",
+        "fields2": _EM_FFLOW_FIELDS,
+        "secid": f"90.{bk_code}",
+    }
+    try:
+        r = requests.get(_EM_FFLOW_URL, params=params,
+                         headers=_EM_HEADERS, timeout=20)
+        r.raise_for_status()
+        data = (r.json() or {}).get("data") or {}
+        return _parse_em_fflow_klines(data.get("klines"))
+    except Exception as e:
+        logger.debug(f"东财板块资金流 {bk_code} 失败: {e}")
+        return None
+
+
+def _fetch_ak_market_flow() -> Optional[pd.DataFrame]:
+    """AKShare 大盘资金流（约 120 个交易日），列名对齐 market 域。"""
+    import akshare as ak
+
+    df = ak.stock_market_fund_flow()
+    if df is None or df.empty:
+        return None
+    rename = {
+        "日期": "date",
+        "上证-收盘价": "close_sh", "上证-涨跌幅": "pct_change_sh",
+        "深证-收盘价": "close_sz", "深证-涨跌幅": "pct_change_sz",
+        "主力净流入-净额": "net_amount",
+        "主力净流入-净占比": "net_amount_rate",
+        "超大单净流入-净额": "buy_elg_amount",
+        "超大单净流入-净占比": "buy_elg_amount_rate",
+        "大单净流入-净额": "buy_lg_amount",
+        "大单净流入-净占比": "buy_lg_amount_rate",
+        "中单净流入-净额": "buy_md_amount",
+        "中单净流入-净占比": "buy_md_amount_rate",
+        "小单净流入-净额": "buy_sm_amount",
+        "小单净流入-净占比": "buy_sm_amount_rate",
+    }
+    df = df.rename(columns=rename)
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    return (df.dropna(subset=["date"])
+              .drop_duplicates("date")
+              .set_index("date")
+              .sort_index())
+
+
+def _ak_industry_reference() -> Optional[pd.DataFrame]:
+    """无本地行业资金流时，用 AKShare 行业/概念板块列表构建参考表。"""
+    import akshare as ak
+
+    frames = []
+    for fn, ctype in (("stock_board_industry_name_em", "行业"),
+                      ("stock_board_concept_name_em", "概念")):
+        try:
+            df = getattr(ak, fn)()
+            if df is None or df.empty:
+                continue
+            out = pd.DataFrame({
+                "ts_code": df["板块代码"].astype(str) + ".DC",
+                "name": df["板块名称"].astype(str),
+                "content_type": ctype,
+            })
+            frames.append(out)
+        except Exception as e:
+            logger.warning(f"{fn} 失败: {e}")
+    if not frames:
+        return None
+    return pd.concat(frames, ignore_index=True).drop_duplicates("ts_code")
+
 # 全局请求超时（秒）
 _REQUEST_TIMEOUT = 30
 
@@ -145,14 +272,23 @@ def _get_trade_dates(pro, start: str, end: str) -> list:
 
 
 def _get_all_stock_codes(pro) -> list:
-    """获取全部 A 股代码列表（ts_code 格式，如 000001.SZ）"""
-    df = pro.stock_basic(
-        exchange="",
-        list_status="L",
-        fields="ts_code,symbol,name,list_status",
-    )
-    if df is None or df.empty:
-        return []
+    """获取全部 A 股代码列表（ts_code 格式，如 000001.SZ）。
+
+    Tushare 在 HTTP 非 2xx 时会静默返回空表；这里把空结果当作失败重试，
+    避免空列表导致整轮更新 0/0 却仍被判定成功。
+    """
+    def _fetch():
+        df = pro.stock_basic(
+            exchange="",
+            list_status="L",
+            fields="ts_code,symbol,name,list_status",
+        )
+        if df is None or len(df) < 1000:
+            raise RuntimeError(
+                f"stock_basic 返回异常（rows={0 if df is None else len(df)}）")
+        return df
+
+    df = _retry(_fetch, max_retries=3, wait_base=3.0)
     return df["ts_code"].tolist()
 
 
@@ -163,13 +299,38 @@ _BATCH_ACTIVE_GAP_DAYS = 30
 
 
 def _latest_trade_date(pro) -> str | None:
-    """最近一个已收盘的交易日（YYYY-MM-DD）；取不到返回 None。"""
-    today = datetime.now().strftime(_FMT_DASH)
-    start = (datetime.now() - timedelta(days=20)).strftime(_FMT_DASH)
+    """最近一个已收盘的交易日（YYYY-MM-DD）；取不到返回 None。
+
+    A 股 16:00 前（未落定）不含当日，避免盘中写当日残缺数据。
+    """
+    now = datetime.now()
+    today = now.strftime(_FMT_DASH)
+    start = (now - timedelta(days=20)).strftime(_FMT_DASH)
     dates = _get_trade_dates(pro, start, today)
     if not dates:
         return None
+    if now.strftime("%H:%M") < _CN_SETTLE_TIME:
+        today_ts = _to_ts_date(today)
+        dates = [d for d in dates if d < today_ts]
+    if not dates:
+        return None
     return _to_dash_date(max(dates))
+
+
+def _settled_end(pro) -> str:
+    """本次运行的目标交易日。
+
+    优先使用调用方（如每日脚本）在任务启动时写入的 TARGET_TRADE_DATE，
+    保证一次运行内所有步骤使用同一个目标日，不因跨过 16:00 而中途切换；
+    未指定时按当前时刻取最近已落定交易日。
+    """
+    override = os.getenv("TARGET_TRADE_DATE")
+    if override:
+        return override
+    target = _latest_trade_date(pro)
+    if target is None:
+        raise RuntimeError("trade_cal 返回空或最近交易日不可用，Tushare 可能异常")
+    return target
 
 
 def _preload_last_dates(dir_path) -> dict:
@@ -205,6 +366,13 @@ class MoneyflowDownloader:
     def __init__(self):
         # token 惰性初始化：northbound（AKShare）不需要 token
         self._pro = None
+        # 本次运行的目标交易日（首次使用时确定并缓存，避免跨 16:00 中途切换）
+        self._target_date = None
+
+    def _target(self, pro) -> str:
+        if self._target_date is None:
+            self._target_date = _settled_end(pro)
+        return self._target_date
 
     def _ensure_pro(self):
         """惰性初始化 Tushare pro_api（仅 Tushare 接口需要）"""
@@ -269,8 +437,8 @@ class MoneyflowDownloader:
 
     def update_db(self) -> None:
         """每日增量更新所有 moneyflow 数据"""
-        today = datetime.now().strftime(_FMT_DASH)
-        _log(f"Moneyflow 域增量更新  目标日期: {today}")
+        target = self._target(self._ensure_pro())
+        _log(f"Moneyflow 域增量更新  目标日期: {target}")
 
         _log("[1/8] 更新个股资金流...")
         self._update_stock_by_date()
@@ -308,7 +476,7 @@ class MoneyflowDownloader:
         from pathlib import Path
 
         pro = self._ensure_pro()
-        end = datetime.now().strftime(_FMT_DASH)
+        end = self._target(pro)
         codes = _get_all_stock_codes(pro)
         total = len(codes)
         _log(f"  stock: 共 {total} 只，起始 {start} ~ {end}")
@@ -376,7 +544,7 @@ class MoneyflowDownloader:
     def _update_stock(self) -> None:
         """增量更新：只补全有缺口的股票"""
         pro = self._ensure_pro()
-        end = datetime.now().strftime(_FMT_DASH)
+        end = self._target(pro)
         codes = _get_all_stock_codes(pro)
         ok = skip = fail = 0
         t0 = time.time()
@@ -419,10 +587,7 @@ class MoneyflowDownloader:
         仅覆盖"活跃"股票的缺口（见 _recent_floor），长期停牌/退市股不纳入。
         """
         pro = self._ensure_pro()
-        target = _latest_trade_date(pro)
-        if target is None:
-            _log("  stock: 无法获取最近交易日，跳过")
-            return
+        target = self._target(pro)
 
         existing_last = _preload_last_dates(store.BASE_DIR / "stock")
         if not existing_last:
@@ -439,8 +604,8 @@ class MoneyflowDownloader:
                  + timedelta(days=1)).strftime(_FMT_DASH)
         dates = _retry(lambda: _get_trade_dates(pro, start, target))
         if not dates:
-            _log(f"  stock: 已是最新（目标交易日 {target}）")
-            return
+            raise RuntimeError(
+                f"trade_cal 返回空（{start} ~ {target}），Tushare 可能异常")
 
         _log(f"  stock: 按交易日批量更新 {len(dates)} 个交易日（{start} ~ {target}）")
         ok = skip = fail = 0
@@ -518,7 +683,7 @@ class MoneyflowDownloader:
     def init_top_list(self, start: str = DEFAULT_START) -> None:
         """全量下载龙虎榜，按交易日逐日拉取。"""
         pro = self._ensure_pro()
-        end = datetime.now().strftime(_FMT_DASH)
+        end = self._target(pro)
         _log(f"  top_list: {start} ~ {end}")
 
         trade_dates = _retry(lambda: _get_trade_dates(pro, start, end))
@@ -560,7 +725,7 @@ class MoneyflowDownloader:
     def _update_top_list(self) -> None:
         """增量更新龙虎榜：补全缺失的交易日"""
         pro = self._ensure_pro()
-        end = datetime.now().strftime(_FMT_DASH)
+        end = self._target(pro)
         existing = set(d.replace("-", "") for d in store.list_dates("top_list"))
 
         if existing:
@@ -620,7 +785,7 @@ class MoneyflowDownloader:
         forward_only=True（update）：只从已有最新日期之后向前增量。
         """
         pro = self._ensure_pro()
-        end = datetime.now().strftime(_FMT_DASH)
+        end = self._target(pro)
         existing = set(d.replace("-", "") for d in store.list_dates(data_type))
         if forward_only and existing:
             last = max(existing)
@@ -701,7 +866,7 @@ class MoneyflowDownloader:
     def init_margin(self, start: str = DEFAULT_START) -> None:
         """全量下载融资融券明细，按股票代码逐只拉取。"""
         pro = self._ensure_pro()
-        end = datetime.now().strftime(_FMT_DASH)
+        end = self._target(pro)
         codes = _get_all_stock_codes(pro)
         total = len(codes)
         _log(f"  margin: 共 {total} 只，{start} ~ {end}")
@@ -754,7 +919,7 @@ class MoneyflowDownloader:
 
     def _update_margin(self) -> None:
         pro = self._ensure_pro()
-        end = datetime.now().strftime(_FMT_DASH)
+        end = self._target(pro)
         codes = _get_all_stock_codes(pro)
         ok = skip = fail = 0
         t0 = time.time()
@@ -795,10 +960,7 @@ class MoneyflowDownloader:
         逐只调用 ~5500 次/天 → 每个缺失交易日 1 次；保存仍按股票分文件写入。
         """
         pro = self._ensure_pro()
-        target = _latest_trade_date(pro)
-        if target is None:
-            _log("  margin: 无法获取最近交易日，跳过")
-            return
+        target = self._target(pro)
 
         existing_last = _preload_last_dates(store.BASE_DIR / "margin")
         if not existing_last:
@@ -815,8 +977,8 @@ class MoneyflowDownloader:
                  + timedelta(days=1)).strftime(_FMT_DASH)
         dates = _retry(lambda: _get_trade_dates(pro, start, target))
         if not dates:
-            _log(f"  margin: 已是最新（目标交易日 {target}）")
-            return
+            raise RuntimeError(
+                f"trade_cal 返回空（{start} ~ {target}），Tushare 可能异常")
 
         _log(f"  margin: 按交易日批量更新 {len(dates)} 个交易日（{start} ~ {target}）")
         ok = skip = fail = 0
@@ -877,7 +1039,7 @@ class MoneyflowDownloader:
     def init_industry(self, start: str = DEFAULT_START) -> None:
         """全量下载行业资金流（东财 moneyflow_ind_dc），按交易日逐日拉取。"""
         pro = self._ensure_pro()
-        end = datetime.now().strftime(_FMT_DASH)
+        end = self._target(pro)
         _log(f"  industry: {start} ~ {end}")
 
         trade_dates = _retry(lambda: _get_trade_dates(pro, start, end))
@@ -886,6 +1048,7 @@ class MoneyflowDownloader:
         _log(f"  industry: 共 {len(trade_dates)} 个交易日，待下载 {len(dates_todo)} 个")
 
         ok = skip = fail = 0
+        permission = False
         t0 = time.time()
 
         for i, td in enumerate(dates_todo):
@@ -907,6 +1070,9 @@ class MoneyflowDownloader:
             except Exception as e:
                 logger.debug(f"industry {td} 失败: {e}")
                 fail += 1
+                if "权限" in str(e) or "访问接口" in str(e):
+                    permission = True
+                    break
                 time.sleep(1.5)
 
             if (i + 1) % 100 == 0:
@@ -915,11 +1081,14 @@ class MoneyflowDownloader:
 
         elapsed = time.time() - t0
         _log(f"  industry 完成: 有数据={ok} 空日={skip} 失败={fail}  {elapsed:.0f}s")
+        if permission or (ok == 0 and fail > 0):
+            _log("  industry Tushare 不可用，尝试 AKShare fallback...")
+            self._update_industry_ak()
 
     def _update_industry(self) -> None:
         """增量更新行业资金流"""
         pro = self._ensure_pro()
-        end = datetime.now().strftime(_FMT_DASH)
+        end = self._target(pro)
         existing = set(d.replace("-", "") for d in store.list_dates("industry"))
 
         if existing:
@@ -941,6 +1110,7 @@ class MoneyflowDownloader:
             return
 
         ok = skip = fail = 0
+        permission = False
         for td in dates_todo:
             date_dash = _to_dash_date(td)
             try:
@@ -960,9 +1130,65 @@ class MoneyflowDownloader:
             except Exception as e:
                 logger.debug(f"industry update {td} 失败: {e}")
                 fail += 1
+                if "权限" in str(e) or "访问接口" in str(e):
+                    permission = True
+                    break
                 time.sleep(1.5)
 
         _log(f"  industry 更新完成: 有数据={ok} 空日={skip} 失败={fail}")
+        if permission or fail > 0:
+            _log("  industry Tushare 不可用/不完整，尝试 AKShare fallback...")
+            self._update_industry_ak()
+
+    def _update_industry_ak(self) -> None:
+        """东财板块资金流 fallback（约 120 个交易日窗口，逐板块历史）。"""
+        existing = set(store.list_dates("industry"))
+        ref = None
+        if existing:
+            ref = store.load("industry", date=sorted(existing)[-1])
+        if ref is None or ref.empty:
+            ref = _ak_industry_reference()
+        if ref is None or ref.empty:
+            _log("  industry AKShare fallback：无板块参考表")
+            return
+
+        rows_by_date: dict = {}
+        ok = fail = 0
+        t0 = time.time()
+        for _, row in ref.iterrows():
+            tscode = str(row.get("ts_code", ""))
+            if not tscode:
+                continue
+            bk = tscode.split(".")[0]
+            hist = _fetch_em_board_fflow(bk)
+            if hist is None or hist.empty:
+                fail += 1
+                continue
+            hist = hist[~hist.index.strftime("%Y-%m-%d").isin(existing)]
+            for d, rec in hist.iterrows():
+                item = rec.to_dict()
+                item.update({
+                    "date": d.strftime(_FMT_DASH),
+                    "ts_code": tscode,
+                    "name": row.get("name", ""),
+                    "content_type": row.get("content_type", "行业"),
+                })
+                rows_by_date.setdefault(d, []).append(item)
+            ok += 1
+            if ok % 100 == 0:
+                _log(f"  industry AKShare fallback: {ok} 板块 "
+                     f"{time.time()-t0:.0f}s")
+            time.sleep(_AK_SLEEP)
+
+        for d in sorted(rows_by_date):
+            df = pd.DataFrame(rows_by_date[d])
+            df["rank"] = (df["net_amount"]
+                          .rank(ascending=False, method="min")
+                          .astype(int))
+            store.save("industry", df, date=d.strftime(_FMT_DASH))
+
+        _log(f"  industry AKShare fallback 完成: 板块={ok} 失败={fail} "
+             f"补齐交易日={len(rows_by_date)}")
 
     # ==================================================================
     # market — 大盘资金流（东财，单文件）
@@ -971,7 +1197,7 @@ class MoneyflowDownloader:
     def init_market(self, start: str = DEFAULT_START) -> None:
         """全量下载大盘资金流（东财 moneyflow_mkt_dc），按年分段批量拉取。"""
         pro = self._ensure_pro()
-        end = datetime.now().strftime(_FMT_DASH)
+        end = self._target(pro)
         _log(f"  market: {start} ~ {end}")
 
         ld = store.last_date("market")
@@ -1004,7 +1230,8 @@ class MoneyflowDownloader:
             cur = seg_end + timedelta(days=1)
 
         if not all_dfs:
-            _log("  market：无数据")
+            _log("  market：Tushare 无数据，尝试 AKShare fallback...")
+            self._update_market_ak()
             return
 
         result = pd.concat(all_dfs, ignore_index=True)
@@ -1015,7 +1242,7 @@ class MoneyflowDownloader:
     def _update_market(self) -> None:
         """增量更新大盘资金流"""
         pro = self._ensure_pro()
-        end = datetime.now().strftime(_FMT_DASH)
+        end = self._target(pro)
         ld = store.last_date("market")
         fetch_start = (
             (datetime.strptime(ld, _FMT_DASH) + timedelta(days=1)).strftime(_FMT_DASH)
@@ -1037,7 +1264,34 @@ class MoneyflowDownloader:
             else:
                 _log("  market：无新数据")
         except Exception as e:
-            logger.warning(f"market 更新失败: {e}")
+            logger.warning(f"market Tushare 更新失败，尝试 AKShare fallback: {e}")
+            self._update_market_ak()
+
+    def _update_market_ak(self) -> None:
+        """AKShare 大盘资金流 fallback（约 120 个交易日窗口）。"""
+        try:
+            df = _fetch_ak_market_flow()
+            if df is None or df.empty:
+                _log("  market AKShare fallback：无数据")
+                return
+            existing = store.load("market")
+            if existing is not None and not existing.empty:
+                df = df[~df.index.isin(existing.index)]
+            if df.empty:
+                _log("  market：已是最新（AKShare）")
+                return
+            store.save("market", df.reset_index())
+            _log(f"  market AKShare fallback 更新: +{len(df)} 行")
+        except Exception as e:
+            logger.warning(f"market AKShare fallback 失败: {e}")
+
+    def repair_akshare(self, types: Optional[list[str]] = None) -> None:
+        """手动触发资金流 AKShare fallback（market / industry）。"""
+        types = types or ["market", "industry"]
+        if "market" in types:
+            self._update_market_ak()
+        if "industry" in types:
+            self._update_industry_ak()
 
     # ==================================================================
     # hk_hold — 北向个股持股（Tushare hk_hold，按股票代码）
@@ -1165,6 +1419,18 @@ class MoneyflowDownloader:
 
         if merged is None or merged.empty:
             _log("  northbound：合并失败")
+            return
+
+        # 只保留目标交易日及以前，避免写入未落定/盘中残缺净流入
+        cutoff = os.getenv("TARGET_TRADE_DATE")
+        if not cutoff:
+            now = datetime.now()
+            cutoff = (now.strftime(_FMT_DASH)
+                      if now.strftime("%H:%M") >= _CN_SETTLE_TIME
+                      else (now - timedelta(days=1)).strftime(_FMT_DASH))
+        merged = merged[merged.index <= pd.Timestamp(cutoff)]
+        if merged.empty:
+            _log("  northbound：无已落定数据")
             return
 
         if incremental:

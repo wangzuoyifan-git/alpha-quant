@@ -1094,6 +1094,11 @@ def cmd_init_hk(start: str = "2020-01-02", end: str | None = None,
     from data.downloader_hk import HKDownloader
     dl = HKDownloader(connect_only=connect_only)
     result = dl.init_db(start=start, end=end, force=force)
+    try:
+        idx = dl.update_index()
+        print(f"港股指数更新: {idx}")
+    except Exception as e:
+        print(f"[警告] 港股指数更新失败（不影响个股 K 线）: {e}")
     _check_bulk_result("港股 K 线", result)
 
 
@@ -1124,6 +1129,11 @@ def cmd_update_hk(end: str | None = None, connect_only: bool = True):
     from data.downloader_hk import HKDownloader
     dl = HKDownloader(connect_only=connect_only)
     result = dl.update_db(end=end)
+    try:
+        idx = dl.update_index()
+        print(f"港股指数更新: {idx}")
+    except Exception as e:
+        print(f"[警告] 港股指数更新失败（不影响个股 K 线）: {e}")
     _check_bulk_result("港股 K 线", result)
 
 
@@ -1161,6 +1171,63 @@ def cmd_update_cn_pcf(codes: list | None = None):
     update_cn_pcf(codes=codes)
 
 
+def _build_tushare_downloader():
+    """仅 Tushare 可用的维护命令使用（ETF 复权 / 指数估值）。"""
+    from config.settings import DATA_SOURCE
+    token = DATA_SOURCE.get("tushare_token", "")
+    if not token:
+        print("[错误] 未配置 TUSHARE_TOKEN，无法执行该维护命令")
+        return None
+    import tushare as ts
+    from data.downloader_tushare import TushareKlineDownloader
+    return TushareKlineDownloader(ts.pro_api(token, timeout=20))
+
+
+def cmd_repair_etf_adj(codes: list | None = None):
+    """回填/刷新 ETF 后复权（基于 Tushare fund_adj）"""
+    dl = _build_tushare_downloader()
+    if dl is None:
+        return
+    result = dl.repair_etf_adjust(codes=codes)
+    print(f"ETF 复权修复完成: {result}")
+    _check_bulk_result("ETF 复权修复", result)
+
+
+def cmd_repair_kline(days: int = 5, types: list | None = None,
+                     codes: list | None = None):
+    """强制刷新最近 N 日 A 股 K 线（覆盖，修复残缺/异常 bar）"""
+    dl = _build_tushare_downloader()
+    if dl is None:
+        return
+    result = dl.refresh_recent(days=days, types=types, codes=codes)
+    _check_bulk_result("K线近期数据刷新", result)
+
+
+def cmd_update_index_valuation(codes: list | None = None,
+                               start: str | None = None,
+                               end: str | None = None):
+    """回填指数 PE_TTM/PB（基于 Tushare index_dailybasic）"""
+    dl = _build_tushare_downloader()
+    if dl is None:
+        return
+    result = dl.update_index_valuation(codes=codes, start=start, end=end)
+    print(f"指数估值回填完成: {result}")
+    _check_bulk_result("指数估值回填", result)
+
+
+def cmd_update_hk_index(codes: list | None = None):
+    """更新港股主要指数（HSI/HSCEI/HSTECH）"""
+    from data.downloader_hk import HKDownloader
+    result = HKDownloader(connect_only=False).update_index(codes=codes)
+    _check_bulk_result("港股指数", result)
+
+
+def cmd_repair_moneyflow_ak(types: list | None = None):
+    """AKShare 资金流 fallback：补齐大盘/行业资金流缺失日期"""
+    from data.downloader_moneyflow import MoneyflowDownloader
+    MoneyflowDownloader().repair_akshare(types=types)
+
+
 def cmd_init_moneyflow(start: str = "2024-01-01",
                        stock_start: str = "2010-01-01",
                        types: list | None = None) -> None:
@@ -1194,7 +1261,7 @@ def cmd_update_moneyflow(types: list | None = None) -> None:
     types = types or ["stock", "top_list", "top_inst", "block_trade",
                       "margin", "industry", "market", "northbound"]
     if "stock" in types:
-        dl._update_stock()
+        dl._update_stock_by_date()
     if "top_list" in types:
         dl._update_top_list()
     if "top_inst" in types:
@@ -1202,7 +1269,7 @@ def cmd_update_moneyflow(types: list | None = None) -> None:
     if "block_trade" in types:
         dl._update_block_trade()
     if "margin" in types:
-        dl._update_margin()
+        dl._update_margin_by_date()
     if "industry" in types:
         dl._update_industry()
     if "market" in types:
@@ -2556,6 +2623,7 @@ if __name__ == "__main__":
   python main.py init-moneyflow --types stock          # 只下载个股资金流
   python main.py init-moneyflow --stock-start 2015-01-01  # 个股资金流从2015年开始
   python main.py update-moneyflow                      # 增量更新 moneyflow 域
+  python main.py repair-moneyflow-ak                   # AKShare 补齐大盘/行业资金流缺失
   python main.py init-hk                      # 首次下载港股K线（默认仅港股通标的）
   python main.py init-hk --full               # 下载全部港股
   python main.py update-hk                    # 增量更新港股到今日
@@ -2563,7 +2631,11 @@ if __name__ == "__main__":
   python main.py update-hk-moneyflow          # 更新港股个股资金流（东财）
   python main.py update-hk-financials         # 更新港股财务（三大报表+指标）
   python main.py update-hk-events             # 更新港股分红事件（events E2）
+  python main.py update-hk-index              # 更新港股主要指数（HSI/HSCEI/HSTECH）
   python main.py update-cn-pcf                # 补充 A 股 pcf_ttm（百度市现率）
+  python main.py repair-etf-adj               # 回填 ETF 后复权（修复份额折算断层）
+  python main.py repair-kline --days 5        # 强制刷新最近5日K线（覆盖修复残缺/异常）
+  python main.py update-index-valuation       # 回填指数 PE_TTM/PB
   python main.py inspect kline 00700 --market hk   # 直查港股K线
   python main.py update-all                            # 更新所有域（A股/港股/估值/events，耗时较长）
   python main.py scan                          # 今日全市场扫描（A股）
@@ -2753,6 +2825,13 @@ if __name__ == "__main__":
                                    "margin", "industry", "market", "northbound"],
                           help="更新类型（默认全部）")
 
+    # repair-moneyflow-ak（AKShare 资金流 fallback）
+    p_rep_mf = sub.add_parser("repair-moneyflow-ak",
+                              help="用 AKShare 补齐大盘/行业资金流（约120交易日窗口）")
+    p_rep_mf.add_argument("--types", nargs="*", default=["market", "industry"],
+                          choices=["market", "industry"],
+                          help="补齐类型（默认 market industry）")
+
     # update-hk-hold（北向个股持股，按代码）
     p_upd_hkh = sub.add_parser("update-hk-hold",
                                help="按需下载北向个股持股（Tushare hk_hold，季度披露）")
@@ -2930,6 +3009,37 @@ if __name__ == "__main__":
     p_upd_pcf.add_argument("--codes", nargs="*", default=None,
                            help="指定股票代码（默认全市场，约 1 小时）")
 
+    # repair-etf-adj（ETF 后复权回填）
+    p_rep_etf = sub.add_parser("repair-etf-adj",
+                               help="回填/刷新 ETF 后复权（Tushare fund_adj，修复份额折算断层）")
+    p_rep_etf.add_argument("--codes", nargs="*", default=None,
+                           help="指定 ETF 代码（默认全市场）")
+
+    # repair-kline（强制刷新最近K线，覆盖修复残缺/异常 bar）
+    p_rep_k = sub.add_parser("repair-kline",
+                             help="强制刷新最近 N 日 A 股 K 线（force 覆盖，修复残缺/异常）")
+    p_rep_k.add_argument("--days", type=int, default=5,
+                         help="刷新最近 N 个自然日（默认5）")
+    p_rep_k.add_argument("--types", nargs="+", default=["stock"],
+                         choices=["stock", "index", "etf"],
+                         help="资产类型（默认 stock）")
+    p_rep_k.add_argument("--codes", nargs="*", default=None,
+                         help="指定代码（默认全部）")
+
+    # update-index-valuation（指数 PE/PB 回填）
+    p_idx_val = sub.add_parser("update-index-valuation",
+                               help="回填指数 PE_TTM/PB（Tushare index_dailybasic）")
+    p_idx_val.add_argument("--codes", nargs="*", default=None,
+                           help="指定指数代码（默认本地全部指数）")
+    p_idx_val.add_argument("--start", default=None, help="起始日期（默认各指数本地首日）")
+    p_idx_val.add_argument("--end", default=None, help="结束日期（默认各指数本地末日）")
+
+    # update-hk-index（港股主要指数）
+    p_hk_idx = sub.add_parser("update-hk-index",
+                              help="更新港股主要指数（HSI/HSCEI/HSTECH）")
+    p_hk_idx.add_argument("--codes", nargs="*", default=None,
+                          help="指定指数（默认全部）")
+
     # update-all
     sub.add_parser("update-all", help="更新所有数据域（A股/港股 K线、meta、fundamental、factor、macro、moneyflow、events、fund、估值）")
 
@@ -3063,6 +3173,8 @@ if __name__ == "__main__":
         )
     elif args.command == "update-moneyflow":
         cmd_update_moneyflow(types=args.types)
+    elif args.command == "repair-moneyflow-ak":
+        cmd_repair_moneyflow_ak(types=args.types)
     elif args.command == "update-hk-hold":
         cmd_update_hk_hold(codes=args.codes,
                            from_portfolio=args.from_portfolio,
@@ -3139,6 +3251,14 @@ if __name__ == "__main__":
         cmd_update_hk_events(connect_only=args.connect_only)
     elif args.command == "update-cn-pcf":
         cmd_update_cn_pcf(codes=args.codes)
+    elif args.command == "repair-etf-adj":
+        cmd_repair_etf_adj(codes=args.codes)
+    elif args.command == "repair-kline":
+        cmd_repair_kline(days=args.days, types=args.types, codes=args.codes)
+    elif args.command == "update-index-valuation":
+        cmd_update_index_valuation(codes=args.codes, start=args.start, end=args.end)
+    elif args.command == "update-hk-index":
+        cmd_update_hk_index(codes=args.codes)
     elif args.command == "update-all":
         cmd_update_all()
     elif args.command == "inspect":

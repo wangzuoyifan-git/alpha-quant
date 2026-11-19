@@ -1,7 +1,9 @@
 # Alpha量化 — 项目总览
 
 > 所有 Session 的共同基础参考。专项内容见各模块文档。
-> 最后更新：2026-10-28（回测体系 P0/P1 收口：next-open/涨跌停/T+1/印花税/整手/停牌残留行；as-of 财务与资金流；TTM ROE；`backtest --fast` / `portfolio-backtest` / `walkforward` / `platform-check`；修复后四腿组合 +57.8%/回撤-13.8%/Sharpe1.38，详见 `docs/optimization_progress.md`）
+> 最后更新：2026-11-19（每日更新可靠性：Tushare 空结果重试/报错、目标交易日启动快照 `TARGET_TRADE_DATE`、flock 等待、收尾覆盖率校验、`repair-kline` 强制刷新；A股 16:00 前启动只更新上一交易日，当日由下一次运行补）
+> 2026-11-11（数据修复：ETF `fund_adj` 后复权（消除份额折算断层）+ `repair-etf-adj`；港股指数 HSI/HSCEI/HSTECH 接入（`update-hk` 自动包含）+ `update-hk-index`；主要宽基指数 PE/PB 回填 + `update-index-valuation`；Tushare 资金流无权限时 AKShare/东财 fallback + `repair-moneyflow-ak`）
+> 2026-10-28（回测体系 P0/P1 收口：next-open/涨跌停/T+1/印花税/整手/停牌残留行；as-of 财务与资金流；TTM ROE；`backtest --fast` / `portfolio-backtest` / `walkforward` / `platform-check`；修复后四腿组合 +57.8%/回撤-13.8%/Sharpe1.38，详见 `docs/optimization_progress.md`）
 > 2026-10-27（策略研究：多轮回测综合出最终四腿组合，新增低波动质量趋势策略 `quality_trend`；全区间 +60.3%/回撤-13.5%/Sharpe1.45，详见 `docs/strategy_research.md`）
 > 2026-10-27（缠论 P1+P2+P3：`chan/` 纯计算层（包含/分型/笔/中枢/背驰/1-2-3类买卖点/日线+周线确认）+ `chan_theory` L3-A 策略 + `chan` CLI + `agent_tools/chan_tools.py` + A2 缠论摘要 + K线图叠加；详见 `docs/strategy.md` 2.2.1）
 > 2026-10-10（update_daily 提速与可靠性：moneyflow `stock`/`margin` 每日增量改按 `trade_date` 批量（~1.1万次→每交易日2次）；events E2 全市场改按日期批量（~2.2万次→百余次，约1.5h→1~2min）；港股资金流加 1.5s/只限速+连续失败熔断；批量步骤失败率过高以非零退出码上报（`_check_bulk_result`）；`update_daily.sh` 港股跳过窗口改为仅盘中 09:30–16:15、跳过计入汇总并退出码1）
@@ -84,7 +86,7 @@
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                    应用层 / CLI                          │
-│              main.py（argparse 分发，38个子命令）         │
+│              main.py（argparse 分发，47个子命令）         │
 │              web/（Flask 看板）                          │
 └──────────────────────┬──────────────────────────────────┘
                        │
